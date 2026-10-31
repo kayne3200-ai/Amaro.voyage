@@ -1,45 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Carnet Mobile — Spck</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <main class="app-shell">
-    <header class="app-header">
-      <p class="eyebrow">Application HTML · CSS · JS</p>
-      <h1>Mes Priorités du Jour</h1>
-      <div class="stats-row">
-        <span id="summary-text">0 sur 0 terminée</span>
-        <span class="dot">·</span>
-        <button id="clear-done" type="button" class="text-btn">Nettoyer terminées</button>
-      </div>
-      <div class="progress-track" aria-hidden="true">
-        <div id="progress-bar" class="progress-fill"></div>
-      </div>
-    </header>
-
-    <form id="task-form" class="composer" autocomplete="off">
-      <input
-        id="task-input"
-        type="text"
-        placeholder="Ajouter une tâche (ex: Tester dans Spck Editor)..."
-        required
-      />
-      <button type="submit">Ajouter</button>
-    </form>
-
-    <div class="filter-bar" role="tablist" aria-label="Filtrer les tâches">
-      <button type="button" class="filter-btn active" data-filter="all">Toutes</button>
-      <button type="button" class="filter-btn" data-filter="active">En cours</button>
-      <button type="button" class="filter-btn" data-filter="done">Terminées</button>
-    </div>
-
-    <ul id="task-list" class="task-list"></ul>
-  </main>
-
-  <script src="script.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AMARO.VOYAGE — Amaro Journey Intelligence</title>
+    <meta name="description" content="Compagnon universel de voyage, coordination intelligente d'itinéraires et écosystème touristique international — Bénin (Cotonou, Abomey-Calavi, Parakou)." />
+    <meta property="og:title" content="AMARO.VOYAGE — Amaro Journey Intelligence" />
+    <meta property="og:description" content="Compagnon universel de voyage, coordination intelligente d'itinéraires et écosystème touristique international." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased selection:bg-[#0B192C] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

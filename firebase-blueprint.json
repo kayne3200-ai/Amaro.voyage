@@ -1,0 +1,422 @@
+{
+  "entities": {
+    "UserPublic": {
+      "title": "UserPublic",
+      "description": "Public non-PII traveler or provider account profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "accountType": { "type": "string", "enum": ["traveler", "provider"] },
+        "preferredLocale": { "type": "string", "enum": ["fr", "en"] },
+        "preferredCurrency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "accountType", "preferredLocale", "preferredCurrency", "createdAt", "updatedAt"]
+    },
+    "UserPrivate": {
+      "title": "UserPrivate",
+      "description": "Isolated PII contact details for a user",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "emergencyContact": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "phone", "emergencyContact", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator membership document",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roleLevel": { "type": "string", "enum": ["super_admin", "moderator", "finance_admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "roleLevel", "createdAt"]
+    },
+    "ProviderProfile": {
+      "title": "ProviderProfile",
+      "description": "Tourism service provider profile subject to admin validation",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "countryCode": { "type": "string", "maxLength": 4 },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "description": { "type": "string", "minLength": 10, "maxLength": 1500 },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "businessName",
+        "category",
+        "countryCode",
+        "cityId",
+        "description",
+        "verificationStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProviderPrivate": {
+      "title": "ProviderPrivate",
+      "description": "Private commercial and payout details of a provider",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "contactPhone": { "type": "string", "maxLength": 40 },
+        "payoutChannel": { "type": "string", "maxLength": 120 },
+        "registrationRef": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "contactEmail", "contactPhone", "payoutChannel", "registrationRef", "createdAt", "updatedAt"]
+    },
+    "CatalogueService": {
+      "title": "CatalogueService",
+      "description": "Tourism service or establishment offering",
+      "type": "object",
+      "properties": {
+        "providerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "countryCode": { "type": "string", "maxLength": 4 },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "address": { "type": "string", "maxLength": 240 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "priceAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "durationMinutes": { "type": "integer" },
+        "capacity": { "type": "integer" },
+        "dataOrigin": { "type": "string", "enum": ["verified_partner", "pending_verification", "demo_test"] },
+        "status": { "type": "string", "enum": ["draft", "published", "archived"] },
+        "imageKey": { "type": "string", "maxLength": 100 },
+        "imageLicense": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "providerId",
+        "ownerId",
+        "title",
+        "category",
+        "countryCode",
+        "cityId",
+        "address",
+        "description",
+        "priceAmount",
+        "currency",
+        "durationMinutes",
+        "capacity",
+        "dataOrigin",
+        "status",
+        "imageKey",
+        "imageLicense",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JourneyFolder": {
+      "title": "JourneyFolder",
+      "description": "Central Amaro Journey Intelligence folder shared across modules",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "countryCode": { "type": "string", "maxLength": 4 },
+        "primaryCityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "travelersCount": { "type": "integer" },
+        "totalBudget": { "type": "number" },
+        "dailyBudget": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "preferencesNotes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["planning", "active", "completed", "archived"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "countryCode",
+        "primaryCityId",
+        "startDate",
+        "endDate",
+        "travelersCount",
+        "totalBudget",
+        "dailyBudget",
+        "currency",
+        "preferencesNotes",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JourneyItem": {
+      "title": "JourneyItem",
+      "description": "Scheduled itinerary item coordinated by Amaro Journey Brain",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 20 },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "durationMinutes": { "type": "integer" },
+        "estimatedCost": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "stage": { "type": "string", "enum": ["envisaged", "requested", "accepted", "confirmed"] },
+        "notes": { "type": "string", "maxLength": 600 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "folderId",
+        "ownerId",
+        "serviceId",
+        "serviceTitle",
+        "category",
+        "cityId",
+        "date",
+        "startTime",
+        "endTime",
+        "durationMinutes",
+        "estimatedCost",
+        "currency",
+        "stage",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Reservation": {
+      "title": "Reservation",
+      "description": "Centralized state-machine tourism reservation",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerOwnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "scheduledDate": { "type": "string", "maxLength": 20 },
+        "scheduledTime": { "type": "string", "maxLength": 10 },
+        "participants": { "type": "integer" },
+        "providerPrice": { "type": "number" },
+        "amaroFee": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_provider",
+            "accepted",
+            "rejected",
+            "alternative_proposed",
+            "awaiting_payment",
+            "confirmed",
+            "cancelled",
+            "refunded"
+          ]
+        },
+        "paymentStatus": {
+          "type": "string",
+          "enum": ["unpaid", "initiated", "pending", "succeeded", "failed", "refunded"]
+        },
+        "alternativeProposal": { "type": "string", "maxLength": 800 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "clientId",
+        "providerOwnerId",
+        "providerId",
+        "folderId",
+        "serviceId",
+        "serviceTitle",
+        "category",
+        "cityId",
+        "scheduledDate",
+        "scheduledTime",
+        "participants",
+        "providerPrice",
+        "amaroFee",
+        "taxAmount",
+        "totalAmount",
+        "currency",
+        "status",
+        "paymentStatus",
+        "alternativeProposal",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "In-app notification record",
+      "type": "object",
+      "properties": {
+        "recipientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "kind": { "type": "string", "enum": ["reservation", "payment", "alternative", "system"] },
+        "title": { "type": "string", "maxLength": 160 },
+        "body": { "type": "string", "maxLength": 800 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientId", "senderId", "kind", "title", "body", "read", "createdAt", "updatedAt"]
+    },
+    "CulturalStory": {
+      "title": "CulturalStory",
+      "description": "Moderated cultural heritage story or traveler testimony",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "maxLength": 100 },
+        "countryCode": { "type": "string", "maxLength": 4 },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "story": { "type": "string", "minLength": 10, "maxLength": 2500 },
+        "moderationStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorId",
+        "authorName",
+        "countryCode",
+        "cityId",
+        "title",
+        "story",
+        "moderationStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SystemSetting": {
+      "title": "SystemSetting",
+      "description": "Configurable country, commission, and platform rules",
+      "type": "object",
+      "properties": {
+        "countryCode": { "type": "string", "maxLength": 4 },
+        "commissionPercent": { "type": "number" },
+        "serviceFeeFlat": { "type": "number" },
+        "taxPercent": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "updatedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "countryCode",
+        "commissionPercent",
+        "serviceFeeFlat",
+        "taxPercent",
+        "currency",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable administrative and security log entry",
+      "type": "object",
+      "properties": {
+        "actorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "maxLength": 120 },
+        "targetId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "summary": { "type": "string", "maxLength": 600 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorId", "action", "targetId", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublic" },
+      "description": "Public traveler or provider profile without PII"
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivate" },
+      "description": "Strictly isolated PII contact data readable only by owner or admin"
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Administrator registry verified server-side via exists()"
+    },
+    "/providers/{providerId}": {
+      "schema": { "$ref": "#/entities/ProviderProfile" },
+      "description": "Provider public profile with admin-controlled verificationStatus"
+    },
+    "/providers/{providerId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/ProviderPrivate" },
+      "description": "Provider private commercial and payout info isolated to owner and admin"
+    },
+    "/services/{serviceId}": {
+      "schema": { "$ref": "#/entities/CatalogueService" },
+      "description": "Tourism catalogue items across Benin and international destinations"
+    },
+    "/journey_folders/{folderId}": {
+      "schema": { "$ref": "#/entities/JourneyFolder" },
+      "description": "Central Amaro Journey Intelligence folders owned by travelers"
+    },
+    "/journey_folders/{folderId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/JourneyItem" },
+      "description": "Scheduled journey items synchronized via Master Gate to parent folder"
+    },
+    "/reservations/{reservationId}": {
+      "schema": { "$ref": "#/entities/Reservation" },
+      "description": "State-machine reservations linking clientId and providerOwnerId"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Centralized user notifications scoped to recipientId"
+    },
+    "/cultural_stories/{storyId}": {
+      "schema": { "$ref": "#/entities/CulturalStory" },
+      "description": "Cultural heritage stories moderated by administrators"
+    },
+    "/system_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SystemSetting" },
+      "description": "Configurable commissions and country rules editable only by admins"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Append-only administrative audit logs"
+    }
+  }
+}

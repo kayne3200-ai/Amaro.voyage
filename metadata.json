@@ -1,0 +1,6 @@
+{
+  "name": "Atelier Spck",
+  "description": "Studio web HTML, CSS et JavaScript classique avec synchronisation GitHub bidirectionnelle et export ZIP pour Spck Editor sur mobile.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

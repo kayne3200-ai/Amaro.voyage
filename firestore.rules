@@ -1,0 +1,691 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Reusable Zero-Trust Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Zero-DB-lookup admin check safe for list queries (Pillar 8 Cost-Optimization Clause)
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'kayne3200@gmail.com';
+    }
+
+    // Full relational admin check for single-document operations
+    function isAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidCategory(cat) {
+      return cat is string && cat in ['accommodation', 'transport', 'restaurant', 'site', 'translation', 'shopping', 'wellness'];
+    }
+
+    function isValidCurrency(cur) {
+      return cur is string && cur in ['XOF', 'EUR', 'USD'];
+    }
+
+    // --- Validation Blueprints (Pillar 2) ---
+    function isValidUserPublic(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.accountType is string && data.accountType in ['traveler', 'provider']
+        && data.preferredLocale is string && data.preferredLocale in ['fr', 'en']
+        && isValidCurrency(data.preferredCurrency)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivate(data) {
+      return data.keys().hasAll(['uid', 'email', 'phone', 'emergencyContact', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'emergencyContact', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 200
+        && data.phone is string && data.phone.size() <= 40
+        && data.emergencyContact is string && data.emergencyContact.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'roleLevel', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'roleLevel', 'createdAt'])
+        && isValidId(data.uid)
+        && data.roleLevel is string && data.roleLevel in ['super_admin', 'moderator', 'finance_admin']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidProviderProfile(data) {
+      return data.keys().hasAll(['ownerId', 'businessName', 'category', 'countryCode', 'cityId', 'description', 'verificationStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'businessName', 'category', 'countryCode', 'cityId', 'description', 'verificationStatus', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 140
+        && isValidCategory(data.category)
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
+        && isValidId(data.cityId)
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 1500
+        && data.verificationStatus is string && data.verificationStatus in ['pending', 'verified', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProviderPrivate(data) {
+      return data.keys().hasAll(['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.contactEmail is string && data.contactEmail.size() <= 200
+        && data.contactPhone is string && data.contactPhone.size() <= 40
+        && data.payoutChannel is string && data.payoutChannel.size() <= 120
+        && data.registrationRef is string && data.registrationRef.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCatalogueService(data) {
+      return data.keys().hasAll([
+          'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
+          'address', 'description', 'priceAmount', 'currency', 'durationMinutes',
+          'capacity', 'dataOrigin', 'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
+          'address', 'description', 'priceAmount', 'currency', 'durationMinutes',
+          'capacity', 'dataOrigin', 'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.providerId)
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && isValidCategory(data.category)
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
+        && isValidId(data.cityId)
+        && data.address is string && data.address.size() <= 240
+        && data.description is string && data.description.size() <= 2000
+        && data.priceAmount is number && data.priceAmount >= 0 && data.priceAmount <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 43200
+        && data.capacity is int && data.capacity >= 1 && data.capacity <= 1000
+        && data.dataOrigin is string && data.dataOrigin in ['verified_partner', 'pending_verification', 'demo_test']
+        && data.status is string && data.status in ['draft', 'published', 'archived']
+        && data.imageKey is string && data.imageKey.size() <= 100
+        && data.imageLicense is string && data.imageLicense.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJourneyFolder(data) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'countryCode', 'primaryCityId', 'startDate', 'endDate',
+          'travelersCount', 'totalBudget', 'dailyBudget', 'currency', 'preferencesNotes',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'title', 'countryCode', 'primaryCityId', 'startDate', 'endDate',
+          'travelersCount', 'totalBudget', 'dailyBudget', 'currency', 'preferencesNotes',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
+        && isValidId(data.primaryCityId)
+        && data.startDate is string && data.startDate.size() <= 20
+        && data.endDate is string && data.endDate.size() <= 20
+        && data.travelersCount is int && data.travelersCount >= 1 && data.travelersCount <= 50
+        && data.totalBudget is number && data.totalBudget >= 0 && data.totalBudget <= 1000000000
+        && data.dailyBudget is number && data.dailyBudget >= 0 && data.dailyBudget <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.preferencesNotes is string && data.preferencesNotes.size() <= 1000
+        && data.status is string && data.status in ['planning', 'active', 'completed', 'archived']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJourneyItem(data) {
+      return data.keys().hasAll([
+          'folderId', 'ownerId', 'serviceId', 'serviceTitle', 'category', 'cityId',
+          'date', 'startTime', 'endTime', 'durationMinutes', 'estimatedCost',
+          'currency', 'stage', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'folderId', 'ownerId', 'serviceId', 'serviceTitle', 'category', 'cityId',
+          'date', 'startTime', 'endTime', 'durationMinutes', 'estimatedCost',
+          'currency', 'stage', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.folderId)
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.serviceId)
+        && data.serviceTitle is string && data.serviceTitle.size() <= 160
+        && isValidCategory(data.category)
+        && isValidId(data.cityId)
+        && data.date is string && data.date.size() <= 20
+        && data.startTime is string && data.startTime.size() <= 10
+        && data.endTime is string && data.endTime.size() <= 10
+        && data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 43200
+        && data.estimatedCost is number && data.estimatedCost >= 0 && data.estimatedCost <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.stage is string && data.stage in ['envisaged', 'requested', 'accepted', 'confirmed']
+        && data.notes is string && data.notes.size() <= 600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReservation(data) {
+      return data.keys().hasAll([
+          'clientId', 'providerOwnerId', 'providerId', 'folderId', 'serviceId',
+          'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
+          'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
+          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'clientId', 'providerOwnerId', 'providerId', 'folderId', 'serviceId',
+          'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
+          'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
+          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.clientId)
+        && isValidId(data.providerOwnerId)
+        && isValidId(data.providerId)
+        && isValidId(data.folderId)
+        && isValidId(data.serviceId)
+        && data.serviceTitle is string && data.serviceTitle.size() <= 160
+        && isValidCategory(data.category)
+        && isValidId(data.cityId)
+        && data.scheduledDate is string && data.scheduledDate.size() <= 20
+        && data.scheduledTime is string && data.scheduledTime.size() <= 10
+        && data.participants is int && data.participants >= 1 && data.participants <= 100
+        && data.providerPrice is number && data.providerPrice >= 0 && data.providerPrice <= 1000000000
+        && data.amaroFee is number && data.amaroFee >= 0 && data.amaroFee <= 1000000000
+        && data.taxAmount is number && data.taxAmount >= 0 && data.taxAmount <= 1000000000
+        && data.totalAmount is number && data.totalAmount >= 0 && data.totalAmount <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.status is string && data.status in [
+          'pending_provider', 'accepted', 'rejected', 'alternative_proposed',
+          'awaiting_payment', 'confirmed', 'cancelled', 'refunded'
+        ]
+        && data.paymentStatus is string && data.paymentStatus in [
+          'unpaid', 'initiated', 'pending', 'succeeded', 'failed', 'refunded'
+        ]
+        && data.alternativeProposal is string && data.alternativeProposal.size() <= 800
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['recipientId', 'senderId', 'kind', 'title', 'body', 'read', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['recipientId', 'senderId', 'kind', 'title', 'body', 'read', 'createdAt', 'updatedAt'])
+        && isValidId(data.recipientId)
+        && isValidId(data.senderId)
+        && data.kind is string && data.kind in ['reservation', 'payment', 'alternative', 'system']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 800
+        && data.read is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCulturalStory(data) {
+      return data.keys().hasAll(['authorId', 'authorName', 'countryCode', 'cityId', 'title', 'story', 'moderationStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['authorId', 'authorName', 'countryCode', 'cityId', 'title', 'story', 'moderationStatus', 'createdAt', 'updatedAt'])
+        && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 100
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
+        && isValidId(data.cityId)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.story is string && data.story.size() >= 10 && data.story.size() <= 2500
+        && data.moderationStatus is string && data.moderationStatus in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSystemSetting(data) {
+      return data.keys().hasAll(['countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
+        && data.commissionPercent is number && data.commissionPercent >= 0 && data.commissionPercent <= 100
+        && data.serviceFeeFlat is number && data.serviceFeeFlat >= 0 && data.serviceFeeFlat <= 10000000
+        && data.taxPercent is number && data.taxPercent >= 0 && data.taxPercent <= 100
+        && isValidCurrency(data.currency)
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorId', 'action', 'targetId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['actorId', 'action', 'targetId', 'summary', 'createdAt'])
+        && isValidId(data.actorId)
+        && data.actorId == request.auth.uid
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 120
+        && isValidId(data.targetId)
+        && data.summary is string && data.summary.size() <= 600
+        && data.createdAt is timestamp;
+    }
+
+    // --- Connectivity Probe ---
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // --- 1. Users & Isolated PII ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserPublic(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserPublic(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'updatedAt']))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+
+      match /private/{docId} {
+        allow get: if isSignedIn() && isValidId(userId) && docId == 'info' && (request.auth.uid == userId || isAdmin());
+        allow list: if false;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && docId == 'info'
+          && request.auth.uid == userId
+          && isValidUserPrivate(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && docId == 'info'
+          && isValidUserPrivate(incoming())
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'emergencyContact', 'updatedAt']))
+            || isAdmin()
+          );
+
+        allow delete: if isAdmin() && isValidId(userId) && docId == 'info';
+      }
+    }
+
+    // --- 2. Admins Registry ---
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdminRecord(incoming())
+        && incoming().uid == adminUid
+        && incoming().createdAt == request.time;
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+
+    // --- 3. Providers & Commercial Private Subcollection ---
+    match /providers/{providerId} {
+      allow get: if isValidId(providerId) && (existing().verificationStatus == 'verified' || (isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin())));
+      allow list: if existing().verificationStatus == 'verified' || (isSignedIn() && existing().ownerId == request.auth.uid) || isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(providerId)
+        && isValidProviderProfile(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(providerId)
+        && isValidProviderProfile(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().ownerId == request.auth.uid
+            && incoming().verificationStatus == existing().verificationStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly(['businessName', 'category', 'countryCode', 'cityId', 'description', 'updatedAt']))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(providerId);
+
+      match /private/{docId} {
+        allow get: if isSignedIn()
+          && isValidId(providerId)
+          && docId == 'commercial'
+          && (
+            get(/databases/$(database)/documents/providers/$(providerId)).data.ownerId == request.auth.uid
+            || isAdmin()
+          );
+        allow list: if false;
+
+        allow create: if isVerifiedUser()
+          && isValidId(providerId)
+          && docId == 'commercial'
+          && isValidProviderPrivate(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/providers/$(providerId)).data.ownerId == request.auth.uid;
+
+        allow update: if isVerifiedUser()
+          && isValidId(providerId)
+          && docId == 'commercial'
+          && isValidProviderPrivate(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (get(/databases/$(database)/documents/providers/$(providerId)).data.ownerId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'updatedAt']))
+            || isAdmin()
+          );
+
+        allow delete: if isAdmin() && isValidId(providerId) && docId == 'commercial';
+      }
+    }
+
+    // --- 4. Tourism Services Catalogue ---
+    match /services/{serviceId} {
+      allow get: if isValidId(serviceId) && (existing().status == 'published' || (isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin())));
+      allow list: if existing().status == 'published' || (isSignedIn() && existing().ownerId == request.auth.uid) || isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(serviceId)
+        && isValidCatalogueService(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            incoming().dataOrigin == 'pending_verification'
+            && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.ownerId == request.auth.uid
+          )
+        );
+
+      allow update: if isVerifiedUser()
+        && isValidId(serviceId)
+        && isValidCatalogueService(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().providerId == existing().providerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().ownerId == request.auth.uid
+            && incoming().dataOrigin == existing().dataOrigin
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'address', 'description', 'priceAmount',
+              'currency', 'durationMinutes', 'capacity', 'status', 'imageKey', 'imageLicense', 'updatedAt'
+            ]))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(serviceId);
+    }
+
+    // --- 5. Amaro Journey Folders & Master-Gated Items ---
+    match /journey_folders/{folderId} {
+      allow get: if isSignedIn() && isValidId(folderId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(folderId)
+        && isValidJourneyFolder(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(folderId)
+        && isValidJourneyFolder(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().ownerId == request.auth.uid
+            && (existing().status != 'archived' || isAdmin())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'countryCode', 'primaryCityId', 'startDate', 'endDate',
+              'travelersCount', 'totalBudget', 'dailyBudget', 'currency',
+              'preferencesNotes', 'status', 'updatedAt'
+            ]))
+          || isAdmin()
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(folderId) && (existing().ownerId == request.auth.uid || isAdmin());
+
+      match /items/{itemId} {
+        allow get: if isSignedIn()
+          && isValidId(folderId)
+          && isValidId(itemId)
+          && (
+            get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+            || isAdmin()
+          );
+        allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
+
+        allow create: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(itemId)
+          && isValidJourneyItem(incoming())
+          && incoming().folderId == folderId
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+
+        allow update: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(itemId)
+          && isValidJourneyItem(incoming())
+          && incoming().folderId == existing().folderId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'serviceTitle', 'category', 'cityId', 'date', 'startTime', 'endTime',
+              'durationMinutes', 'estimatedCost', 'stage', 'notes', 'updatedAt'
+            ])
+            || isAdmin()
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(itemId)
+          && (
+            get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+            || isAdmin()
+          );
+      }
+    }
+
+    // --- 6. Centralized Reservations State Machine ---
+    match /reservations/{reservationId} {
+      allow get: if isSignedIn()
+        && isValidId(reservationId)
+        && (existing().clientId == request.auth.uid || existing().providerOwnerId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn()
+        && (existing().clientId == request.auth.uid || existing().providerOwnerId == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(reservationId)
+        && isValidReservation(incoming())
+        && incoming().clientId == request.auth.uid
+        && incoming().status == 'pending_provider'
+        && incoming().paymentStatus == 'unpaid'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/journey_folders/$(incoming().folderId));
+
+      allow update: if isVerifiedUser()
+        && isValidId(reservationId)
+        && isValidReservation(incoming())
+        && incoming().clientId == existing().clientId
+        && incoming().providerOwnerId == existing().providerOwnerId
+        && incoming().providerId == existing().providerId
+        && incoming().folderId == existing().folderId
+        && incoming().serviceId == existing().serviceId
+        && incoming().providerPrice == existing().providerPrice
+        && incoming().amaroFee == existing().amaroFee
+        && incoming().taxAmount == existing().taxAmount
+        && incoming().totalAmount == existing().totalAmount
+        && incoming().currency == existing().currency
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (!(existing().status in ['cancelled', 'refunded']) || isAdmin())
+        && (
+          (existing().providerOwnerId == request.auth.uid
+            && existing().status == 'pending_provider'
+            && incoming().status in ['accepted', 'rejected', 'alternative_proposed']
+            && incoming().paymentStatus == existing().paymentStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'alternativeProposal', 'scheduledDate', 'scheduledTime', 'updatedAt']))
+          || (existing().clientId == request.auth.uid
+            && incoming().status in ['awaiting_payment', 'cancelled']
+            && incoming().paymentStatus == existing().paymentStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+          || (existing().clientId == request.auth.uid
+            && existing().status in ['accepted', 'awaiting_payment']
+            && incoming().status == 'awaiting_payment'
+            && incoming().paymentStatus == 'initiated'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'updatedAt']))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(reservationId);
+    }
+
+    // --- 7. Centralized Notifications ---
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().recipientId == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(notificationId)
+        && isValidNotification(incoming())
+        && incoming().senderId == request.auth.uid
+        && incoming().read == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(notificationId)
+        && isValidNotification(incoming())
+        && incoming().recipientId == existing().recipientId
+        && incoming().senderId == existing().senderId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().recipientId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    // --- 8. Cultural Stories ---
+    match /cultural_stories/{storyId} {
+      allow get: if isValidId(storyId) && (existing().moderationStatus == 'approved' || (isSignedIn() && (existing().authorId == request.auth.uid || isAdmin())));
+      allow list: if existing().moderationStatus == 'approved' || (isSignedIn() && existing().authorId == request.auth.uid) || isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(storyId)
+        && isValidCulturalStory(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().moderationStatus == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(storyId)
+        && isValidCulturalStory(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(storyId);
+    }
+
+    // --- 9. System Settings ---
+    match /system_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+
+      allow create: if isAdmin()
+        && isValidId(settingId)
+        && isValidSystemSetting(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(settingId)
+        && isValidSystemSetting(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(settingId);
+    }
+
+    // --- 10. Append-Only Administrative Audit Logs ---
+    match /audit_logs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(logId)
+        && isValidAuditLog(incoming())
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+  }
+}
