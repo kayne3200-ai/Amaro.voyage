@@ -13,12 +13,13 @@ Conformément à la règle de transparence stricte d’AMARO.VOYAGE :
   - **Authentification Google** via Firebase Authentication (`signInWithPopup`).
   - **Base de données Cloud Firestore réelle** (projet cloud provisionné et distinct dans `firebase-applet-config.json`), protégée par les règles Zero-Trust `firestore.rules` auditées par ESLint et déployées dans le cloud.
   - **Séparation stricte des données personnelles (PII)** dans les sous-collections privées `/users/{uid}/private/info` et `/providers/{id}/private/commercial`.
-  - **Moteur serveur Express (`server.ts`)** :
-    - Calcul et vérification côté serveur des prix prestataires, commissions configurables et taxes (`/api/amaro/finance/quote`).
+  - **Moteur serveur Express sécurisé (`server.ts` + `src/server/*`)** :
+    - Vérification cryptographique des jetons d’identité Firebase côté serveur via `firebase-admin/auth` (`verifyIdToken` : signature, expiration et projet `gen-lang-client-0368830750`).
+    - Création transactionnelle et autoritaire des réservations côté serveur (`POST /api/amaro/reservations`) : relecture du service publié et des barèmes `system_settings` dans Firestore, rejet de tout montant ou taux manipulé par le navigateur, contrôle obligatoire **Amaro Journey Brain** (chevauchements, temps de trajet, plafonds de visites, conflits d’hébergement), prévention atomique des doubles réservations et conservation de l’historique tarifaire (`pricingSnapshot`).
+    - Calcul serveur des devis (`POST /api/amaro/finance/quote`) basé sur `serviceId` relu côté serveur.
     - Conversion multi-devises horodatée (`XOF`, `EUR`, `USD`) basée sur la parité fixe officielle BCEAO (`1 EUR = 655,957 XOF`) et flux de taux identifié (`/api/amaro/rates`).
-    - Validation serveur des conflits horaires, temps de déplacement et plafonds de visites quotidiennes (`/api/amaro/brain/validate`).
-    - **Amaro Assistant** propulsé côté serveur par Gemini (`gemini-3.8-flash`) sans exposer `GEMINI_API_KEY` au navigateur (`/api/amaro/assistant`).
-    - **Sauvegarde distante GitHub & compatibilité Spck Editor** (`/api/github/backup-amaro`).
+    - **Amaro Assistant** propulsé côté serveur par Gemini (`gemini-3.8-flash`) avec accès visiteur gratuit préservé, limitation de débit anti-abus et masquage automatique des secrets (`/api/amaro/assistant`).
+    - **Sauvegarde distante GitHub & compatibilité Spck Editor** (`/api/github/*`) strictement verrouillée côté serveur au compte Administrateur vérifié (`kayne3200@gmail.com` ou `/admins/{uid}`).
 - **Services externes nécessitant vos contrats / clés futures (non simulés)** :
   - **Passerelle de paiement marchand Bénin & International** (ex. FedaPay, Kkiapay pour MTN MoMo / Moov Money / Celtiis Cash, ou Stripe pour cartes internationales) : en attendant vos clés marchandes et webhooks, le règlement passe par la validation manuelle supervisée par l’Administrateur.
   - **Envoi externe Email / SMS / WhatsApp** : les notifications dans l’application (`/notifications`) sont 100 % actives ; l’envoi SMS/WhatsApp nécessitera un compte fournisseur (ex. Twilio / Meta WhatsApp Cloud API).
@@ -26,19 +27,27 @@ Conformément à la règle de transparence stricte d’AMARO.VOYAGE :
 
 ---
 
-## 2. Installation et Démarrage Local ou Serveur
+## 2. Installation, Variables Secrètes et Démarrage
 
-1. Cloner le dépôt GitHub privé/public (`https://github.com/kayne3200-ai/Amaro.voyage.git`).
+1. Cloner le dépôt GitHub (`https://github.com/kayne3200-ai/Amaro.voyage.git`).
 2. Installer les dépendances :
    ```bash
    npm install
    ```
-3. Copier `.env.example` vers `.env` et renseigner `GEMINI_API_KEY` (ne jamais publier `.env` sur GitHub).
-4. Lancer le serveur de développement (port 3000) :
+3. Copier `.env.example` vers `.env` (ne jamais publier `.env` sur GitHub) :
+   - `GEMINI_API_KEY` : clé API Gemini côté serveur.
+   - `GITHUB_TOKEN` *(optionnel)* : jeton GitHub (PAT `repo`) utilisé uniquement pour les requêtes Administrateur authentifiées.
+   - `FIREBASE_SERVICE_ACCOUNT_JSON` *(optionnel pour déploiement Cloud dédié)* : JSON d’un compte de service Firebase Admin du projet `gen-lang-client-0368830750`. Sans cette variable, le serveur vérifie déjà cryptographiquement les jetons via les clés publiques X.509 Google (`firebase-admin/auth`) et exécute les transactions Firestore via l’API REST atomique Cloud Firestore v1 soumise à `firestore.rules`.
+4. Exécuter les vérifications et tests automatisés non destructifs :
+   ```bash
+   npm run lint
+   npm test
+   ```
+5. Lancer le serveur de développement (port 3000) :
    ```bash
    npm run dev
    ```
-5. Compiler pour la production :
+6. Compiler pour la production :
    ```bash
    npm run build
    npm start

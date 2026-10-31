@@ -132,6 +132,7 @@ export interface ReservationDoc {
   status: ReservationStatus;
   paymentStatus: PaymentStatus;
   alternativeProposal: string;
+  pricingSnapshot?: string;
 }
 
 export interface ProviderProfileDoc {

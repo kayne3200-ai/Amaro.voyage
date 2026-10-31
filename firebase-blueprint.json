@@ -256,6 +256,7 @@
           "enum": ["unpaid", "initiated", "pending", "succeeded", "failed", "refunded"]
         },
         "alternativeProposal": { "type": "string", "maxLength": 800 },
+        "pricingSnapshot": { "type": "string", "minLength": 2, "maxLength": 600 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -279,6 +280,7 @@
         "status",
         "paymentStatus",
         "alternativeProposal",
+        "pricingSnapshot",
         "createdAt",
         "updatedAt"
       ]

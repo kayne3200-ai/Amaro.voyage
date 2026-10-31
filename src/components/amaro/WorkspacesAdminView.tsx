@@ -24,6 +24,7 @@ import type {
   SystemSettingDoc,
 } from '../../types/amaro';
 import { FIREBASE_CLOUD_META } from '../../lib/firebase';
+import { authorizedFetch } from '../../lib/apiClient';
 import { EDITORIAL_IMAGES, VALIDATION_MATRIX } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
 
@@ -303,14 +304,23 @@ export function WorkspacesAdminView({
   } | null>(null);
 
   const loadGitHubStatusAndRepos = async (sid: string) => {
+    if (!isSignedIn || !isAdmin) {
+      setGhUser(null);
+      setGhRepos([]);
+      return;
+    }
     const headers: Record<string, string> = {};
     if (sid) headers['x-github-session'] = sid;
     try {
-      const statusRes = await fetch('/api/github/status', { headers });
+      const statusRes = await authorizedFetch('/api/github/status', { headers });
+      if (!statusRes.ok) {
+        setGhUser(null);
+        return;
+      }
       const statusJson = await statusRes.json();
       if (statusJson.authenticated && statusJson.user) {
         setGhUser(statusJson.user);
-        const reposRes = await fetch('/api/github/repos', { headers });
+        const reposRes = await authorizedFetch('/api/github/repos', { headers });
         const reposJson = await reposRes.json();
         if (Array.isArray(reposJson.repos)) {
           setGhRepos(reposJson.repos);
@@ -336,14 +346,14 @@ export function WorkspacesAdminView({
 
   useEffect(() => {
     void loadGitHubStatusAndRepos(ghSessionId);
-  }, [ghSessionId]);
+  }, [ghSessionId, isSignedIn, isAdmin]);
 
   const handleConnectGitHub = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patInput.trim()) return;
+    if (!patInput.trim() || !isSignedIn || !isAdmin) return;
     setGhBusy(true);
     try {
-      const res = await fetch('/api/github/connect', {
+      const res = await authorizedFetch('/api/github/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: patInput.trim() }),
@@ -371,7 +381,7 @@ export function WorkspacesAdminView({
   const handleDisconnectGitHub = async () => {
     const headers: Record<string, string> = {};
     if (ghSessionId) headers['x-github-session'] = ghSessionId;
-    await fetch('/api/github/disconnect', { method: 'POST', headers });
+    await authorizedFetch('/api/github/disconnect', { method: 'POST', headers });
     setGhSessionId('');
     setGhUser(null);
     setGhRepos([]);
@@ -385,6 +395,10 @@ export function WorkspacesAdminView({
 
   const handleRunGitHubBackup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isSignedIn || !isAdmin) {
+      onNotify('Accès réservé à l’Administrateur vérifié.');
+      return;
+    }
     const [owner, repo] = selectedRepoFull.split('/');
     if (!owner || !repo) {
       onNotify('Format de dépôt attendu : proprietaire/nom-du-depot');
@@ -394,7 +408,7 @@ export function WorkspacesAdminView({
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (ghSessionId) headers['x-github-session'] = ghSessionId;
-      const res = await fetch('/api/github/backup-amaro', {
+      const res = await authorizedFetch('/api/github/backup-amaro', {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -496,7 +510,30 @@ export function WorkspacesAdminView({
               </p>
             </div>
 
-            {!ghUser ? (
+            {!isSignedIn ? (
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-xl space-y-3 text-xs">
+                <p className="font-semibold text-amber-900 dark:text-amber-200">
+                  Authentification Administrateur requise (contrôlée côté serveur via Firebase Admin SDK)
+                </p>
+                <p className="text-amber-800 dark:text-amber-300 leading-relaxed">
+                  Pour protéger votre dépôt GitHub et vos secrets serveur, toutes les routes <code className="font-mono">/api/github/*</code> sont strictement réservées au compte Administrateur principal vérifié (<strong className="font-mono">kayne3200@gmail.com</strong>).
+                </p>
+                <button
+                  type="button"
+                  onClick={onRequireSignIn}
+                  className="min-h-[42px] px-4 py-2 font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+                >
+                  Se connecter avec Google (Administrateur)
+                </button>
+              </div>
+            ) : !isAdmin ? (
+              <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-xl space-y-1.5 text-xs text-red-900 dark:text-red-200">
+                <p className="font-bold">Accès refusé (403 — Réservé à l’Administrateur)</p>
+                <p className="leading-relaxed">
+                  Votre session (<span className="font-mono">{currentUserEmail}</span>) est authentifiée comme voyageur ou prestataire, mais n’est pas autorisée à exécuter des sauvegardes GitHub côté serveur.
+                </p>
+              </div>
+            ) : !ghUser ? (
               <form onSubmit={handleConnectGitHub} className="space-y-3">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
                   Collez votre jeton personnel GitHub (PAT avec permission « repo »)

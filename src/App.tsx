@@ -25,6 +25,7 @@ import {
   OperationType,
   verifyFirestoreConnectivity,
 } from './lib/firebase';
+import { authorizedFetch } from './lib/apiClient';
 import type {
   CatalogueItem,
   CulturalStoryDoc,
@@ -840,7 +841,7 @@ function AmaroPlatform() {
     }
   };
 
-  // Server-Verified Reservation Creation (10-Step Flow Entry)
+  // Server-Authoritative Reservation Creation (10-Step Flow Entry + Journey Brain + Atomic Commit)
   const handleRequestReservation = async (
     item: CatalogueItem,
     date: string,
@@ -850,66 +851,51 @@ function AmaroPlatform() {
     if (!authUser?.uid) return;
     const folderId = await ensureActiveFolderId();
 
-    const quoteRes = await fetch('/api/amaro/finance/quote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        providerPrice: item.priceAmount,
-        participants,
-        commissionPercent: countrySetting?.commissionPercent ?? 0,
-        serviceFeeFlat: countrySetting?.serviceFeeFlat ?? 0,
-        taxPercent: countrySetting?.taxPercent ?? 0,
-        currency: item.currency,
-        displayCurrency: currency,
-      }),
-    });
-    const quoteJson = await quoteRes.json();
-    if (!quoteRes.ok || !quoteJson?.breakdown) {
-      showToast(quoteJson?.error || 'Erreur de calcul serveur.');
-      return;
-    }
-
-    const reservationId = makeSafeId('res');
     try {
-      await setDoc(doc(db, 'reservations', reservationId), {
-        clientId: authUser.uid,
-        providerOwnerId: item.ownerId || 'manual_concierge',
-        providerId: item.providerId,
-        folderId,
-        serviceId: item.id,
-        serviceTitle: item.title.slice(0, 155),
-        category: item.category,
-        cityId: item.cityId,
-        scheduledDate: date,
-        scheduledTime: startTime,
-        participants: Math.max(1, Math.min(100, Math.round(participants))),
-        providerPrice: quoteJson.breakdown.providerPrice,
-        amaroFee: quoteJson.breakdown.amaroFee,
-        taxAmount: quoteJson.breakdown.taxAmount,
-        totalAmount: quoteJson.breakdown.totalAmount,
-        currency: item.currency,
-        status: 'pending_provider',
-        paymentStatus: 'unpaid',
-        alternativeProposal: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      const res = await authorizedFetch('/api/amaro/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderId,
+          serviceId: item.id,
+          scheduledDate: date,
+          scheduledTime: startTime,
+          participants: Math.max(1, Math.min(100, Math.round(participants))),
+        }),
       });
+      const data = await res.json();
 
-      if (item.ownerId && item.ownerId !== 'manual_concierge') {
-        await createInternalNotification(
-          item.ownerId,
-          'reservation',
-          'Nouvelle demande de réservation',
-          `Demande reçue pour « ${item.title} » le ${date} à ${startTime} (${participants} pers.).`
-        );
+      if (!res.ok) {
+        if (Array.isArray(data?.conflicts) && data.conflicts.length > 0) {
+          setLastBrainDiagnostic({
+            valid: false,
+            involvesCityChange: Boolean(data.involvesCityChange),
+            conflicts: data.conflicts,
+            warnings: Array.isArray(data.warnings) ? data.warnings : [],
+          });
+        }
+        showToast(data?.error || 'Demande de réservation refusée par le serveur.');
+        setActiveTab('journey');
+        return;
+      }
+
+      if (Array.isArray(data?.warnings)) {
+        setLastBrainDiagnostic({
+          valid: true,
+          involvesCityChange: Boolean(data.involvesCityChange),
+          conflicts: [],
+          warnings: data.warnings,
+        });
       }
 
       showToast(
-        'Demande transmise au prestataire (statut : En attente de disponibilité).'
+        data?.warnings?.length
+          ? `Demande enregistrée (vigilance trajet : ${data.warnings[0]})`
+          : 'Demande vérifiée côté serveur et transmise au prestataire (statut : En attente de disponibilité).'
       );
       setActiveTab('journey');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `reservations/${reservationId}`);
+    } catch {
+      showToast('Impossible de contacter le serveur de réservation sécurisé.');
     }
   };
 

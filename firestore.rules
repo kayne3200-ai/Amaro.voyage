@@ -198,29 +198,104 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isWithinCurrencyTolerance(actual, expected, cur) {
+      return cur == 'XOF'
+        ? (actual >= expected - 1 && actual <= expected + 1)
+        : (actual >= expected - 0.02 && actual <= expected + 0.02);
+    }
+
+    function matchesFeeBreakdown(data, commPct, flatFee, taxPct) {
+      return isWithinCurrencyTolerance(
+          data.amaroFee,
+          (data.providerPrice * commPct) / 100.0 + flatFee,
+          data.currency
+        )
+        && isWithinCurrencyTolerance(
+          data.taxAmount,
+          ((data.providerPrice + data.amaroFee) * taxPct) / 100.0,
+          data.currency
+        )
+        && isWithinCurrencyTolerance(
+          data.totalAmount,
+          data.providerPrice + data.amaroFee + data.taxAmount,
+          data.currency
+        );
+    }
+
+    function matchesCountrySettingFees(data, countryCode) {
+      return exists(/databases/$(database)/documents/system_settings/$(countryCode))
+        ? matchesFeeBreakdown(
+            data,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.commissionPercent,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
+          )
+        : matchesFeeBreakdown(data, 0, 0, 0);
+    }
+
+    function matchesPublishedCatalogService(data, svc) {
+      return svc.status == 'published'
+        && data.providerId == svc.providerId
+        && data.providerOwnerId == svc.ownerId
+        && data.category == svc.category
+        && data.cityId == svc.cityId
+        && data.currency == svc.currency
+        && data.participants >= 1
+        && data.participants <= svc.capacity
+        && isWithinCurrencyTolerance(data.providerPrice, svc.priceAmount * data.participants, data.currency)
+        && matchesCountrySettingFees(data, svc.countryCode);
+    }
+
+    function matchesOfficialDemoService(data) {
+      return data.providerId == 'demo-provider-bj'
+        && data.providerOwnerId == 'manual_concierge'
+        && data.currency == 'XOF'
+        && matchesCountrySettingFees(data, 'BJ')
+        && (
+          (data.serviceId == 'demo-cotonou-lodging-1' && data.category == 'accommodation' && data.cityId == 'cotonou' && data.participants <= 2 && data.providerPrice == 45000 * data.participants)
+          || (data.serviceId == 'demo-calavi-site-1' && data.category == 'site' && data.cityId == 'abomey-calavi' && data.participants <= 6 && data.providerPrice == 18000 * data.participants)
+          || (data.serviceId == 'demo-cotonou-dining-1' && data.category == 'restaurant' && data.cityId == 'cotonou' && data.participants <= 4 && data.providerPrice == 15000 * data.participants)
+          || (data.serviceId == 'demo-parakou-craft-1' && data.category == 'shopping' && data.cityId == 'parakou' && data.participants <= 8 && data.providerPrice == 12000 * data.participants)
+          || (data.serviceId == 'demo-cotonou-transport-1' && data.category == 'transport' && data.cityId == 'cotonou' && data.participants <= 4 && data.providerPrice == 35000 * data.participants)
+          || (data.serviceId == 'demo-calavi-translation-1' && data.category == 'translation' && data.cityId == 'abomey-calavi' && data.participants <= 5 && data.providerPrice == 20000 * data.participants)
+          || (data.serviceId == 'demo-cotonou-wellness-1' && data.category == 'wellness' && data.cityId == 'cotonou' && data.participants <= 2 && data.providerPrice == 22000 * data.participants)
+        );
+    }
+
+    function hasAuthoritativeReservationPricing(data) {
+      return exists(/databases/$(database)/documents/services/$(data.serviceId))
+        ? matchesPublishedCatalogService(
+            data,
+            get(/databases/$(database)/documents/services/$(data.serviceId)).data
+          )
+        : matchesOfficialDemoService(data);
+    }
+
     function isValidReservation(data) {
       return data.keys().hasAll([
           'clientId', 'providerOwnerId', 'providerId', 'folderId', 'serviceId',
           'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
           'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
-          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'createdAt', 'updatedAt'
+          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'pricingSnapshot',
+          'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'clientId', 'providerOwnerId', 'providerId', 'folderId', 'serviceId',
           'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
           'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
-          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'createdAt', 'updatedAt'
+          'currency', 'status', 'paymentStatus', 'alternativeProposal', 'pricingSnapshot',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
         && isValidId(data.providerOwnerId)
         && isValidId(data.providerId)
         && isValidId(data.folderId)
         && isValidId(data.serviceId)
-        && data.serviceTitle is string && data.serviceTitle.size() <= 160
+        && data.serviceTitle is string && data.serviceTitle.size() >= 2 && data.serviceTitle.size() <= 160
         && isValidCategory(data.category)
         && isValidId(data.cityId)
-        && data.scheduledDate is string && data.scheduledDate.size() <= 20
-        && data.scheduledTime is string && data.scheduledTime.size() <= 10
+        && data.scheduledDate is string && data.scheduledDate.size() >= 8 && data.scheduledDate.size() <= 20
+        && data.scheduledTime is string && data.scheduledTime.size() >= 4 && data.scheduledTime.size() <= 10
         && data.participants is int && data.participants >= 1 && data.participants <= 100
         && data.providerPrice is number && data.providerPrice >= 0 && data.providerPrice <= 1000000000
         && data.amaroFee is number && data.amaroFee >= 0 && data.amaroFee <= 1000000000
@@ -235,6 +310,7 @@ service cloud.firestore {
           'unpaid', 'initiated', 'pending', 'succeeded', 'failed', 'refunded'
         ]
         && data.alternativeProposal is string && data.alternativeProposal.size() <= 800
+        && data.pricingSnapshot is string && data.pricingSnapshot.size() >= 2 && data.pricingSnapshot.size() <= 600
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -563,7 +639,10 @@ service cloud.firestore {
         && incoming().paymentStatus == 'unpaid'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
-        && exists(/databases/$(database)/documents/journey_folders/$(incoming().folderId));
+        && exists(/databases/$(database)/documents/journey_folders/$(incoming().folderId))
+        && get(/databases/$(database)/documents/journey_folders/$(incoming().folderId)).data.ownerId == request.auth.uid
+        && get(/databases/$(database)/documents/journey_folders/$(incoming().folderId)).data.status != 'archived'
+        && hasAuthoritativeReservationPricing(incoming());
 
       allow update: if isVerifiedUser()
         && isValidId(reservationId)
@@ -578,6 +657,7 @@ service cloud.firestore {
         && incoming().taxAmount == existing().taxAmount
         && incoming().totalAmount == existing().totalAmount
         && incoming().currency == existing().currency
+        && incoming().pricingSnapshot == existing().pricingSnapshot
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (!(existing().status in ['cancelled', 'refunded']) || isAdmin())

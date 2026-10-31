@@ -6,6 +6,7 @@ import type {
   LocaleCode,
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
+import { authorizedFetch } from '../../lib/apiClient';
 
 interface AssistantRescueViewProps {
   mode: 'assistant' | 'rescue';
@@ -88,7 +89,7 @@ export function AssistantRescueView({
             }
           : null;
 
-      const res = await fetch('/api/amaro/assistant', {
+      const res = await authorizedFetch('/api/amaro/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
