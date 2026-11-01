@@ -60,6 +60,7 @@ export interface AmaroAppDependencies {
   githubFetcher?: typeof fetch;
   assistantMaxPerIpWindow?: number;
   assistantMaxPerUserWindow?: number;
+  reservationMaxPerWindow?: number;
 }
 
 interface SourceBackupEntry {
@@ -182,7 +183,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
   // Server-side sliding-window rate limiters
   const publicApiLimiter = new SlidingWindowRateLimiter(60, 60_000);
-  const reservationLimiter = new SlidingWindowRateLimiter(12, 60_000);
+  const reservationLimiter = new SlidingWindowRateLimiter(
+    deps.reservationMaxPerWindow ?? 12,
+    60_000
+  );
   const githubAdminLimiter = new SlidingWindowRateLimiter(25, 60_000);
   const assistantIpLimiter = new SlidingWindowRateLimiter(
     deps.assistantMaxPerIpWindow ?? 12,
@@ -586,6 +590,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
       const quote = computeAuthoritativeQuote({
         unitPrice: service.priceAmount,
+        priceKnown: service.priceKnown,
         participants: rawParticipants,
         currency: service.currency,
         displayCurrency,
@@ -600,7 +605,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         (req.body || {}) as Record<string, unknown>,
         quote.breakdown,
         setting,
-        service.priceAmount
+        service.priceKnown === false ? 0 : service.priceAmount
       );
       if (tamper.tampered) {
         res.status(400).json({ error: tamper.reason });
@@ -647,6 +652,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       .filter((it): it is Record<string, any> => Boolean(it && typeof it === 'object'))
       .map((it) => ({
         serviceId: String(it.serviceId || '').slice(0, 128),
+        providerId: String(it.providerId || '').slice(0, 128),
         serviceTitle: String(it.serviceTitle || '').slice(0, 160),
         category: (VALID_CATEGORIES.has(String(it.category || ''))
           ? it.category
@@ -660,6 +666,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
     const result = evaluateJourneyBrain(existingItems, {
       serviceId: String(candidate.serviceId || '').slice(0, 128),
+      providerId: String(candidate.providerId || '').slice(0, 128),
       serviceTitle: String(candidate.serviceTitle || '').slice(0, 160),
       category: candidate.category as ServiceCategory,
       cityId: String(candidate.cityId).trim().slice(0, 128),
@@ -693,6 +700,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       const scheduledDate = String(req.body?.scheduledDate || '').trim();
       const scheduledTime = String(req.body?.scheduledTime || '').trim();
       const rawParticipants = Number(req.body?.participants);
+      const rawReferralCode = String(req.body?.referralCode || '')
+        .trim()
+        .toUpperCase();
 
       if (!folderId || !/^[a-zA-Z0-9_-]{1,128}$/.test(folderId)) {
         res.status(400).json({ error: 'Identifiant de Dossier de Voyage invalide.' });
@@ -739,7 +749,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
-        // 2. Reload service & country pricing configuration from Firestore on server
+        // 2. Reload service & country pricing configuration from Firestore / Directory on server
         const service = await store.getService(serviceId, caller.rawIdToken);
         if (!service) {
           res.status(404).json({ error: 'Prestation introuvable.' });
@@ -767,6 +777,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         // 3. Server-side authoritative financial calculation & tamper rejection
         const quote = computeAuthoritativeQuote({
           unitPrice: service.priceAmount,
+          priceKnown: service.priceKnown,
           participants: rawParticipants,
           currency: service.currency,
           displayCurrency: service.currency,
@@ -780,11 +791,51 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           (req.body || {}) as Record<string, unknown>,
           quote.breakdown,
           setting,
-          service.priceAmount
+          service.priceKnown === false ? 0 : service.priceAmount
         );
         if (tamper.tampered) {
           res.status(400).json({ error: tamper.reason });
           return;
+        }
+
+        // 3b. Optional AMARO PARTNERS referral validation & anti-self-referral check
+        let validatedReferral: {
+          partnerId: string;
+          partnerOwnerId: string;
+          referralCode: string;
+          commissionRatePercent: number;
+          commissionAmount: number;
+          attributionModel: 'first_touch' | 'last_touch';
+        } | null = null;
+
+        if (rawReferralCode && /^[A-Z0-9_-]{3,40}$/.test(rawReferralCode) && store.getPartnerByCode) {
+          const partner = await store.getPartnerByCode(rawReferralCode, caller.rawIdToken);
+          if (partner && partner.status === 'active') {
+            if (partner.ownerId === caller.uid) {
+              res.status(400).json({
+                error:
+                  'Auto-parrainage refusé (AMARO PARTNERS) : un partenaire ne peut pas percevoir de commission sur sa propre réservation.',
+              });
+              return;
+            }
+            const ratePct =
+              partner.customCommissionRate > 0
+                ? partner.customCommissionRate
+                : Number(setting.partnerCommissionPercent ?? 5);
+            const rawComm = (quote.breakdown.providerPrice * ratePct) / 100;
+            const commissionAmount =
+              service.currency === 'XOF'
+                ? Math.round(rawComm)
+                : Math.round(rawComm * 100) / 100;
+            validatedReferral = {
+              partnerId: partner.id,
+              partnerOwnerId: partner.ownerId,
+              referralCode: partner.referralCode,
+              commissionRatePercent: ratePct,
+              commissionAmount,
+              attributionModel: setting.attributionModel || 'last_touch',
+            };
+          }
         }
 
         // 4. Reload existing folder schedule & active reservations; enforce duplicate & Journey Brain rules
@@ -821,6 +872,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
         const brain = evaluateJourneyBrain(slotsForBrain, {
           serviceId: service.id,
+          providerId: service.providerId,
           serviceTitle: service.title,
           category: service.category,
           cityId: service.cityId,
@@ -889,6 +941,12 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             totalAmount: quote.breakdown.totalAmount,
             currency: service.currency,
             pricingSnapshot: quote.pricingSnapshot,
+            referral: validatedReferral
+              ? {
+                  ...validatedReferral,
+                  referralId: `ref-${reservationId.replace(/^res-/, '')}`,
+                }
+              : null,
           },
           caller.rawIdToken
         );
@@ -899,6 +957,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           itemId: created.itemId,
           status: 'pending_provider',
           paymentStatus: 'unpaid',
+          priceKnown: quote.priceKnown,
+          referralAttached: Boolean(validatedReferral),
           breakdown: quote.breakdown,
           pricingSnapshot: quote.pricingSnapshot,
           involvesCityChange: brain.involvesCityChange,

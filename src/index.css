@@ -10,6 +10,7 @@
 @layer base {
   html {
     font-family: var(--font-sans);
+    scroll-behavior: smooth;
   }
 
   h1, h2, h3, h4, .font-display {
@@ -19,5 +20,25 @@
   code, pre, textarea.code-input, .font-mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+}
+
+@media print {
+  header,
+  nav,
+  .no-print {
+    display: none !important;
+  }
+
+  body,
+  main {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  .print-logbook-sheet {
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
   }
 }

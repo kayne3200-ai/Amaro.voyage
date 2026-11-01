@@ -102,10 +102,18 @@
         "address": { "type": "string", "maxLength": 240 },
         "description": { "type": "string", "maxLength": 2000 },
         "priceAmount": { "type": "number" },
+        "priceKnown": { "type": "boolean" },
         "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
         "durationMinutes": { "type": "integer" },
         "capacity": { "type": "integer" },
-        "dataOrigin": { "type": "string", "enum": ["verified_partner", "pending_verification", "demo_test"] },
+        "dataOrigin": { "type": "string", "enum": ["verified_partner", "pending_verification", "public_directory", "demo_test"] },
+        "verificationStatus": { "type": "string", "enum": ["verified", "partially_verified", "to_confirm"] },
+        "sourceName": { "type": "string", "maxLength": 240 },
+        "neighborhood": { "type": "string", "maxLength": 140 },
+        "standing": {
+          "type": "string",
+          "enum": ["international_5", "upper_4", "comfort_3", "boutique_charm", "eco_nature", "residence_apart", "budget_2"]
+        },
         "status": { "type": "string", "enum": ["draft", "published", "archived"] },
         "imageKey": { "type": "string", "maxLength": 100 },
         "imageLicense": { "type": "string", "maxLength": 200 },
@@ -178,6 +186,7 @@
         "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "serviceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "serviceTitle": { "type": "string", "maxLength": 160 },
         "category": {
           "type": "string",
@@ -210,6 +219,38 @@
         "currency",
         "stage",
         "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "Electronic Travel Logbook checklist entry and personal souvenir note",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "linkedItemId": { "type": "string", "maxLength": 128 },
+        "stepTitle": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 20 },
+        "completed": { "type": "boolean" },
+        "personalNote": { "type": "string", "maxLength": 2500 },
+        "photoUrl": { "type": "string", "maxLength": 600 },
+        "providerContactNote": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "folderId",
+        "ownerId",
+        "stepTitle",
+        "cityId",
+        "date",
+        "completed",
+        "personalNote",
+        "photoUrl",
+        "providerContactNote",
         "createdAt",
         "updatedAt"
       ]
@@ -257,6 +298,8 @@
         },
         "alternativeProposal": { "type": "string", "maxLength": 800 },
         "pricingSnapshot": { "type": "string", "minLength": 2, "maxLength": 600 },
+        "referralCode": { "type": "string", "maxLength": 40 },
+        "providerSettled": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -281,6 +324,94 @@
         "paymentStatus",
         "alternativeProposal",
         "pricingSnapshot",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PartnerProfile": {
+      "title": "PartnerProfile",
+      "description": "AMARO PARTNERS influencer and affiliate public profile",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "channelUrl": { "type": "string", "maxLength": 300 },
+        "referralCode": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[A-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["pending", "active", "suspended"] },
+        "customCommissionRate": { "type": "number" },
+        "visitsCount": { "type": "integer" },
+        "signupsCount": { "type": "integer" },
+        "reservationsCount": { "type": "integer" },
+        "confirmedCount": { "type": "integer" },
+        "paidAmountXof": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "channelUrl",
+        "referralCode",
+        "status",
+        "customCommissionRate",
+        "visitsCount",
+        "signupsCount",
+        "reservationsCount",
+        "confirmedCount",
+        "paidAmountXof",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PartnerReferral": {
+      "title": "PartnerReferral",
+      "description": "Server-validated referral commission record requiring confirmed reservation, client payment, and provider settlement",
+      "type": "object",
+      "properties": {
+        "partnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "partnerOwnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referralCode": { "type": "string", "maxLength": 40 },
+        "reservationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "reservationAmount": { "type": "number" },
+        "commissionRatePercent": { "type": "number" },
+        "commissionAmount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "reservation_confirmed",
+            "awaiting_client_payment",
+            "awaiting_provider_settlement",
+            "validated",
+            "payable",
+            "paid",
+            "cancelled_or_rejected"
+          ]
+        },
+        "clientPaid": { "type": "boolean" },
+        "providerSettled": { "type": "boolean" },
+        "attributionModel": { "type": "string", "enum": ["first_touch", "last_touch"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "partnerId",
+        "partnerOwnerId",
+        "referralCode",
+        "reservationId",
+        "clientId",
+        "serviceTitle",
+        "reservationAmount",
+        "commissionRatePercent",
+        "commissionAmount",
+        "currency",
+        "status",
+        "clientPaid",
+        "providerSettled",
+        "attributionModel",
         "createdAt",
         "updatedAt"
       ]
@@ -338,6 +469,9 @@
         "serviceFeeFlat": { "type": "number" },
         "taxPercent": { "type": "number" },
         "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "partnerCommissionPercent": { "type": "number" },
+        "attributionWindowDays": { "type": "integer" },
+        "attributionModel": { "type": "string", "enum": ["first_touch", "last_touch"] },
         "updatedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -400,9 +534,21 @@
       "schema": { "$ref": "#/entities/JourneyItem" },
       "description": "Scheduled journey items synchronized via Master Gate to parent folder"
     },
+    "/journey_folders/{folderId}/journal/{entryId}": {
+      "schema": { "$ref": "#/entities/JournalEntry" },
+      "description": "Electronic Travel Logbook checklist steps, souvenir notes, and progress tracking"
+    },
     "/reservations/{reservationId}": {
       "schema": { "$ref": "#/entities/Reservation" },
       "description": "State-machine reservations linking clientId and providerOwnerId"
+    },
+    "/partners/{partnerId}": {
+      "schema": { "$ref": "#/entities/PartnerProfile" },
+      "description": "AMARO PARTNERS influencer and affiliate profiles"
+    },
+    "/partner_referrals/{referralId}": {
+      "schema": { "$ref": "#/entities/PartnerReferral" },
+      "description": "Server-validated referral commission records governed by Admin"
     },
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },

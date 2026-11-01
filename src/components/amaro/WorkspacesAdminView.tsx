@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Award,
   Building2,
   CheckCircle2,
   CloudUpload,
   Database,
   FileCheck2,
+  FolderKanban,
   GitBranch,
   Lock,
   Moon,
@@ -17,16 +19,27 @@ import type {
   CatalogueItem,
   CulturalStoryDoc,
   CurrencyCode,
+  DataOriginType,
   LocaleCode,
+  PartnerCommissionStatus,
+  PartnerProfileDoc,
+  PartnerReferralDoc,
   ProviderProfileDoc,
   ReservationDoc,
   ServiceCategory,
   SystemSettingDoc,
+  VerificationLevel,
 } from '../../types/amaro';
 import { FIREBASE_CLOUD_META } from '../../lib/firebase';
 import { authorizedFetch } from '../../lib/apiClient';
-import { EDITORIAL_IMAGES, VALIDATION_MATRIX } from '../../data/amaroRegistry';
+import {
+  BENIN_PUBLIC_DIRECTORY,
+  COUNTRIES_REGISTRY,
+  EDITORIAL_IMAGES,
+  VALIDATION_MATRIX,
+} from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
+import { AmaroPartnersView } from './AmaroPartnersView';
 
 interface UserPublicData {
   uid: string;
@@ -121,12 +134,56 @@ interface WorkspacesAdminViewProps {
     newDate: string,
     newTime: string
   ) => Promise<void>;
-  // Admin workspace
+  // Partners / Affiliate Program
+  myPartner: PartnerProfileDoc | null;
+  myReferrals: PartnerReferralDoc[];
+  allPartners: PartnerProfileDoc[];
+  allReferrals: PartnerReferralDoc[];
+  onRegisterPartner: (
+    displayName: string,
+    channelUrl: string,
+    desiredCode: string
+  ) => Promise<void>;
+  onAdminUpdatePartnerStatus: (
+    partnerId: string,
+    status: 'active' | 'suspended' | 'pending',
+    customCommissionRate: number
+  ) => Promise<void>;
+  onAdminUpdateReferral: (
+    referral: PartnerReferralDoc,
+    nextStatus: PartnerCommissionStatus,
+    clientPaid: boolean,
+    providerSettled: boolean
+  ) => Promise<void>;
+  onAdminSavePartnerSettings: (
+    partnerCommissionPercent: number,
+    attributionWindowDays: number,
+    attributionModel: 'first_touch' | 'last_touch'
+  ) => Promise<void>;
+  // Admin workspace & Catalogue Management
   countrySetting: SystemSettingDoc | null;
+  allCatalogueServices: CatalogueItem[];
   allProviders: ProviderProfileDoc[];
   allReservations: ReservationDoc[];
   allStories: CulturalStoryDoc[];
   auditLogs: AuditLogEntry[];
+  onAdminUpsertCatalogueService: (payload: {
+    serviceId?: string;
+    providerId: string;
+    title: string;
+    category: ServiceCategory;
+    cityId: string;
+    address: string;
+    description: string;
+    priceAmount: number;
+    priceKnown: boolean;
+    durationMinutes: number;
+    capacity: number;
+    dataOrigin: DataOriginType;
+    verificationStatus: VerificationLevel;
+    status: 'published' | 'draft' | 'archived';
+    imageKey: string;
+  }) => Promise<void>;
   onAdminVerifyProvider: (
     providerId: string,
     status: 'verified' | 'rejected'
@@ -148,7 +205,7 @@ interface WorkspacesAdminViewProps {
   onNotify: (message: string) => void;
 }
 
-type SubWorkspace = 'profile' | 'provider' | 'admin' | 'github' | 'matrix';
+type SubWorkspace = 'github' | 'partners' | 'profile' | 'provider' | 'admin' | 'matrix';
 
 const CATEGORIES: ServiceCategory[] = [
   'accommodation',
@@ -160,6 +217,7 @@ const CATEGORIES: ServiceCategory[] = [
   'wellness',
 ];
 
+const BENIN_CITIES = COUNTRIES_REGISTRY[0]?.cities || [];
 const GITHUB_SESSION_STORAGE_KEY = 'amaro_github_session_id';
 
 export function WorkspacesAdminView({
@@ -182,11 +240,21 @@ export function WorkspacesAdminView({
   onSaveProviderProfile,
   onCreateProviderService,
   onProviderRespondReservation,
+  myPartner,
+  myReferrals,
+  allPartners,
+  allReferrals,
+  onRegisterPartner,
+  onAdminUpdatePartnerStatus,
+  onAdminUpdateReferral,
+  onAdminSavePartnerSettings,
   countrySetting,
+  allCatalogueServices,
   allProviders,
   allReservations,
   allStories,
   auditLogs,
+  onAdminUpsertCatalogueService,
   onAdminVerifyProvider,
   onAdminModerateStory,
   onAdminSaveSettings,
@@ -194,7 +262,7 @@ export function WorkspacesAdminView({
   onNotify,
 }: WorkspacesAdminViewProps) {
   const t = TRANSLATIONS[locale];
-  const [subTab, setSubTab] = useState<SubWorkspace>('github');
+  const [subTab, setSubTab] = useState<SubWorkspace>('partners');
 
   // 1. User Profile State
   const [displayName, setDisplayName] = useState<string>('');
@@ -246,7 +314,7 @@ export function WorkspacesAdminView({
     }
   }, [myProvider, myProviderPrivate, currentUserEmail]);
 
-  // New Service Offer State
+  // Provider New Service Offer State
   const [srvTitle, setSrvTitle] = useState<string>('');
   const [srvCategory, setSrvCategory] = useState<ServiceCategory>('accommodation');
   const [srvCity, setSrvCity] = useState<string>('cotonou');
@@ -264,11 +332,28 @@ export function WorkspacesAdminView({
   const [altDateByRes, setAltDateByRes] = useState<Record<string, string>>({});
   const [altTimeByRes, setAltTimeByRes] = useState<Record<string, string>>({});
 
-  // 3. Admin Settings State
+  // 3. Admin Settings & Catalogue Override State
   const [commPct, setCommPct] = useState<number>(countrySetting?.commissionPercent ?? 0);
   const [flatFee, setFlatFee] = useState<number>(countrySetting?.serviceFeeFlat ?? 0);
   const [taxPct, setTaxPct] = useState<number>(countrySetting?.taxPercent ?? 0);
   const [savingSettings, setSavingSettings] = useState<boolean>(false);
+
+  const [admSrvId, setAdmSrvId] = useState<string>('');
+  const [admProvId, setAdmProvId] = useState<string>('dir-admin-benin');
+  const [admTitle, setAdmTitle] = useState<string>('');
+  const [admCategory, setAdmCategory] = useState<ServiceCategory>('accommodation');
+  const [admCity, setAdmCity] = useState<string>('cotonou');
+  const [admAddress, setAdmAddress] = useState<string>('');
+  const [admDesc, setAdmDesc] = useState<string>('');
+  const [admPrice, setAdmPrice] = useState<number>(0);
+  const [admPriceKnown, setAdmPriceKnown] = useState<boolean>(false);
+  const [admDuration, setAdmDuration] = useState<number>(720);
+  const [admCapacity, setAdmCapacity] = useState<number>(4);
+  const [admOrigin, setAdmOrigin] = useState<DataOriginType>('public_directory');
+  const [admVerif, setAdmVerif] = useState<VerificationLevel>('verified');
+  const [admStatus, setAdmStatus] = useState<'published' | 'draft' | 'archived'>('published');
+  const [admImgKey, setAdmImgKey] = useState<string>('cotonou_coast');
+  const [savingAdminSrv, setSavingAdminSrv] = useState<boolean>(false);
 
   useEffect(() => {
     if (countrySetting) {
@@ -438,16 +523,34 @@ export function WorkspacesAdminView({
     }
   };
 
+  const loadItemIntoAdminEditor = (item: CatalogueItem) => {
+    setAdmSrvId(item.id);
+    setAdmProvId(item.providerId);
+    setAdmTitle(item.title);
+    setAdmCategory(item.category);
+    setAdmCity(item.cityId);
+    setAdmAddress(item.address);
+    setAdmDesc(item.description);
+    setAdmPrice(item.priceAmount);
+    setAdmPriceKnown(item.priceKnown !== false);
+    setAdmDuration(item.durationMinutes);
+    setAdmCapacity(item.capacity);
+    setAdmOrigin(item.dataOrigin);
+    setAdmVerif(item.verificationStatus || 'verified');
+    setAdmStatus(item.status);
+    setAdmImgKey(item.imageKey);
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 pb-24 md:pb-12 space-y-6">
       {/* Top Bar + Theme Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Architecture Multi-Rôles · Gouvernance · Sauvegarde GitHub &amp; Spck Editor
+          <p className="text-xs font-medium text-teal-700 dark:text-teal-400">
+            Architecture Multi-Rôles · Amaro Partners · Gouvernance &amp; Sauvegarde GitHub
           </p>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
-            Espaces Métiers, Administration &amp; Sauvegarde
+            Espaces Partenaires, Prestataires, Administration &amp; Sauvegarde
           </h1>
         </div>
 
@@ -464,11 +567,12 @@ export function WorkspacesAdminView({
       {/* Sub-navigation Tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
         {[
-          { id: 'github' as SubWorkspace, label: 'Sauvegarde GitHub & Spck', icon: GitBranch },
-          { id: 'profile' as SubWorkspace, label: 'Mon Profil & RGPD', icon: UserCheck },
+          { id: 'partners' as SubWorkspace, label: 'Amaro Partners (Affiliés)', icon: Award },
           { id: 'provider' as SubWorkspace, label: 'Espace Prestataire', icon: Building2 },
-          { id: 'admin' as SubWorkspace, label: 'Administration Centrale', icon: ShieldCheck },
-          { id: 'matrix' as SubWorkspace, label: 'Matrice (Partie 23) & Légal', icon: FileCheck2 },
+          { id: 'profile' as SubWorkspace, label: 'Mon Profil & RGPD', icon: UserCheck },
+          { id: 'admin' as SubWorkspace, label: 'Administration & Catalogue', icon: ShieldCheck },
+          { id: 'github' as SubWorkspace, label: 'Sauvegarde GitHub & Spck', icon: GitBranch },
+          { id: 'matrix' as SubWorkspace, label: 'Matrice & Légal', icon: FileCheck2 },
         ].map((tab) => {
           const Icon = tab.icon;
           const active = subTab === tab.id;
@@ -491,7 +595,28 @@ export function WorkspacesAdminView({
       </div>
 
       {/* =====================================================================
-          TAB 1: GITHUB & SPCK EDITOR BACKUP (PROBLÈME 3 & PARTIE 15)
+          TAB 0: AMARO PARTNERS (INFLUENCERS, GUIDES & AFFILIATES)
+         ===================================================================== */}
+      {subTab === 'partners' && (
+        <AmaroPartnersView
+          isSignedIn={isSignedIn}
+          isAdmin={isAdmin}
+          onRequireSignIn={onRequireSignIn}
+          myPartner={myPartner}
+          myReferrals={myReferrals}
+          allPartners={allPartners}
+          allReferrals={allReferrals}
+          countrySetting={countrySetting}
+          onRegisterPartner={onRegisterPartner}
+          onAdminUpdatePartnerStatus={onAdminUpdatePartnerStatus}
+          onAdminUpdateReferral={onAdminUpdateReferral}
+          onAdminSavePartnerSettings={onAdminSavePartnerSettings}
+          onNotify={onNotify}
+        />
+      )}
+
+      {/* =====================================================================
+          TAB 1: GITHUB & SPCK EDITOR BACKUP
          ===================================================================== */}
       {subTab === 'github' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -505,8 +630,8 @@ export function WorkspacesAdminView({
                 Sauvegarder le code source AMARO.VOYAGE sur GitHub
               </h2>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Envoyez en un clic l’intégralité des fichiers sources d’AMARO.VOYAGE (frontend React, serveur Express, règles Firestore, documentation) vers votre dépôt{' '}
-                <strong className="font-mono">kayne3200-ai/Amaro.voyage</strong> pour travailler ou sauvegarder votre projet dans <strong>Spck Editor sur Android</strong>.
+                Envoyez en un clic l’intégralité des fichiers sources d’AMARO.VOYAGE (frontend React, catalogue Bénin 168 fiches, 12 visuels locaux, serveur Express, règles Firestore) vers votre dépôt{' '}
+                <strong className="font-mono">kayne3200-ai/Amaro.voyage</strong> pour travailler dans <strong>Spck Editor sur Android</strong>.
               </p>
             </div>
 
@@ -516,7 +641,7 @@ export function WorkspacesAdminView({
                   Authentification Administrateur requise (contrôlée côté serveur via Firebase Admin SDK)
                 </p>
                 <p className="text-amber-800 dark:text-amber-300 leading-relaxed">
-                  Pour protéger votre dépôt GitHub et vos secrets serveur, toutes les routes <code className="font-mono">/api/github/*</code> sont strictement réservées au compte Administrateur principal vérifié (<strong className="font-mono">kayne3200@gmail.com</strong>).
+                  Toutes les routes <code className="font-mono">/api/github/*</code> sont strictement réservées au compte Administrateur principal vérifié (<strong className="font-mono">kayne3200@gmail.com</strong>).
                 </p>
                 <button
                   type="button"
@@ -530,7 +655,7 @@ export function WorkspacesAdminView({
               <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-xl space-y-1.5 text-xs text-red-900 dark:text-red-200">
                 <p className="font-bold">Accès refusé (403 — Réservé à l’Administrateur)</p>
                 <p className="leading-relaxed">
-                  Votre session (<span className="font-mono">{currentUserEmail}</span>) est authentifiée comme voyageur ou prestataire, mais n’est pas autorisée à exécuter des sauvegardes GitHub côté serveur.
+                  Votre session (<span className="font-mono">{currentUserEmail}</span>) n’est pas autorisée à exécuter des sauvegardes GitHub côté serveur.
                 </p>
               </div>
             ) : !ghUser ? (
@@ -812,17 +937,17 @@ export function WorkspacesAdminView({
       )}
 
       {/* =====================================================================
-          TAB 3: PROVIDER WORKSPACE (PARTIE 5.3 & PARTIE 14)
+          TAB 3: PROVIDER WORKSPACE (ALL 22 BENIN CITIES)
          ===================================================================== */}
       {subTab === 'provider' && (
         <div className="space-y-6">
           {!isSignedIn ? (
             <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
               <h2 className="font-display text-lg font-bold">
-                Espace Prestataire Partenaire
+                Espace Prestataire Partenaire Bénin
               </h2>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                Connectez-vous pour enregistrer votre établissement à Cotonou, Abomey-Calavi ou Parakou, soumettre vos prestations à validation administrative et répondre aux demandes clients.
+                Connectez-vous pour enregistrer votre établissement dans l’une des 22 localités du Bénin, soumettre vos prestations à validation administrative et répondre aux demandes clients.
               </p>
               <button
                 type="button"
@@ -834,7 +959,6 @@ export function WorkspacesAdminView({
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Provider Profile & Service Creation */}
               <div className="lg:col-span-6 space-y-6">
                 <form
                   onSubmit={async (e) => {
@@ -910,9 +1034,11 @@ export function WorkspacesAdminView({
                       onChange={(e) => setProvCity(e.target.value)}
                       className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
-                      <option value="cotonou">Cotonou</option>
-                      <option value="abomey-calavi">Abomey-Calavi</option>
-                      <option value="parakou">Parakou</option>
+                      {BENIN_CITIES.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -978,7 +1104,6 @@ export function WorkspacesAdminView({
                   </button>
                 </form>
 
-                {/* Publish Offer Form */}
                 {myProvider && (
                   <form
                     onSubmit={async (e) => {
@@ -1041,9 +1166,11 @@ export function WorkspacesAdminView({
                         onChange={(e) => setSrvCity(e.target.value)}
                         className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                       >
-                        <option value="cotonou">Cotonou</option>
-                        <option value="abomey-calavi">Abomey-Calavi</option>
-                        <option value="parakou">Parakou</option>
+                        {BENIN_CITIES.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
                       </select>
                     </div>
 
@@ -1051,7 +1178,7 @@ export function WorkspacesAdminView({
                       type="text"
                       value={srvAddress}
                       onChange={(e) => setSrvAddress(e.target.value)}
-                      placeholder="Quartier / Adresse à Cotonou, Abomey-Calavi ou Parakou"
+                      placeholder="Quartier / Adresse exacte au Bénin"
                       required
                       maxLength={220}
                       className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
@@ -1100,7 +1227,7 @@ export function WorkspacesAdminView({
                     >
                       {Object.entries(EDITORIAL_IMAGES).map(([k, v]) => (
                         <option key={k} value={k}>
-                          Visuel d’illustration : {v.alt.slice(0, 58)}...
+                          Visuel d’illustration : {v.alt.slice(0, 62)}...
                         </option>
                       ))}
                     </select>
@@ -1250,11 +1377,10 @@ export function WorkspacesAdminView({
       )}
 
       {/* =====================================================================
-          TAB 4: CENTRAL ADMINISTRATION & CLOUD INFRASTRUCTURE STATUS
+          TAB 4: CENTRAL ADMINISTRATION & CATALOGUE MANAGEMENT
          ===================================================================== */}
       {subTab === 'admin' && (
         <div className="space-y-6">
-          {/* Cloud vs Local Diagnostic Panel (PROBLÈME 4 Resolution) */}
           <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
@@ -1314,23 +1440,29 @@ export function WorkspacesAdminView({
                 Accès Administrateur Strictement Réservé
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                Conformément à la Partie 8 (Sécurité Zero-Trust), aucun compte visiteur, client ou prestataire ne peut s’auto-attribuer le rôle administrateur. Connectez-vous avec le compte propriétaire vérifié (<code className="font-mono">kayne3200@gmail.com</code>) pour gérer les validations, commissions et modérations.
+                Conformément à la Sécurité Zero-Trust, aucun compte visiteur, client ou prestataire ne peut s’auto-attribuer le rôle administrateur. Connectez-vous avec le compte propriétaire vérifié (<code className="font-mono">kayne3200@gmail.com</code>).
               </p>
             </div>
           ) : (
             <>
-              {/* Real Firestore Counters (Zero Invented Metrics) */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 tabular-nums">
+              {/* Real Counters */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 tabular-nums">
+                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <span className="text-xs text-slate-500 block">Répertoire Bénin</span>
+                  <strong className="font-mono text-2xl font-bold">
+                    {BENIN_PUBLIC_DIRECTORY.length}
+                  </strong>
+                </div>
+                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <span className="text-xs text-slate-500 block">Fiches Firestore</span>
+                  <strong className="font-mono text-2xl font-bold">
+                    {allCatalogueServices.length}
+                  </strong>
+                </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
                   <span className="text-xs text-slate-500 block">Prestataires inscrits</span>
                   <strong className="font-mono text-2xl font-bold">
                     {allProviders.length}
-                  </strong>
-                </div>
-                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-xs text-slate-500 block">En attente validation</span>
-                  <strong className="font-mono text-2xl font-bold">
-                    {allProviders.filter((p) => p.verificationStatus === 'pending').length}
                   </strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
@@ -1340,12 +1472,243 @@ export function WorkspacesAdminView({
                   </strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-xs text-slate-500 block">Récits à modérer</span>
+                  <span className="text-xs text-slate-500 block">Partenaires affiliés</span>
                   <strong className="font-mono text-2xl font-bold">
-                    {allStories.filter((s) => s.moderationStatus === 'pending').length}
+                    {allPartners.length}
                   </strong>
                 </div>
               </div>
+
+              {/* Admin Catalogue Manager (/services/{serviceId}) */}
+              <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 font-semibold">
+                      <FolderKanban className="w-4 h-4" />
+                      <span>Gouvernance du Catalogue Touristique (/services/&#123;serviceId&#125;)</span>
+                    </div>
+                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                      Créer ou surcharger une fiche du Répertoire Bénin (tarif confirmé, partenariat signé, statut)
+                    </h3>
+                  </div>
+
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const pickedId = e.target.value;
+                      if (!pickedId) return;
+                      const found =
+                        allCatalogueServices.find((x) => x.id === pickedId) ||
+                        BENIN_PUBLIC_DIRECTORY.find((x) => x.id === pickedId);
+                      if (found) loadItemIntoAdminEditor(found);
+                    }}
+                    className="min-h-[40px] max-w-xs px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  >
+                    <option value="">Charger une fiche existante à modifier...</option>
+                    {BENIN_PUBLIC_DIRECTORY.slice(0, 60).map((it) => (
+                      <option key={it.id} value={it.id}>
+                        {it.title} ({it.cityId})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setSavingAdminSrv(true);
+                    try {
+                      await onAdminUpsertCatalogueService({
+                        serviceId: admSrvId.trim() || undefined,
+                        providerId: admProvId.trim() || 'dir-admin-benin',
+                        title: admTitle.trim(),
+                        category: admCategory,
+                        cityId: admCity,
+                        address: admAddress.trim(),
+                        description: admDesc.trim(),
+                        priceAmount: Math.max(0, Number(admPrice) || 0),
+                        priceKnown: admPriceKnown,
+                        durationMinutes: Math.max(0, Math.round(admDuration)),
+                        capacity: Math.max(1, Math.round(admCapacity)),
+                        dataOrigin: admOrigin,
+                        verificationStatus: admVerif,
+                        status: admStatus,
+                        imageKey: admImgKey,
+                      });
+                      setAdmSrvId('');
+                      setAdmTitle('');
+                      setAdmAddress('');
+                      setAdmDesc('');
+                    } finally {
+                      setSavingAdminSrv(false);
+                    }
+                  }}
+                  className="space-y-3"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <input
+                      type="text"
+                      value={admSrvId}
+                      onChange={(e) => setAdmSrvId(e.target.value)}
+                      placeholder="ID fiche (vide = auto, ou ex: acc-cotonou-sofitel-marina)"
+                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      value={admProvId}
+                      onChange={(e) => setAdmProvId(e.target.value)}
+                      required
+                      placeholder="ID prestataire (ex: dir-trans-avis-benin)"
+                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      value={admTitle}
+                      onChange={(e) => setAdmTitle(e.target.value)}
+                      required
+                      minLength={2}
+                      maxLength={155}
+                      placeholder="Nom de l'établissement / site"
+                      className="sm:col-span-2 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <select
+                      value={admCategory}
+                      onChange={(e) => setAdmCategory(e.target.value as ServiceCategory)}
+                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {t.categories[c]}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={admCity}
+                      onChange={(e) => setAdmCity(e.target.value)}
+                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {BENIN_CITIES.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={admOrigin}
+                      onChange={(e) => setAdmOrigin(e.target.value as DataOriginType)}
+                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      <option value="public_directory">Répertoire public</option>
+                      <option value="verified_partner">Partenaire officiel vérifié</option>
+                      <option value="pending_verification">En attente vérification</option>
+                      <option value="demo_test">Démo Test</option>
+                    </select>
+
+                    <select
+                      value={admVerif}
+                      onChange={(e) => setAdmVerif(e.target.value as VerificationLevel)}
+                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      <option value="verified">Vérifié</option>
+                      <option value="partially_verified">Partiellement vérifié</option>
+                      <option value="to_confirm">À confirmer</option>
+                    </select>
+
+                    <select
+                      value={admStatus}
+                      onChange={(e) =>
+                        setAdmStatus(e.target.value as 'published' | 'draft' | 'archived')
+                      }
+                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      <option value="published">Publié</option>
+                      <option value="draft">Brouillon</option>
+                      <option value="archived">Archivé</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
+                    <input
+                      type="text"
+                      value={admAddress}
+                      onChange={(e) => setAdmAddress(e.target.value)}
+                      required
+                      maxLength={230}
+                      placeholder="Adresse / Quartier vérifiable"
+                      className="sm:col-span-2 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={admPrice}
+                      onChange={(e) => setAdmPrice(Number(e.target.value))}
+                      placeholder="Tarif XOF"
+                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <label className="flex items-center gap-2 text-xs cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={admPriceKnown}
+                        onChange={(e) => setAdmPriceKnown(e.target.checked)}
+                      />
+                      <span>Tarif public confirmé</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <select
+                      value={admImgKey}
+                      onChange={(e) => setAdmImgKey(e.target.value)}
+                      className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {Object.entries(EDITORIAL_IMAGES).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          Photo : {v.alt.slice(0, 52)}...
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={0}
+                      value={admDuration}
+                      onChange={(e) => setAdmDuration(Number(e.target.value))}
+                      placeholder="Durée min"
+                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      value={admCapacity}
+                      onChange={(e) => setAdmCapacity(Number(e.target.value))}
+                      placeholder="Capacité"
+                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+
+                  <textarea
+                    rows={2}
+                    value={admDesc}
+                    onChange={(e) => setAdmDesc(e.target.value)}
+                    required
+                    maxLength={1900}
+                    placeholder="Description honnête et source éditoriale..."
+                    className="w-full p-3 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={savingAdminSrv}
+                    className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+                  >
+                    {savingAdminSrv ? 'Enregistrement Cloud...' : 'Enregistrer dans /services'}
+                  </button>
+                </form>
+              </section>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 {/* Commission & Financial Settings */}
@@ -1465,7 +1828,7 @@ export function WorkspacesAdminView({
                     Traitement Manuel &amp; Règlements Réservations ({allReservations.length})
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Permet de traiter manuellement les prestataires hors-ligne et de valider un règlement vérifié ou un remboursement.
+                    Permet de traiter manuellement les établissements du répertoire public hors-ligne et de valider un règlement vérifié ou un remboursement.
                   </p>
                   {allReservations.length === 0 ? (
                     <p className="text-xs text-slate-500">Aucune réservation enregistrée.</p>
@@ -1483,15 +1846,26 @@ export function WorkspacesAdminView({
                           </div>
                           <div className="flex flex-wrap gap-2">
                             {r.status === 'pending_provider' && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void onAdminSettleReservation(r, 'accepted', r.paymentStatus)
-                                }
-                                className="min-h-[34px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
-                              >
-                                Confirmer dispo (Conciergerie)
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void onAdminSettleReservation(r, 'accepted', r.paymentStatus)
+                                  }
+                                  className="min-h-[34px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
+                                >
+                                  Confirmer dispo (Conciergerie)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void onAdminSettleReservation(r, 'rejected', r.paymentStatus)
+                                  }
+                                  className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                                >
+                                  Indisponible (déclenche alternatives)
+                                </button>
+                              </>
                             )}
                             {r.paymentStatus !== 'succeeded' && (
                               <button
@@ -1557,7 +1931,7 @@ export function WorkspacesAdminView({
                     </div>
                   ))}
 
-                  {auditLogs.slice(0, 5).map((log) => (
+                  {auditLogs.slice(0, 6).map((log) => (
                     <div
                       key={log.id}
                       className="text-[11px] font-mono text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-2"
@@ -1573,7 +1947,7 @@ export function WorkspacesAdminView({
       )}
 
       {/* =====================================================================
-          TAB 5: PARTIE 23 VALIDATION MATRIX & PARTIE 20 LEGAL NOTICES
+          TAB 5: VALIDATION MATRIX & LEGAL NOTICES
          ===================================================================== */}
       {subTab === 'matrix' && (
         <div className="space-y-8">
@@ -1581,7 +1955,7 @@ export function WorkspacesAdminView({
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Partie 23 · Transparence Technique &amp; État Réel des Modules</span>
+                <span>Transparence Technique &amp; État Réel des Modules</span>
               </div>
               <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
                 Matrice Officielle de Validation AMARO.VOYAGE
@@ -1628,23 +2002,22 @@ export function WorkspacesAdminView({
             </table>
           </section>
 
-          {/* PARTIE 20 — Cadre Légal, Confidentialité & Conditions */}
           <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                Politique de Confidentialité &amp; Isolation des Données
+                Politique de Confidentialité &amp; Transparence du Répertoire Public
               </h3>
               <p>
-                AMARO.VOYAGE applique le principe de minimisation et de cloisonnement strict : vos coordonnées privées (téléphone, contact d’urgence) sont isolées dans une sous-collection protégée inaccessible au public et aux autres voyageurs. Aucun secret API ni donnée bancaire n’est stocké côté client.
+                AMARO.VOYAGE distingue systématiquement les établissements du répertoire public informatif (« Établissement référencé — non partenaire »), les partenaires officiels vérifiés et les fiches de démonstration technique. Aucune donnée bancaire ni secret serveur n’est exposé au navigateur.
               </p>
             </div>
 
             <div className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                CGU, Réservations &amp; Avertissement Responsabilité
+                CGU, Réservations &amp; Charte AMARO PARTNERS
               </h3>
               <p>
-                Les outils d’orientation, d’agenda intelligent, de budget et d’urgence sont fournis gratuitement. Une demande de réservation n’engage un règlement qu’après confirmation explicite de disponibilité par le prestataire et validation finale du client. Amaro Rescue ne se substitue pas aux secours publics nationaux.
+                L’exploration du Bénin, l’agenda intelligent, le carnet souvenir PDF et le module d’urgence sont 100 % gratuits. Une commission affilié AMARO PARTNERS n’est payable qu’après confirmation réelle du séjour, paiement intégral du client et règlement financier avec le prestataire.
               </p>
             </div>
           </section>

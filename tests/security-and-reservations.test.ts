@@ -8,7 +8,7 @@ import {
   createAmaroApp,
 } from '../src/server/createAmaroApp';
 import {
-  OFFICIAL_DEMO_SERVICES,
+  OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   type ScheduleSlot,
   type ServerServiceRecord,
   type ServerSystemSetting,
@@ -16,8 +16,10 @@ import {
 import {
   ConflictError,
   type AmaroServerStore,
+  type AtomicReferralPayload,
   type AtomicReservationPayload,
   type ServerFolderRecord,
+  type ServerPartnerRecord,
 } from '../src/server/firestoreStore';
 import {
   createFirebaseAdminTokenVerifier,
@@ -46,6 +48,11 @@ class InMemoryTestStore implements AmaroServerStore {
     string,
     AtomicReservationPayload & { status: ReservationStatus }
   >();
+  readonly partnersByCode = new Map<string, ServerPartnerRecord>();
+  readonly referrals = new Map<
+    string,
+    AtomicReferralPayload & { status: string; clientPaid: boolean; providerSettled: boolean }
+  >();
   private readonly inFlight = new Set<string>();
   artificialCommitDelayMs = 0;
 
@@ -59,13 +66,48 @@ class InMemoryTestStore implements AmaroServerStore {
     this.settings.clear();
     this.itemsByFolder.clear();
     this.reservations.clear();
+    this.partnersByCode.clear();
+    this.referrals.clear();
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
 
-    // Seed official demo catalogue + test unpublished/published services in memory only
-    for (const [id, svc] of Object.entries(OFFICIAL_DEMO_SERVICES)) {
+    // Seed all 168 Benin public directory items + 7 official demo items in memory only
+    for (const [id, svc] of Object.entries(OFFICIAL_PUBLIC_AND_DEMO_SERVICES)) {
       this.services.set(id, { ...svc });
     }
+    // Second vehicle under the SAME Avis Bénin transport provider to test multi-vehicle allowance
+    this.services.set('srv-avis-second-vehicle', {
+      id: 'srv-avis-second-vehicle',
+      providerId: 'dir-trans-avis-benin',
+      ownerId: 'manual_concierge',
+      title: 'Avis Bénin — Minibus familial 9 places avec chauffeur',
+      category: 'transport',
+      countryCode: 'BJ',
+      cityId: 'cotonou',
+      priceAmount: 65_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 480,
+      capacity: 9,
+      status: 'published',
+      dataOrigin: 'public_directory',
+    });
+    this.partnersByCode.set('BENIN-CREATOR-1', {
+      id: 'part-creator-1',
+      ownerId: 'influencer-uid-99',
+      displayName: 'Créateur Découverte Bénin',
+      referralCode: 'BENIN-CREATOR-1',
+      status: 'active',
+      customCommissionRate: 6,
+    });
+    this.partnersByCode.set('SELF-CODE-TRAVELER1', {
+      id: 'part-self-1',
+      ownerId: 'traveler-uid-1',
+      displayName: 'Voyageur Auto-Parrain',
+      referralCode: 'SELF-CODE-TRAVELER1',
+      status: 'active',
+      customCommissionRate: 5,
+    });
     this.services.set('srv-published-hotel', {
       id: 'srv-published-hotel',
       providerId: 'prov-cotonou-1',
@@ -160,6 +202,10 @@ class InMemoryTestStore implements AmaroServerStore {
     return this.folders.get(folderId) || null;
   }
 
+  async getPartnerByCode(referralCode: string): Promise<ServerPartnerRecord | null> {
+    return this.partnersByCode.get(referralCode.toUpperCase()) || null;
+  }
+
   async listClientScheduleAndActiveReservations(
     folderId: string,
     clientId: string
@@ -234,9 +280,19 @@ class InMemoryTestStore implements AmaroServerStore {
         status: 'pending_provider',
       });
 
+      if (payload.referral) {
+        this.referrals.set(payload.referral.referralId, {
+          ...payload.referral,
+          status: 'pending',
+          clientPaid: false,
+          providerSettled: false,
+        });
+      }
+
       const currentItems = this.itemsByFolder.get(payload.folderId) || [];
       currentItems.push({
         serviceId: payload.serviceId,
+        providerId: payload.providerId,
         serviceTitle: payload.serviceTitle,
         category: payload.category,
         cityId: payload.cityId,
@@ -310,6 +366,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       store,
       assistantMaxPerIpWindow: 3,
       assistantMaxPerUserWindow: 6,
+      reservationMaxPerWindow: 100,
       geminiResponder: async ({ prompt }) => {
         if (prompt.includes('TRIGGER_SECRET_ERROR')) {
           throw new Error(
@@ -734,4 +791,154 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       }
     }
   });
+
+  it('8. Règle Transporteur Unique par séjour : autorise 2 véhicules chez le MÊME prestataire (201) mais bloque un second prestataire transport différent (409)', async () => {
+    store.reset();
+
+    // 1st vehicle with Avis Bénin (providerId: dir-trans-avis-benin) on Day 1
+    const v1 = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-avis-berline-cotonou',
+        scheduledDate: '2026-11-16',
+        scheduledTime: '08:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(v1.status, 201);
+
+    // 2nd vehicle with the SAME Avis Bénin provider (trans-avis-4x4-nord-benin -> dir-trans-avis-benin) on Day 2 -> ALLOWED (201)
+    const v2SameProvider = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-avis-4x4-nord-benin',
+        scheduledDate: '2026-11-17',
+        scheduledTime: '08:00',
+        participants: 3,
+      }),
+    });
+    assert.equal(v2SameProvider.status, 201);
+
+    // 3rd vehicle with a DIFFERENT transport provider (Europcar Bénin: dir-trans-europcar-benin) -> BLOCKED (409)
+    const v3DifferentProvider = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-europcar-cotonou',
+        scheduledDate: '2026-11-19',
+        scheduledTime: '09:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(v3DifferentProvider.status, 409);
+    const conflictBody: any = await v3DifferentProvider.json();
+    assert.match(conflictBody.error, /prestataires de transport distincts/i);
+  });
+
+  it('9. Répertoire Bénin réel (168 fiches) : tarification honnête côté serveur pour les fiches chiffrées et pour les hôtels « Tarif sur demande » (priceKnown=false)', async () => {
+    store.reset();
+
+    // Known tariff site: Temple des Pythons de Ouidah (site-ouidah-temple-des-pythons)
+    const quoteKnown = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'site-ouidah-temple-des-pythons',
+        participants: 2,
+      }),
+    });
+    assert.equal(quoteKnown.status, 200);
+    const quoteKnownBody: any = await quoteKnown.json();
+    assert.equal(quoteKnownBody.priceKnown, true);
+    assert.equal(quoteKnownBody.breakdown.providerPrice, 4_000);
+
+    // Price-on-request accommodation: Hôtel & Relais Frontalier de Malanville (priceKnown === false -> 0 XOF, never invented)
+    const resUnknownPrice = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'acc-hotel-du-fleuve-malanville',
+        scheduledDate: '2026-11-22',
+        scheduledTime: '15:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(resUnknownPrice.status, 201);
+    const unknownBody: any = await resUnknownPrice.json();
+    assert.equal(unknownBody.breakdown.totalAmount, 0);
+    const snap = JSON.parse(unknownBody.pricingSnapshot);
+    assert.equal(snap.priceKnown, false);
+    assert.equal(snap.verifiedByServer, true);
+  });
+
+  it('10. Programme AMARO PARTNERS : bloque l’auto-parrainage (400) et crée un suivi affilié strictement « pending » (jamais payable sans règlement client + prestataire)', async () => {
+    store.reset();
+
+    // 10a. Self-referral attempt by traveler-uid-1 using their own partner code -> 400
+    const selfRefRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-11-24',
+        scheduledTime: '14:00',
+        participants: 2,
+        referralCode: 'SELF-CODE-TRAVELER1',
+      }),
+    });
+    assert.equal(selfRefRes.status, 400);
+    assert.equal(store.referrals.size, 0);
+
+    // 10b. Valid third-party influencer referral -> 201, creates pending referral with clientPaid=false & providerSettled=false
+    const validRefRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-11-24',
+        scheduledTime: '14:00',
+        participants: 2,
+        referralCode: 'BENIN-CREATOR-1',
+      }),
+    });
+    assert.equal(validRefRes.status, 201);
+    const validRefBody: any = await validRefRes.json();
+    assert.equal(validRefBody.referralAttached, true);
+    assert.equal(store.referrals.size, 1);
+
+    const storedRef = Array.from(store.referrals.values())[0];
+    assert.equal(storedRef.status, 'pending');
+    assert.equal(storedRef.clientPaid, false);
+    assert.equal(storedRef.providerSettled, false);
+    assert.equal(storedRef.commissionRatePercent, 6);
+    // 6% of providerPrice (100,000 XOF) = 6,000 XOF
+    assert.equal(storedRef.commissionAmount, 6_000);
+  });
 });
+

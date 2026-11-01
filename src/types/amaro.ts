@@ -10,7 +10,22 @@ export type ServiceCategory =
   | 'shopping'
   | 'wellness';
 
-export type DataOriginType = 'verified_partner' | 'pending_verification' | 'demo_test';
+export type DataOriginType =
+  | 'verified_partner'
+  | 'public_directory'
+  | 'pending_verification'
+  | 'demo_test';
+
+export type VerificationLevel = 'verified' | 'partially_verified' | 'to_confirm';
+
+export type StandingLevel =
+  | 'luxe'
+  | 'haut_de_gamme'
+  | 'intermediaire'
+  | 'economique'
+  | 'residence_meublee'
+  | 'maison_hotes'
+  | 'ecolodge';
 
 export type ReservationStatus =
   | 'pending_provider'
@@ -29,6 +44,33 @@ export type PaymentStatus =
   | 'succeeded'
   | 'failed'
   | 'refunded';
+
+export type PartnerCommissionStatus =
+  | 'pending'
+  | 'reservation_confirmed'
+  | 'awaiting_client_payment'
+  | 'awaiting_provider_settlement'
+  | 'validated'
+  | 'payable'
+  | 'paid'
+  | 'cancelled_or_rejected';
+
+export interface TouristSiteEditorial {
+  exactName: string;
+  imageKey: string;
+  cityAndDepartment: string;
+  historyAndOrigin: string;
+  culturalOrNaturalSignificance: string;
+  visitorDiscoveries: string;
+  possibleExperiences: string[];
+  practicalInfo: string;
+  accessConditions: string;
+  respectRules: string[];
+  hoursAndTariffs: string;
+  guidedTourAvailable: string;
+  visitorRecommendations: string[];
+  sources: Array<{ name: string; url?: string }>;
+}
 
 export interface CountryDefinition {
   code: string;
@@ -75,6 +117,27 @@ export interface CatalogueItem {
   status: 'draft' | 'published' | 'archived';
   imageKey: string;
   imageLicense: string;
+  // Extended real directory & verification metadata
+  subCategory?: string;
+  standing?: StandingLevel;
+  neighborhood?: string;
+  department?: string;
+  roomTypes?: string[];
+  amenities?: string[];
+  languagesSpoken?: string[];
+  coveredCities?: string[];
+  priceKnown?: boolean;
+  priceRangeNote?: string;
+  checkInOutRules?: string;
+  bookingModalities?: string;
+  contactPhone?: string;
+  websiteUrl?: string;
+  verificationStatus?: VerificationLevel;
+  verificationNote?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  siteEditorial?: TouristSiteEditorial;
 }
 
 export interface JourneyFolderDoc {
@@ -109,6 +172,21 @@ export interface JourneyItemDoc {
   currency: CurrencyCode;
   stage: 'envisaged' | 'requested' | 'accepted' | 'confirmed';
   notes: string;
+  providerId?: string;
+}
+
+export interface JournalEntryDoc {
+  id: string;
+  folderId: string;
+  ownerId: string;
+  linkedItemId?: string;
+  stepTitle: string;
+  cityId: string;
+  date: string;
+  completed: boolean;
+  personalNote: string;
+  photoUrl: string;
+  providerContactNote: string;
 }
 
 export interface ReservationDoc {
@@ -133,6 +211,8 @@ export interface ReservationDoc {
   paymentStatus: PaymentStatus;
   alternativeProposal: string;
   pricingSnapshot?: string;
+  referralCode?: string;
+  providerSettled?: boolean;
 }
 
 export interface ProviderProfileDoc {
@@ -144,6 +224,39 @@ export interface ProviderProfileDoc {
   cityId: string;
   description: string;
   verificationStatus: 'pending' | 'verified' | 'rejected';
+}
+
+export interface PartnerProfileDoc {
+  id: string;
+  ownerId: string;
+  displayName: string;
+  channelUrl: string;
+  referralCode: string;
+  status: 'pending' | 'active' | 'suspended';
+  customCommissionRate: number;
+  visitsCount: number;
+  signupsCount: number;
+  reservationsCount: number;
+  confirmedCount: number;
+  paidAmountXof: number;
+}
+
+export interface PartnerReferralDoc {
+  id: string;
+  partnerId: string;
+  partnerOwnerId: string;
+  referralCode: string;
+  reservationId: string;
+  clientId: string;
+  serviceTitle: string;
+  reservationAmount: number;
+  commissionRatePercent: number;
+  commissionAmount: number;
+  currency: CurrencyCode;
+  status: PartnerCommissionStatus;
+  clientPaid: boolean;
+  providerSettled: boolean;
+  attributionModel: 'first_touch' | 'last_touch';
 }
 
 export interface CulturalStoryDoc {
@@ -175,6 +288,9 @@ export interface SystemSettingDoc {
   taxPercent: number;
   currency: CurrencyCode;
   updatedBy: string;
+  partnerCommissionPercent?: number;
+  attributionWindowDays?: number;
+  attributionModel?: 'last_touch' | 'first_touch';
 }
 
 export type FeatureLifecycleStatus =

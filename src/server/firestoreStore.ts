@@ -1,7 +1,7 @@
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
 import type { CurrencyCode, ReservationStatus, PaymentStatus, ServiceCategory } from '../types/amaro';
 import {
-  OFFICIAL_DEMO_SERVICES,
+  OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   parseMinutes,
   type ScheduleSlot,
   type ServerServiceRecord,
@@ -18,6 +18,25 @@ export interface ServerFolderRecord {
   status: 'planning' | 'active' | 'completed' | 'archived';
   countryCode: string;
   currency: CurrencyCode;
+}
+
+export interface ServerPartnerRecord {
+  id: string;
+  ownerId: string;
+  displayName: string;
+  referralCode: string;
+  status: 'pending' | 'active' | 'suspended';
+  customCommissionRate: number;
+}
+
+export interface AtomicReferralPayload {
+  referralId: string;
+  partnerId: string;
+  partnerOwnerId: string;
+  referralCode: string;
+  commissionRatePercent: number;
+  commissionAmount: number;
+  attributionModel: 'first_touch' | 'last_touch';
 }
 
 export interface AtomicReservationPayload {
@@ -43,6 +62,7 @@ export interface AtomicReservationPayload {
   totalAmount: number;
   currency: CurrencyCode;
   pricingSnapshot: string;
+  referral?: AtomicReferralPayload | null;
 }
 
 export interface AmaroServerStore {
@@ -50,6 +70,7 @@ export interface AmaroServerStore {
   getService(serviceId: string, rawIdToken?: string): Promise<ServerServiceRecord | null>;
   getSystemSetting(countryCode: string, rawIdToken?: string): Promise<ServerSystemSetting>;
   getJourneyFolder(folderId: string, rawIdToken: string): Promise<ServerFolderRecord | null>;
+  getPartnerByCode?(referralCode: string, rawIdToken?: string): Promise<ServerPartnerRecord | null>;
   listClientScheduleAndActiveReservations(
     folderId: string,
     clientId: string,
@@ -177,6 +198,10 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     }
 
     if (raw) {
+      const priceKnown =
+        typeof raw.priceKnown === 'boolean'
+          ? raw.priceKnown
+          : Number(raw.priceAmount ?? 0) > 0;
       return {
         id: serviceId,
         providerId: String(raw.providerId || ''),
@@ -186,6 +211,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         countryCode: String(raw.countryCode || 'BJ'),
         cityId: String(raw.cityId || 'cotonou'),
         priceAmount: Number(raw.priceAmount ?? 0),
+        priceKnown,
         currency: (raw.currency || 'XOF') as CurrencyCode,
         durationMinutes: Math.max(15, Number(raw.durationMinutes || 90)),
         capacity: Math.max(1, Number(raw.capacity || 1)),
@@ -193,12 +219,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         dataOrigin: (raw.dataOrigin || 'pending_verification') as
           | 'verified_partner'
           | 'pending_verification'
+          | 'public_directory'
           | 'demo_test',
       };
     }
 
-    if (OFFICIAL_DEMO_SERVICES[serviceId]) {
-      return OFFICIAL_DEMO_SERVICES[serviceId];
+    if (OFFICIAL_PUBLIC_AND_DEMO_SERVICES[serviceId]) {
+      return OFFICIAL_PUBLIC_AND_DEMO_SERVICES[serviceId];
     }
 
     return null;
@@ -224,6 +251,9 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         serviceFeeFlat: 0,
         taxPercent: 0,
         currency: 'XOF',
+        partnerCommissionPercent: 5,
+        attributionWindowDays: 30,
+        attributionModel: 'last_touch',
       };
     }
 
@@ -233,6 +263,16 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       serviceFeeFlat: Math.max(0, Number(raw.serviceFeeFlat ?? 0)),
       taxPercent: Math.max(0, Math.min(100, Number(raw.taxPercent ?? 0))),
       currency: (raw.currency || 'XOF') as CurrencyCode,
+      partnerCommissionPercent: Math.max(
+        0,
+        Math.min(100, Number(raw.partnerCommissionPercent ?? 5))
+      ),
+      attributionWindowDays: Math.max(
+        1,
+        Math.min(365, Math.round(Number(raw.attributionWindowDays ?? 30)))
+      ),
+      attributionModel:
+        raw.attributionModel === 'first_touch' ? 'first_touch' : 'last_touch',
     };
   }
 
@@ -255,6 +295,85 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       countryCode: String(raw.countryCode || 'BJ'),
       currency: (raw.currency || 'XOF') as CurrencyCode,
     };
+  }
+
+  async getPartnerByCode(
+    referralCode: string,
+    rawIdToken?: string
+  ): Promise<ServerPartnerRecord | null> {
+    const cleanCode = referralCode.trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,40}$/.test(cleanCode)) return null;
+
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb()
+        .collection('partners')
+        .where('referralCode', '==', cleanCode)
+        .limit(1)
+        .get();
+      if (snap.empty) return null;
+      const doc = snap.docs[0];
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ownerId: String(data.ownerId || ''),
+        displayName: String(data.displayName || ''),
+        referralCode: cleanCode,
+        status: (data.status || 'pending') as ServerPartnerRecord['status'],
+        customCommissionRate: Number(data.customCommissionRate ?? 0),
+      };
+    }
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (rawIdToken) headers.Authorization = `Bearer ${rawIdToken}`;
+    const res = await fetch(`${this.baseUrl}:runQuery`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'partners' }],
+          where: {
+            compositeFilter: {
+              op: 'AND',
+              filters: [
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'referralCode' },
+                    op: 'EQUAL',
+                    value: { stringValue: cleanCode },
+                  },
+                },
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'status' },
+                    op: 'EQUAL',
+                    value: { stringValue: 'active' },
+                  },
+                },
+              ],
+            },
+          },
+          limit: 1,
+        },
+      }),
+    });
+
+    if (!res.ok) return null;
+    const rows: any[] = await res.json();
+    for (const row of rows) {
+      if (!row?.document?.fields) continue;
+      const p = decodeFirestoreFields(row.document.fields);
+      const docName = String(row.document.name || '');
+      const id = docName.split('/').pop() || '';
+      return {
+        id,
+        ownerId: String(p.ownerId || ''),
+        displayName: String(p.displayName || ''),
+        referralCode: cleanCode,
+        status: (p.status || 'pending') as ServerPartnerRecord['status'],
+        customCommissionRate: Number(p.customCommissionRate ?? 0),
+      };
+    }
+    return null;
   }
 
   async listClientScheduleAndActiveReservations(
@@ -295,6 +414,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         const it = d.data();
         scheduleSlots.push({
           serviceId: String(it.serviceId || ''),
+          providerId: String(it.providerId || ''),
           serviceTitle: String(it.serviceTitle || ''),
           category: it.category as ServiceCategory,
           cityId: String(it.cityId || ''),
@@ -360,6 +480,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           const it = decodeFirestoreFields(row.document.fields);
           scheduleSlots.push({
             serviceId: String(it.serviceId || ''),
+            providerId: String(it.providerId || ''),
             serviceTitle: String(it.serviceTitle || ''),
             category: it.category as ServiceCategory,
             cityId: String(it.cityId || ''),
@@ -410,7 +531,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
                 s.date === r.scheduledDate &&
                 s.startTime === r.scheduledTime
             );
-            if (!alreadyInItems) {
+            if (!alreadyInItems && String(r.folderId || '') === folderId) {
               const startM = parseMinutes(String(r.scheduledTime || '09:00'));
               const endM = startM + 90;
               const endTime = `${String(Math.floor((endM % 1440) / 60)).padStart(2, '0')}:${String(
@@ -418,6 +539,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               ).padStart(2, '0')}`;
               scheduleSlots.push({
                 serviceId: String(r.serviceId || ''),
+                providerId: String(r.providerId || ''),
                 serviceTitle: String(r.serviceTitle || ''),
                 category: r.category as ServiceCategory,
                 cityId: String(r.cityId || ''),
@@ -472,7 +594,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           }
 
           const nowTs = FieldValue.serverTimestamp();
-          tx.set(resRef, {
+          const resDoc: Record<string, any> = {
             clientId: payload.clientId,
             providerOwnerId: payload.providerOwnerId,
             providerId: payload.providerId,
@@ -493,9 +615,14 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             paymentStatus: 'unpaid' satisfies PaymentStatus,
             alternativeProposal: '',
             pricingSnapshot: payload.pricingSnapshot,
+            providerSettled: false,
             createdAt: nowTs,
             updatedAt: nowTs,
-          });
+          };
+          if (payload.referral?.referralCode) {
+            resDoc.referralCode = payload.referral.referralCode;
+          }
+          tx.set(resRef, resDoc);
 
           const itemRef = db
             .collection('journey_folders')
@@ -506,6 +633,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             folderId: payload.folderId,
             ownerId: payload.clientId,
             serviceId: payload.serviceId,
+            providerId: payload.providerId,
             serviceTitle: payload.serviceTitle,
             category: payload.category,
             cityId: payload.cityId,
@@ -520,6 +648,28 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             createdAt: nowTs,
             updatedAt: nowTs,
           });
+
+          if (payload.referral) {
+            const refDoc = db.collection('partner_referrals').doc(payload.referral.referralId);
+            tx.set(refDoc, {
+              partnerId: payload.referral.partnerId,
+              partnerOwnerId: payload.referral.partnerOwnerId,
+              referralCode: payload.referral.referralCode,
+              reservationId: payload.reservationId,
+              clientId: payload.clientId,
+              serviceTitle: payload.serviceTitle,
+              reservationAmount: payload.totalAmount,
+              commissionRatePercent: payload.referral.commissionRatePercent,
+              commissionAmount: payload.referral.commissionAmount,
+              currency: payload.currency,
+              status: 'pending',
+              clientPaid: false,
+              providerSettled: false,
+              attributionModel: payload.referral.attributionModel,
+              createdAt: nowTs,
+              updatedAt: nowTs,
+            });
+          }
 
           if (payload.notificationId && payload.providerOwnerId !== 'manual_concierge') {
             const notifRef = db.collection('notifications').doc(payload.notificationId);
@@ -546,32 +696,38 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       const resDocName = `${this.dbResourcePath}/reservations/${payload.reservationId}`;
       const itemDocName = `${this.dbResourcePath}/journey_folders/${payload.folderId}/items/${payload.itemId}`;
 
+      const resFields: Record<string, any> = {
+        clientId: encodeString(payload.clientId),
+        providerOwnerId: encodeString(payload.providerOwnerId),
+        providerId: encodeString(payload.providerId),
+        folderId: encodeString(payload.folderId),
+        serviceId: encodeString(payload.serviceId),
+        serviceTitle: encodeString(payload.serviceTitle),
+        category: encodeString(payload.category),
+        cityId: encodeString(payload.cityId),
+        scheduledDate: encodeString(payload.scheduledDate),
+        scheduledTime: encodeString(payload.scheduledTime),
+        participants: encodeInt(payload.participants),
+        providerPrice: encodeNumber(payload.providerPrice),
+        amaroFee: encodeNumber(payload.amaroFee),
+        taxAmount: encodeNumber(payload.taxAmount),
+        totalAmount: encodeNumber(payload.totalAmount),
+        currency: encodeString(payload.currency),
+        status: encodeString('pending_provider'),
+        paymentStatus: encodeString('unpaid'),
+        alternativeProposal: encodeString(''),
+        pricingSnapshot: encodeString(payload.pricingSnapshot),
+        providerSettled: { booleanValue: false },
+      };
+      if (payload.referral?.referralCode) {
+        resFields.referralCode = encodeString(payload.referral.referralCode);
+      }
+
       const writes: any[] = [
         {
           update: {
             name: resDocName,
-            fields: {
-              clientId: encodeString(payload.clientId),
-              providerOwnerId: encodeString(payload.providerOwnerId),
-              providerId: encodeString(payload.providerId),
-              folderId: encodeString(payload.folderId),
-              serviceId: encodeString(payload.serviceId),
-              serviceTitle: encodeString(payload.serviceTitle),
-              category: encodeString(payload.category),
-              cityId: encodeString(payload.cityId),
-              scheduledDate: encodeString(payload.scheduledDate),
-              scheduledTime: encodeString(payload.scheduledTime),
-              participants: encodeInt(payload.participants),
-              providerPrice: encodeNumber(payload.providerPrice),
-              amaroFee: encodeNumber(payload.amaroFee),
-              taxAmount: encodeNumber(payload.taxAmount),
-              totalAmount: encodeNumber(payload.totalAmount),
-              currency: encodeString(payload.currency),
-              status: encodeString('pending_provider'),
-              paymentStatus: encodeString('unpaid'),
-              alternativeProposal: encodeString(''),
-              pricingSnapshot: encodeString(payload.pricingSnapshot),
-            },
+            fields: resFields,
           },
           currentDocument: { exists: false },
           updateTransforms: [
@@ -586,6 +742,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               folderId: encodeString(payload.folderId),
               ownerId: encodeString(payload.clientId),
               serviceId: encodeString(payload.serviceId),
+              providerId: encodeString(payload.providerId),
               serviceTitle: encodeString(payload.serviceTitle),
               category: encodeString(payload.category),
               cityId: encodeString(payload.cityId),
@@ -606,6 +763,36 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           ],
         },
       ];
+
+      if (payload.referral) {
+        const refDocName = `${this.dbResourcePath}/partner_referrals/${payload.referral.referralId}`;
+        writes.push({
+          update: {
+            name: refDocName,
+            fields: {
+              partnerId: encodeString(payload.referral.partnerId),
+              partnerOwnerId: encodeString(payload.referral.partnerOwnerId),
+              referralCode: encodeString(payload.referral.referralCode),
+              reservationId: encodeString(payload.reservationId),
+              clientId: encodeString(payload.clientId),
+              serviceTitle: encodeString(payload.serviceTitle),
+              reservationAmount: encodeNumber(payload.totalAmount),
+              commissionRatePercent: encodeNumber(payload.referral.commissionRatePercent),
+              commissionAmount: encodeNumber(payload.referral.commissionAmount),
+              currency: encodeString(payload.currency),
+              status: encodeString('pending'),
+              clientPaid: { booleanValue: false },
+              providerSettled: { booleanValue: false },
+              attributionModel: encodeString(payload.referral.attributionModel),
+            },
+          },
+          currentDocument: { exists: false },
+          updateTransforms: [
+            { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+          ],
+        });
+      }
 
       if (payload.notificationId && payload.providerOwnerId !== 'manual_concierge') {
         const notifDocName = `${this.dbResourcePath}/notifications/${payload.notificationId}`;

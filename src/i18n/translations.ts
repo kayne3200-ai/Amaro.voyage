@@ -1,10 +1,11 @@
-import type { LocaleCode, ServiceCategory } from '../types/amaro';
+import type { DataOriginType, LocaleCode, ServiceCategory, VerificationLevel } from '../types/amaro';
 
 export const TRANSLATIONS: Record<
   LocaleCode,
   {
     nav: {
       explorer: string;
+      discoverBenin: string;
       journey: string;
       assistant: string;
       rescue: string;
@@ -29,127 +30,144 @@ export const TRANSLATIONS: Record<
       ecosystemDesc: string;
     };
     categories: Record<ServiceCategory, string>;
-    origins: {
-      verified_partner: string;
-      pending_verification: string;
-      demo_test: string;
-    };
+    origins: Record<DataOriginType, string>;
+    verification: Record<VerificationLevel, string>;
     common: {
       freeBadge: string;
       paidService: string;
       addToFolder: string;
       requestBooking: string;
+      viewSheet: string;
       loading: string;
       noData: string;
+      priceOnRequest: string;
     };
   }
 > = {
   fr: {
     nav: {
-      explorer: 'Explorer',
+      explorer: 'Accueil & Catalogue',
+      discoverBenin: 'Explorer le Bénin',
       journey: 'Mon Voyage',
       assistant: 'Assistant',
       rescue: 'Urgences',
-      workspace: 'Espaces & Sauvegarde',
+      workspace: 'Mon Compte',
       signIn: 'Connexion Google',
       signOut: 'Déconnexion',
     },
     hero: {
-      kicker: 'Compagnon Universel de Voyage · Premier pays opérationnel : Bénin',
-      title: 'Préparez, coordonnez et vivez votre voyage en toute clarté.',
+      kicker: 'Compagnon Universel de Voyage · Écosystème Touristique National du Bénin',
+      title: 'Explorez le Bénin, organisez votre itinéraire et vivez votre carnet de voyage.',
       subtitle:
-        'Amaro Journey Intelligence réunit gratuitement votre dossier de voyage, la détection des conflits d’agenda, le suivi budgétaire multi-devises (XOF, EUR, USD) et l’accès transparent aux prestataires vérifiés à Cotonou, Abomey-Calavi et Parakou.',
-      primaryCta: 'Créer mon dossier de voyage gratuit',
-      secondaryCta: 'Découvrir le Bénin',
+        'Découvrez gratuitement les 12 départements du Bénin, plus de 100 hébergements réels recensés du littoral à la Pendjari, les sites patrimoniaux UNESCO, les transports nationaux, et coordonnez tout votre séjour dans un espace personnel permanent.',
+      primaryCta: 'Créer mon voyage',
+      secondaryCta: 'Explorer le Bénin (Gratuit)',
       freeNote:
-        'Fonctions d’assistance, d’agenda intelligent, de budget et d’urgence 100 % gratuites.',
+        'Encyclopédie du Bénin, catalogue national, agenda Journey Brain, carnet électronique et urgences 100 % gratuits.',
     },
     pillars: {
-      companionTitle: '01. Compagnon universel gratuit',
+      companionTitle: '01. Explorer le Bénin librement',
       companionDesc:
-        'Comprendre la destination, les règles locales, la culture béninoise et les repères d’urgence officiels avant et pendant le séjour.',
-      brainTitle: '02. Amaro Journey Brain',
+        'Histoire, géographie, 12 départements, patrimoine royal et Vodun, parcs nationaux, gastronomie, langues et conseils culturels accessibles sans création de compte.',
+      brainTitle: '02. Dossier & Carnet Électronique',
       brainDesc:
-        'Coordination horaire automatique, temps de trajet inter-villes, plafond de visites quotidiennes et propositions d’alternatives sous contrôle client.',
-      ecosystemTitle: '03. Écosystème touristique vérifié',
+        'Retrouvez votre voyage en cours, cochez vos étapes réalisées, ajoutez vos souvenirs personnels, évitez les conflits d’horaires ou de transporteurs et exportez votre carnet en PDF.',
+      ecosystemTitle: '03. Catalogue Réel & Transparence',
       ecosystemDesc:
-        'Distinction stricte entre prestataires vérifiés, partenaires en attente de validation et fiches de démonstration, avec tarification contrôlée côté serveur.',
+        'Distinction stricte entre partenaires inscrits vérifiés, établissements réels du répertoire public (sur demande de disponibilité) et données de test, avec devis contrôlé côté serveur.',
     },
     categories: {
       accommodation: 'Hébergements',
-      transport: 'Transport',
-      restaurant: 'Restaurants',
-      site: 'Sites touristiques',
+      transport: 'Transports & Mobilité',
+      restaurant: 'Gastronomie & Tables',
+      site: 'Sites & Patrimoine',
       translation: 'Traduction & Langues',
-      shopping: 'Shopping & Artisanat',
-      wellness: 'Loisirs & Bien-être',
+      shopping: 'Artisanat & Marchés',
+      wellness: 'Bien-être & Loisirs',
     },
     origins: {
-      verified_partner: 'Prestataire réel vérifié',
+      verified_partner: 'Partenaire inscrit vérifié',
+      public_directory: 'Établissement réel recensé (sur confirmation)',
       pending_verification: 'Prestataire en attente de vérification',
       demo_test: 'Donnée de démonstration (test)',
     },
+    verification: {
+      verified: 'Vérifié',
+      partially_verified: 'Partiellement vérifié',
+      to_confirm: 'À confirmer',
+    },
     common: {
       freeBadge: 'Gratuit',
-      paidService: 'Prestation sur demande',
-      addToFolder: 'Ajouter au dossier',
-      requestBooking: 'Demander réservation',
+      paidService: 'Disponibilité sur demande',
+      addToFolder: 'Ajouter au voyage',
+      requestBooking: 'Demander disponibilité',
+      viewSheet: 'Fiche détaillée',
       loading: 'Chargement des données réelles...',
       noData: 'Aucune donnée enregistrée pour le moment',
+      priceOnRequest: 'Tarif sur demande / à confirmer',
     },
   },
   en: {
     nav: {
-      explorer: 'Explorer',
+      explorer: 'Home & Catalogue',
+      discoverBenin: 'Explore Benin',
       journey: 'My Journey',
       assistant: 'Assistant',
       rescue: 'Rescue',
-      workspace: 'Spaces & Backup',
+      workspace: 'My Account',
       signIn: 'Google Sign-In',
       signOut: 'Sign Out',
     },
     hero: {
-      kicker: 'Universal Travel Companion · First operational country: Benin',
-      title: 'Plan, coordinate, and experience your journey with complete clarity.',
+      kicker: 'Universal Travel Companion · National Tourism Ecosystem of Benin',
+      title: 'Explore Benin, coordinate your itinerary, and keep your digital travel logbook.',
       subtitle:
-        'Amaro Journey Intelligence brings together your free smart travel folder, schedule conflict detection, multi-currency budget tracking (XOF, EUR, USD), and transparent access to verified providers across Cotonou, Abomey-Calavi, and Parakou.',
-      primaryCta: 'Create my free journey folder',
-      secondaryCta: 'Explore Benin',
+        'Freely discover Benin’s 12 departments, 100+ real accommodations from the Atlantic coast to Pendjari National Park, UNESCO heritage sites, national transport operators, and manage your trip in one permanent personal space.',
+      primaryCta: 'Create my journey',
+      secondaryCta: 'Explore Benin (Free)',
       freeNote:
-        'Travel assistant, smart schedule brain, budget guardian, and emergency guide are 100% free.',
+        'Benin cultural encyclopedia, national directory, Journey Brain planner, digital logbook, and emergency guide are 100% free.',
     },
     pillars: {
-      companionTitle: '01. Free Universal Companion',
+      companionTitle: '01. Freely Explore Benin',
       companionDesc:
-        'Understand your destination, local customs, Beninese cultural heritage, and verified emergency contacts before and during your stay.',
-      brainTitle: '02. Amaro Journey Brain',
+        'History, geography, 12 departments, royal & Vodun heritage, national parks, cuisine, languages, and cultural etiquette accessible without sign-in.',
+      brainTitle: '02. Permanent Folder & Digital Logbook',
       brainDesc:
-        'Automatic schedule coordination, inter-city travel buffers, daily sightseeing caps, and client-controlled alternatives.',
-      ecosystemTitle: '03. Verified Tourism Ecosystem',
+        'Resume your active journey automatically, check off completed milestones, write personal memories, prevent schedule/transport conflicts, and export a souvenir PDF.',
+      ecosystemTitle: '03. Real Directory & Strict Honesty',
       ecosystemDesc:
-        'Strict separation between verified partners, pending providers, and clearly labeled demo test entries, with server-verified pricing.',
+        'Clear distinction between verified partners, real publicly catalogued establishments (subject to confirmation), and demo test entries, with server-verified quotes.',
     },
     categories: {
       accommodation: 'Accommodations',
-      transport: 'Transport',
-      restaurant: 'Restaurants',
-      site: 'Tourist Sites',
+      transport: 'Transport & Mobility',
+      restaurant: 'Dining & Gastronomy',
+      site: 'Sites & Heritage',
       translation: 'Translation & Languages',
-      shopping: 'Shopping & Crafts',
-      wellness: 'Leisure & Wellness',
+      shopping: 'Crafts & Markets',
+      wellness: 'Wellness & Leisure',
     },
     origins: {
-      verified_partner: 'Verified Real Partner',
+      verified_partner: 'Verified Registered Partner',
+      public_directory: 'Real Catalogued Establishment (on confirmation)',
       pending_verification: 'Pending Admin Verification',
       demo_test: 'Demonstration / Test Entry',
     },
+    verification: {
+      verified: 'Verified',
+      partially_verified: 'Partially verified',
+      to_confirm: 'To confirm',
+    },
     common: {
       freeBadge: 'Free',
-      paidService: 'On-request service',
-      addToFolder: 'Add to folder',
-      requestBooking: 'Request booking',
+      paidService: 'Availability on request',
+      addToFolder: 'Add to trip',
+      requestBooking: 'Request availability',
+      viewSheet: 'Detailed sheet',
       loading: 'Loading live data...',
       noData: 'No records available yet',
+      priceOnRequest: 'Rate on request / to confirm',
     },
   },
 };

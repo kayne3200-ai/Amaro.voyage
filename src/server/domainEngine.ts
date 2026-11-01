@@ -1,5 +1,10 @@
 import crypto from 'crypto';
 import type { CurrencyCode, ServiceCategory } from '../types/amaro';
+import { BENIN_ACCOMMODATIONS_DIRECTORY } from '../data/beninAccommodations';
+import {
+  BENIN_SERVICES_DIRECTORY,
+  BENIN_TOURIST_SITES_DIRECTORY,
+} from '../data/beninSitesAndServices';
 
 export const BCEAO_EUR_TO_XOF = 655.957;
 
@@ -12,11 +17,12 @@ export interface ServerServiceRecord {
   countryCode: string;
   cityId: string;
   priceAmount: number;
+  priceKnown?: boolean;
   currency: CurrencyCode;
   durationMinutes: number;
   capacity: number;
   status: 'draft' | 'published' | 'archived';
-  dataOrigin: 'verified_partner' | 'pending_verification' | 'demo_test';
+  dataOrigin: 'verified_partner' | 'pending_verification' | 'public_directory' | 'demo_test';
 }
 
 export interface ServerSystemSetting {
@@ -25,10 +31,14 @@ export interface ServerSystemSetting {
   serviceFeeFlat: number;
   taxPercent: number;
   currency: CurrencyCode;
+  partnerCommissionPercent?: number;
+  attributionWindowDays?: number;
+  attributionModel?: 'first_touch' | 'last_touch';
 }
 
 export interface ScheduleSlot {
   serviceId?: string;
+  providerId?: string;
   serviceTitle: string;
   category: ServiceCategory;
   cityId: string;
@@ -48,6 +58,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'cotonou',
     priceAmount: 45000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 720,
     capacity: 2,
@@ -63,6 +74,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'abomey-calavi',
     priceAmount: 18000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 180,
     capacity: 6,
@@ -78,6 +90,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'cotonou',
     priceAmount: 15000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 120,
     capacity: 4,
@@ -93,6 +106,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'parakou',
     priceAmount: 12000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 90,
     capacity: 8,
@@ -108,6 +122,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'cotonou',
     priceAmount: 35000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 240,
     capacity: 4,
@@ -123,6 +138,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'abomey-calavi',
     priceAmount: 20000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 180,
     capacity: 5,
@@ -138,6 +154,7 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     countryCode: 'BJ',
     cityId: 'cotonou',
     priceAmount: 22000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 90,
     capacity: 2,
@@ -145,6 +162,38 @@ export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord
     dataOrigin: 'demo_test',
   },
 });
+
+const SERVER_BENIN_PUBLIC_DIRECTORY = [
+  ...BENIN_ACCOMMODATIONS_DIRECTORY,
+  ...BENIN_TOURIST_SITES_DIRECTORY,
+  ...BENIN_SERVICES_DIRECTORY,
+];
+
+const builtDirectoryServices: Record<string, ServerServiceRecord> = {
+  ...OFFICIAL_DEMO_SERVICES,
+};
+for (const item of SERVER_BENIN_PUBLIC_DIRECTORY) {
+  if (!item.id) continue;
+  builtDirectoryServices[item.id] = {
+    id: item.id,
+    providerId: item.providerId,
+    ownerId: item.ownerId || 'manual_concierge',
+    title: item.title,
+    category: item.category,
+    countryCode: item.countryCode || 'BJ',
+    cityId: item.cityId,
+    priceAmount: item.priceKnown === false ? 0 : Number(item.priceAmount ?? 0),
+    priceKnown: item.priceKnown !== false,
+    currency: item.currency || 'XOF',
+    durationMinutes: Math.max(15, Number(item.durationMinutes || 90)),
+    capacity: Math.max(1, Number(item.capacity || 4)),
+    status: item.status || 'published',
+    dataOrigin: item.dataOrigin || 'public_directory',
+  };
+}
+
+export const OFFICIAL_PUBLIC_AND_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord>> =
+  Object.freeze(builtDirectoryServices);
 
 export function isValidIsoDate(dateStr: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
@@ -183,6 +232,7 @@ export function convertCurrencyAmount(
 
 export function computeAuthoritativeQuote(params: {
   unitPrice: number;
+  priceKnown?: boolean;
   participants: number;
   currency: CurrencyCode;
   displayCurrency: CurrencyCode;
@@ -202,19 +252,25 @@ export function computeAuthoritativeQuote(params: {
     rateSource,
     rateStatus,
   } = params;
+  const priceKnown = params.priceKnown !== false && unitPrice > 0;
+  const effectiveUnitPrice = params.priceKnown === false ? 0 : unitPrice;
   const quotedAt = params.quotedAt || new Date().toISOString();
 
-  const rawSubtotal = unitPrice * participants;
+  const rawSubtotal = effectiveUnitPrice * participants;
   const providerPrice = roundCurrencyAmount(rawSubtotal, currency);
   const rawCommission =
-    (providerPrice * setting.commissionPercent) / 100 + setting.serviceFeeFlat;
+    priceKnown || effectiveUnitPrice > 0
+      ? (providerPrice * setting.commissionPercent) / 100 + setting.serviceFeeFlat
+      : (providerPrice * setting.commissionPercent) / 100 + setting.serviceFeeFlat;
   const amaroFee = roundCurrencyAmount(rawCommission, currency);
   const rawTax = ((providerPrice + amaroFee) * setting.taxPercent) / 100;
   const taxAmount = roundCurrencyAmount(rawTax, currency);
   const totalAmount = roundCurrencyAmount(providerPrice + amaroFee + taxAmount, currency);
 
   const pricingSnapshotObj = {
-    unitPrice: roundCurrencyAmount(unitPrice, currency),
+    verifiedByServer: true,
+    priceKnown,
+    unitPrice: roundCurrencyAmount(effectiveUnitPrice, currency),
     participants,
     commissionPercent: setting.commissionPercent,
     serviceFeeFlat: setting.serviceFeeFlat,
@@ -226,6 +282,7 @@ export function computeAuthoritativeQuote(params: {
 
   return {
     verifiedByServer: true,
+    priceKnown,
     calculatedAt: quotedAt,
     sourceCurrency: currency,
     displayCurrency,
@@ -288,10 +345,24 @@ export function detectClientPriceTampering(
   return { tampered: false };
 }
 
+function resolveTransportProviderId(slot: {
+  providerId?: string;
+  serviceId?: string;
+}): string {
+  const explicit = String(slot.providerId || '').trim();
+  if (explicit) return explicit;
+  const svcId = String(slot.serviceId || '').trim();
+  if (svcId && OFFICIAL_PUBLIC_AND_DEMO_SERVICES[svcId]) {
+    return OFFICIAL_PUBLIC_AND_DEMO_SERVICES[svcId].providerId;
+  }
+  return '';
+}
+
 export function evaluateJourneyBrain(
   existingItems: ScheduleSlot[],
   candidate: {
     serviceId?: string;
+    providerId?: string;
     serviceTitle?: string;
     category: ServiceCategory;
     cityId: string;
@@ -316,6 +387,24 @@ export function evaluateJourneyBrain(
   const candidateStart = parseMinutes(candidate.startTime);
   const candidateDuration = Math.max(15, Number(candidate.durationMinutes || 90));
   const candidateEnd = candidateStart + candidateDuration;
+
+  // Transport Exclusivity Rule across the entire itinerary:
+  // Multiple vehicles from the SAME transport provider are allowed; mixing distinct transport providers is blocked.
+  if (candidate.category === 'transport') {
+    const candidateProviderId = resolveTransportProviderId(candidate);
+    if (candidateProviderId) {
+      const conflictingTransport = existingItems.find((it) => {
+        if (it.category !== 'transport') return false;
+        const existingProviderId = resolveTransportProviderId(it);
+        return Boolean(existingProviderId && existingProviderId !== candidateProviderId);
+      });
+      if (conflictingTransport) {
+        conflicts.push(
+          `Règle Transport Amaro : Un même itinéraire peut mobiliser plusieurs véhicules d’un même prestataire, mais ne peut pas mélanger plusieurs prestataires de transport distincts (« ${conflictingTransport.serviceTitle} » est déjà retenu).`
+        );
+      }
+    }
+  }
 
   const sameDayItems = existingItems.filter((it) => it.date === candidate.date);
 

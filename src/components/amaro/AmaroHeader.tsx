@@ -11,6 +11,8 @@ interface AmaroHeaderProps {
   isSignedIn: boolean;
   isSigningIn: boolean;
   unreadNotifications: number;
+  smartJourneyCtaLabel: string;
+  onSmartJourneyCta: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }
@@ -22,6 +24,8 @@ export function AmaroHeader({
   isSignedIn,
   isSigningIn,
   unreadNotifications,
+  smartJourneyCtaLabel,
+  onSmartJourneyCta,
   onSignIn,
   onSignOut,
 }: AmaroHeaderProps) {
@@ -37,19 +41,19 @@ export function AmaroHeader({
 
   return (
     <>
-      {/* Strict 3-Zone Top Bar Contract (<= 52px on mobile to honor 15% sticky cap) */}
-      <header className="sticky top-0 z-30 h-12 md:h-14 flex items-center justify-between gap-8 px-4 md:px-8 bg-[#0B192C] text-white border-b border-slate-800 shrink-0">
+      {/* Strict 3-Zone Top Bar Contract (<= 56px, hidden on PDF souvenir print) */}
+      <header className="no-print sticky top-0 z-30 h-12 md:h-14 flex items-center justify-between gap-4 px-4 md:px-8 bg-[#0B192C] text-white border-b border-slate-800 shrink-0">
         <button
           type="button"
           onClick={() => onSelectTab('explorer')}
-          className="font-display text-base md:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+          className="font-display text-base md:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-400"
         >
           AMARO.VOYAGE
         </button>
 
         <nav
           aria-label="Navigation principale"
-          className="hidden md:flex items-center gap-6 text-sm font-medium"
+          className="hidden lg:flex items-center gap-6 text-sm font-medium"
         >
           {navItems.map((item) => {
             const active = activeTab === item.id;
@@ -74,12 +78,20 @@ export function AmaroHeader({
           })}
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onSmartJourneyCta}
+            className="hidden sm:inline-flex items-center min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-lg transition-colors whitespace-nowrap"
+          >
+            {smartJourneyCtaLabel}
+          </button>
+
           {isSignedIn ? (
             <button
               type="button"
               onClick={onSignOut}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-slate-900 bg-white hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               {t.nav.signOut}
             </button>
@@ -88,7 +100,7 @@ export function AmaroHeader({
               type="button"
               onClick={onSignIn}
               disabled={isSigningIn}
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               {isSigningIn ? '...' : t.nav.signIn}
             </button>
@@ -99,7 +111,7 @@ export function AmaroHeader({
       {/* Android & Mobile Ergonomic Thumb-Zone Bottom Tab Bar (56px height, >=44px hitboxes) */}
       <nav
         aria-label="Navigation mobile"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center"
+        className="no-print lg:hidden fixed bottom-0 left-0 right-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center"
       >
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -117,7 +129,7 @@ export function AmaroHeader({
             >
               <Icon className="w-5 h-5" />
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-full">
-                {item.label}
+                {item.id === 'journey' ? smartJourneyCtaLabel.split(' ')[0] + ' voyage' : item.label}
               </span>
             </button>
           );

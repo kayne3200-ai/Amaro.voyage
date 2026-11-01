@@ -117,8 +117,9 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
-          'address', 'description', 'priceAmount', 'currency', 'durationMinutes',
-          'capacity', 'dataOrigin', 'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
+          'address', 'description', 'priceAmount', 'priceKnown', 'currency', 'durationMinutes',
+          'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'neighborhood', 'standing',
+          'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.providerId)
         && isValidId(data.ownerId)
@@ -129,10 +130,15 @@ service cloud.firestore {
         && data.address is string && data.address.size() <= 240
         && data.description is string && data.description.size() <= 2000
         && data.priceAmount is number && data.priceAmount >= 0 && data.priceAmount <= 1000000000
+        && (!('priceKnown' in data) || data.priceKnown is bool)
         && isValidCurrency(data.currency)
         && data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 43200
         && data.capacity is int && data.capacity >= 1 && data.capacity <= 1000
-        && data.dataOrigin is string && data.dataOrigin in ['verified_partner', 'pending_verification', 'demo_test']
+        && data.dataOrigin is string && data.dataOrigin in ['verified_partner', 'pending_verification', 'public_directory', 'demo_test']
+        && (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus in ['verified', 'partially_verified', 'to_confirm']))
+        && (!('sourceName' in data) || (data.sourceName is string && data.sourceName.size() <= 240))
+        && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 140))
+        && (!('standing' in data) || (data.standing is string && data.standing in ['international_5', 'upper_4', 'comfort_3', 'boutique_charm', 'eco_nature', 'residence_apart', 'budget_2']))
         && data.status is string && data.status in ['draft', 'published', 'archived']
         && data.imageKey is string && data.imageKey.size() <= 100
         && data.imageLicense is string && data.imageLicense.size() <= 200
@@ -175,7 +181,7 @@ service cloud.firestore {
           'currency', 'stage', 'notes', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'folderId', 'ownerId', 'serviceId', 'serviceTitle', 'category', 'cityId',
+          'folderId', 'ownerId', 'serviceId', 'providerId', 'serviceTitle', 'category', 'cityId',
           'date', 'startTime', 'endTime', 'durationMinutes', 'estimatedCost',
           'currency', 'stage', 'notes', 'createdAt', 'updatedAt'
         ])
@@ -183,6 +189,7 @@ service cloud.firestore {
         && isValidId(data.ownerId)
         && data.ownerId == request.auth.uid
         && isValidId(data.serviceId)
+        && (!('providerId' in data) || data.providerId == '' || isValidId(data.providerId))
         && data.serviceTitle is string && data.serviceTitle.size() <= 160
         && isValidCategory(data.category)
         && isValidId(data.cityId)
@@ -194,6 +201,30 @@ service cloud.firestore {
         && isValidCurrency(data.currency)
         && data.stage is string && data.stage in ['envisaged', 'requested', 'accepted', 'confirmed']
         && data.notes is string && data.notes.size() <= 600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJournalEntry(data) {
+      return data.keys().hasAll([
+          'folderId', 'ownerId', 'stepTitle', 'cityId', 'date', 'completed',
+          'personalNote', 'photoUrl', 'providerContactNote', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'folderId', 'ownerId', 'linkedItemId', 'stepTitle', 'cityId', 'date', 'completed',
+          'personalNote', 'photoUrl', 'providerContactNote', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.folderId)
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && (!('linkedItemId' in data) || data.linkedItemId == '' || isValidId(data.linkedItemId))
+        && data.stepTitle is string && data.stepTitle.size() >= 1 && data.stepTitle.size() <= 180
+        && isValidId(data.cityId)
+        && data.date is string && data.date.size() <= 20
+        && data.completed is bool
+        && data.personalNote is string && data.personalNote.size() <= 2500
+        && data.photoUrl is string && data.photoUrl.size() <= 600
+        && data.providerContactNote is string && data.providerContactNote.size() <= 400
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -262,13 +293,22 @@ service cloud.firestore {
         );
     }
 
+    function matchesOfficialPublicDirectoryService(data) {
+      return data.providerOwnerId == 'manual_concierge'
+        && data.providerId.matches('^dir-[a-zA-Z0-9_\\-]+$')
+        && data.serviceId.matches('^(acc|site|trans|trad|well|shop|rest)-[a-zA-Z0-9_\\-]+$')
+        && data.currency == 'XOF'
+        && data.pricingSnapshot.matches('.*"verifiedByServer":true.*')
+        && matchesCountrySettingFees(data, 'BJ');
+    }
+
     function hasAuthoritativeReservationPricing(data) {
       return exists(/databases/$(database)/documents/services/$(data.serviceId))
         ? matchesPublishedCatalogService(
             data,
             get(/databases/$(database)/documents/services/$(data.serviceId)).data
           )
-        : matchesOfficialDemoService(data);
+        : (matchesOfficialDemoService(data) || matchesOfficialPublicDirectoryService(data));
     }
 
     function isValidReservation(data) {
@@ -284,7 +324,7 @@ service cloud.firestore {
           'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
           'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
           'currency', 'status', 'paymentStatus', 'alternativeProposal', 'pricingSnapshot',
-          'createdAt', 'updatedAt'
+          'referralCode', 'providerSettled', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
         && isValidId(data.providerOwnerId)
@@ -311,6 +351,68 @@ service cloud.firestore {
         ]
         && data.alternativeProposal is string && data.alternativeProposal.size() <= 800
         && data.pricingSnapshot is string && data.pricingSnapshot.size() >= 2 && data.pricingSnapshot.size() <= 600
+        && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() <= 40))
+        && (!('providerSettled' in data) || data.providerSettled is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPartnerProfile(data) {
+      return data.keys().hasAll([
+          'ownerId', 'displayName', 'channelUrl', 'referralCode', 'status',
+          'customCommissionRate', 'visitsCount', 'signupsCount', 'reservationsCount',
+          'confirmedCount', 'paidAmountXof', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'displayName', 'channelUrl', 'referralCode', 'status',
+          'customCommissionRate', 'visitsCount', 'signupsCount', 'reservationsCount',
+          'confirmedCount', 'paidAmountXof', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.channelUrl is string && data.channelUrl.size() <= 300
+        && data.referralCode is string && data.referralCode.size() >= 3 && data.referralCode.size() <= 40 && data.referralCode.matches('^[A-Z0-9_\\-]+$')
+        && data.status is string && data.status in ['pending', 'active', 'suspended']
+        && data.customCommissionRate is number && data.customCommissionRate >= 0 && data.customCommissionRate <= 100
+        && data.visitsCount is int && data.visitsCount >= 0
+        && data.signupsCount is int && data.signupsCount >= 0
+        && data.reservationsCount is int && data.reservationsCount >= 0
+        && data.confirmedCount is int && data.confirmedCount >= 0
+        && data.paidAmountXof is number && data.paidAmountXof >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPartnerReferral(data) {
+      return data.keys().hasAll([
+          'partnerId', 'partnerOwnerId', 'referralCode', 'reservationId', 'clientId',
+          'serviceTitle', 'reservationAmount', 'commissionRatePercent', 'commissionAmount',
+          'currency', 'status', 'clientPaid', 'providerSettled', 'attributionModel',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'partnerId', 'partnerOwnerId', 'referralCode', 'reservationId', 'clientId',
+          'serviceTitle', 'reservationAmount', 'commissionRatePercent', 'commissionAmount',
+          'currency', 'status', 'clientPaid', 'providerSettled', 'attributionModel',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.partnerId)
+        && isValidId(data.partnerOwnerId)
+        && data.referralCode is string && data.referralCode.size() >= 3 && data.referralCode.size() <= 40
+        && isValidId(data.reservationId)
+        && isValidId(data.clientId)
+        && data.serviceTitle is string && data.serviceTitle.size() >= 2 && data.serviceTitle.size() <= 160
+        && data.reservationAmount is number && data.reservationAmount >= 0 && data.reservationAmount <= 1000000000
+        && data.commissionRatePercent is number && data.commissionRatePercent >= 0 && data.commissionRatePercent <= 100
+        && data.commissionAmount is number && data.commissionAmount >= 0 && data.commissionAmount <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.status is string && data.status in [
+          'pending', 'reservation_confirmed', 'awaiting_client_payment',
+          'awaiting_provider_settlement', 'validated', 'payable', 'paid', 'cancelled_or_rejected'
+        ]
+        && data.clientPaid is bool
+        && data.providerSettled is bool
+        && data.attributionModel is string && data.attributionModel in ['first_touch', 'last_touch']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -344,12 +446,19 @@ service cloud.firestore {
 
     function isValidSystemSetting(data) {
       return data.keys().hasAll(['countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'updatedBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency',
+          'partnerCommissionPercent', 'attributionWindowDays', 'attributionModel',
+          'updatedBy', 'createdAt', 'updatedAt'
+        ])
         && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
         && data.commissionPercent is number && data.commissionPercent >= 0 && data.commissionPercent <= 100
         && data.serviceFeeFlat is number && data.serviceFeeFlat >= 0 && data.serviceFeeFlat <= 10000000
         && data.taxPercent is number && data.taxPercent >= 0 && data.taxPercent <= 100
         && isValidCurrency(data.currency)
+        && (!('partnerCommissionPercent' in data) || (data.partnerCommissionPercent is number && data.partnerCommissionPercent >= 0 && data.partnerCommissionPercent <= 100))
+        && (!('attributionWindowDays' in data) || (data.attributionWindowDays is int && data.attributionWindowDays >= 1 && data.attributionWindowDays <= 365))
+        && (!('attributionModel' in data) || (data.attributionModel is string && data.attributionModel in ['first_touch', 'last_touch']))
         && isValidId(data.updatedBy)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -513,13 +622,13 @@ service cloud.firestore {
       allow create: if isVerifiedUser()
         && isValidId(serviceId)
         && isValidCatalogueService(incoming())
-        && incoming().ownerId == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (
-          isAdmin()
+          (isAdmin() && (incoming().ownerId == request.auth.uid || incoming().ownerId == 'manual_concierge'))
           || (
-            incoming().dataOrigin == 'pending_verification'
+            incoming().ownerId == request.auth.uid
+            && incoming().dataOrigin == 'pending_verification'
             && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.ownerId == request.auth.uid
           )
         );
@@ -535,8 +644,9 @@ service cloud.firestore {
           (existing().ownerId == request.auth.uid
             && incoming().dataOrigin == existing().dataOrigin
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'title', 'category', 'address', 'description', 'priceAmount',
-              'currency', 'durationMinutes', 'capacity', 'status', 'imageKey', 'imageLicense', 'updatedAt'
+              'title', 'category', 'address', 'description', 'priceAmount', 'priceKnown',
+              'currency', 'durationMinutes', 'capacity', 'neighborhood', 'standing',
+              'status', 'imageKey', 'imageLicense', 'updatedAt'
             ]))
           || isAdmin()
         );
@@ -544,7 +654,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(serviceId);
     }
 
-    // --- 5. Amaro Journey Folders & Master-Gated Items ---
+    // --- 5. Amaro Journey Folders, Master-Gated Items & Electronic Travel Logbook ---
     match /journey_folders/{folderId} {
       allow get: if isSignedIn() && isValidId(folderId) && (existing().ownerId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
@@ -606,7 +716,7 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
           && (
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'serviceTitle', 'category', 'cityId', 'date', 'startTime', 'endTime',
+              'serviceTitle', 'providerId', 'category', 'cityId', 'date', 'startTime', 'endTime',
               'durationMinutes', 'estimatedCost', 'stage', 'notes', 'updatedAt'
             ])
             || isAdmin()
@@ -615,6 +725,52 @@ service cloud.firestore {
         allow delete: if isVerifiedUser()
           && isValidId(folderId)
           && isValidId(itemId)
+          && (
+            get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+            || isAdmin()
+          );
+      }
+
+      match /journal/{entryId} {
+        allow get: if isSignedIn()
+          && isValidId(folderId)
+          && isValidId(entryId)
+          && (
+            get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+            || isAdmin()
+          );
+        allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
+
+        allow create: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(entryId)
+          && isValidJournalEntry(incoming())
+          && incoming().folderId == folderId
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+
+        allow update: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(entryId)
+          && isValidJournalEntry(incoming())
+          && incoming().folderId == existing().folderId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'stepTitle', 'cityId', 'date', 'completed', 'personalNote',
+              'photoUrl', 'providerContactNote', 'updatedAt'
+            ])
+            || isAdmin()
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(entryId)
           && (
             get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
             || isAdmin()
@@ -682,7 +838,83 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(reservationId);
     }
 
-    // --- 7. Centralized Notifications ---
+    // --- 7. AMARO PARTNERS (Influencers & Affiliates) ---
+    match /partners/{partnerId} {
+      allow get: if isValidId(partnerId) && (existing().status == 'active' || (isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin())));
+      allow list: if existing().status == 'active' || (isSignedIn() && existing().ownerId == request.auth.uid) || isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(partnerId)
+        && isValidPartnerProfile(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().customCommissionRate == 0
+        && incoming().visitsCount == 0
+        && incoming().signupsCount == 0
+        && incoming().reservationsCount == 0
+        && incoming().confirmedCount == 0
+        && incoming().paidAmountXof == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(partnerId)
+        && isValidPartnerProfile(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().referralCode == existing().referralCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().ownerId == request.auth.uid
+            && incoming().status == existing().status
+            && incoming().customCommissionRate == existing().customCommissionRate
+            && incoming().visitsCount == existing().visitsCount
+            && incoming().signupsCount == existing().signupsCount
+            && incoming().reservationsCount == existing().reservationsCount
+            && incoming().confirmedCount == existing().confirmedCount
+            && incoming().paidAmountXof == existing().paidAmountXof
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'channelUrl', 'updatedAt']))
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(partnerId);
+    }
+
+    match /partner_referrals/{referralId} {
+      allow get: if isSignedIn()
+        && isValidId(referralId)
+        && (existing().partnerOwnerId == request.auth.uid || existing().clientId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn()
+        && (existing().partnerOwnerId == request.auth.uid || existing().clientId == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(referralId)
+        && isValidPartnerReferral(incoming())
+        && incoming().clientId == request.auth.uid
+        && incoming().partnerOwnerId != request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().clientPaid == false
+        && incoming().providerSettled == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(referralId)
+        && isValidPartnerReferral(incoming())
+        && incoming().partnerId == existing().partnerId
+        && incoming().partnerOwnerId == existing().partnerOwnerId
+        && incoming().referralCode == existing().referralCode
+        && incoming().reservationId == existing().reservationId
+        && incoming().clientId == existing().clientId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (!(incoming().status in ['payable', 'paid']) || (incoming().clientPaid == true && incoming().providerSettled == true));
+
+      allow delete: if isAdmin() && isValidId(referralId);
+    }
+
+    // --- 8. Centralized Notifications ---
     match /notifications/{notificationId} {
       allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (existing().recipientId == request.auth.uid || isBootstrappedAdmin());
@@ -710,7 +942,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(notificationId);
     }
 
-    // --- 8. Cultural Stories ---
+    // --- 9. Cultural Stories ---
     match /cultural_stories/{storyId} {
       allow get: if isValidId(storyId) && (existing().moderationStatus == 'approved' || (isSignedIn() && (existing().authorId == request.auth.uid || isAdmin())));
       allow list: if existing().moderationStatus == 'approved' || (isSignedIn() && existing().authorId == request.auth.uid) || isBootstrappedAdmin();
@@ -733,7 +965,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(storyId);
     }
 
-    // --- 9. System Settings ---
+    // --- 10. System Settings ---
     match /system_settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if true;
@@ -755,7 +987,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(settingId);
     }
 
-    // --- 10. Append-Only Administrative Audit Logs ---
+    // --- 11. Append-Only Administrative Audit Logs ---
     match /audit_logs/{logId} {
       allow get: if isAdmin() && isValidId(logId);
       allow list: if isBootstrappedAdmin();

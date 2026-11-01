@@ -3,10 +3,24 @@ import type {
   CountryDefinition,
   ValidationMatrixRow,
 } from '../types/amaro';
+import { BENIN_ACCOMMODATIONS_DIRECTORY } from './beninAccommodations';
+import {
+  BENIN_SERVICES_DIRECTORY,
+  BENIN_TOURIST_SITES_DIRECTORY,
+} from './beninSitesAndServices';
+
 import cotonouCoastImg from '../assets/images/benin_cotonou_coastline_1793469936805.jpg';
 import calaviLagoonImg from '../assets/images/benin_calavi_lagoon_1793469937987.jpg';
 import parakouHeritageImg from '../assets/images/benin_parakou_heritage_1793470068682.jpg';
 import beninDiningImg from '../assets/images/benin_hospitality_dining_1793470068680.jpg';
+import ouidahMemorialImg from '../assets/images/ouidah_memorial_coast_1793486768331.jpg';
+import ganvieStiltImg from '../assets/images/ganvie_stilt_village_1793486769287.jpg';
+import abomeyRoyalImg from '../assets/images/abomey_royal_earth_1793486770531.jpg';
+import pendjariWildlifeImg from '../assets/images/pendjari_savanna_wildlife_1793486771402.jpg';
+import atacoraTataImg from '../assets/images/atacora_kota_tata_1793486772783.jpg';
+import portonovoHeritageImg from '../assets/images/portonovo_afrobrazilian_1793486774149.jpg';
+import grandpopoCoastImg from '../assets/images/grandpopo_bouche_roy_1793486970721.jpg';
+import dassaHillsImg from '../assets/images/dassa_hills_ketou_1793486988427.jpg';
 
 export const EDITORIAL_IMAGES: Record<
   string,
@@ -14,23 +28,63 @@ export const EDITORIAL_IMAGES: Record<
 > = {
   cotonou_coast: {
     src: cotonouCoastImg,
-    alt: 'Illustration éditoriale du littoral de Cotonou et de la Route des Pêches au Bénin',
-    license: 'Illustration éditoriale générée pour Amaro · Non contractuelle d’un établissement privé',
+    alt: 'Littoral atlantique de Cotonou, Boulevard de la Marina et Route des Pêches au Bénin',
+    license: 'Illustration éditoriale Amaro · Destination Cotonou & Littoral (non contractuelle d’un hôtel privé)',
   },
   calavi_lagoon: {
     src: calaviLagoonImg,
-    alt: 'Illustration éditoriale du lac Nokoué près d’Abomey-Calavi au Bénin',
-    license: 'Illustration éditoriale générée pour Amaro · Usage destination Abomey-Calavi / Nokoué',
+    alt: 'Berge verdoyante et embarcadère du lac Nokoué à Abomey-Calavi au Bénin',
+    license: 'Illustration éditoriale Amaro · Destination Abomey-Calavi & Basse Vallée',
+  },
+  ganvie_stilt: {
+    src: ganvieStiltImg,
+    alt: 'Habitations sur pilotis et pirogues de la cité lacustre de Ganvié sur le lac Nokoué',
+    license: 'Illustration éditoriale Amaro · Patrimoine lacustre de Ganvié',
+  },
+  ouidah_memorial: {
+    src: ouidahMemorialImg,
+    alt: 'Côte atlantique de Ouidah et perspective mémorielle de la Route des Esclaves',
+    license: 'Illustration éditoriale Amaro · Destination historique Ouidah',
+  },
+  portonovo_heritage: {
+    src: portonovoHeritageImg,
+    alt: 'Architecture patrimoniale afro-brésilienne colorée de Porto-Novo au Bénin',
+    license: 'Illustration éditoriale Amaro · Patrimoine de Porto-Novo',
+  },
+  grandpopo_coast: {
+    src: grandpopoCoastImg,
+    alt: 'Embouchure lagunaire de la Bouche du Roy entre fleuve Mono, cocotiers et océan à Grand-Popo',
+    license: 'Illustration éditoriale Amaro · Destination Grand-Popo, Mono & Lac Ahémé',
+  },
+  abomey_royal: {
+    src: abomeyRoyalImg,
+    alt: 'Architecture royale en terre rouge et bas-reliefs traditionnels du plateau d’Abomey',
+    license: 'Illustration éditoriale Amaro · Destination royale Abomey & Zou',
+  },
+  dassa_hills: {
+    src: dassaHillsImg,
+    alt: 'Inselbergs et collines granitiques verdoyantes de Dassa-Zoumè au centre du Bénin',
+    license: 'Illustration éditoriale Amaro · Destination Collines de Dassa & Plateau',
   },
   parakou_heritage: {
     src: parakouHeritageImg,
-    alt: 'Illustration éditoriale de l’artisanat textile et de l’architecture de Parakou au nord du Bénin',
-    license: 'Illustration éditoriale générée pour Amaro · Usage culturel Parakou',
+    alt: 'Artisanat textile du coton tissé et culture du Borgou à Parakou et Nikki',
+    license: 'Illustration éditoriale Amaro · Destination Parakou, Nikki & Borgou',
+  },
+  atacora_tata: {
+    src: atacoraTataImg,
+    alt: 'Paysage montagneux de l’Atacora, cascades et architecture vernaculaire Tata Somba',
+    license: 'Illustration éditoriale Amaro · Destination Natitingou, Kota & Boukoumbé',
+  },
+  pendjari_wildlife: {
+    src: pendjariWildlifeImg,
+    alt: 'Savane dorée et éléphants d’Afrique de l’Ouest dans la Réserve de biosphère de la Pendjari',
+    license: 'Illustration éditoriale Amaro · Parcs Nationaux du Nord-Bénin',
   },
   benin_dining: {
     src: beninDiningImg,
-    alt: 'Illustration éditoriale d’une table gastronomique ouest-africaine contemporaine',
-    license: 'Illustration éditoriale générée pour Amaro · Non assimilée à un restaurant spécifique',
+    alt: 'Gastronomie béninoise contemporaine et table d’hospitalité ouest-africaine',
+    license: 'Illustration éditoriale Amaro · Gastronomie & Art de vivre au Bénin',
   },
 };
 
@@ -41,26 +95,26 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
     nameEn: 'Benin',
     currency: 'XOF',
     timezone: 'Africa/Porto-Novo (UTC+1)',
-    languages: ['Français', 'Fon', 'Yoruba', 'Bariba', 'Dendi'],
+    languages: ['Français', 'Fon', 'Yoruba', 'Goun', 'Mina', 'Bariba', 'Ditammari', 'Dendi'],
     operationalStatus: 'operational',
     paymentMethods: [
-      'MTN Mobile Money Bénin (passerelle à connecter)',
-      'Moov Money Bénin (passerelle à connecter)',
-      'Celtiis Cash (passerelle à connecter)',
-      'Carte bancaire Visa / Mastercard (passerelle à connecter)',
+      'MTN Mobile Money Bénin (passerelle marchande à connecter)',
+      'Moov Money Bénin (passerelle marchande à connecter)',
+      'Celtiis Cash (passerelle marchande à connecter)',
+      'Carte bancaire Visa / Mastercard (passerelle marchande à connecter)',
       'Validation manuelle encadrée Amaro',
     ],
     localRulesFr: [
-      'Devise officielle : Franc CFA (XOF — parité fixe 1 EUR = 655,957 XOF).',
-      'Respect impératif des lieux sacrés, couvents et cérémonies traditionnelles : demandez toujours l’autorisation avant toute photographie.',
-      'E-Visa touristique officiel disponible avant le départ sur la plateforme gouvernementale e-visa.bj.',
-      'Privilégiez les taxis-villes identifiés ou chauffeurs référencés lors des déplacements nocturnes.',
+      'Devise officielle : Franc CFA (XOF — parité fixe garantie 1 EUR = 655,957 XOF).',
+      'Respect impératif des lieux sacrés, couvents Vodun, palais royaux et villages lacustres : demandez toujours l’autorisation avant toute photographie.',
+      'E-Visa touristique officiel disponible avant le départ sur le portail gouvernemental e-visa.bj ; carnet de vaccination fièvre jaune requis à l’arrivée.',
+      'Règle Transport Amaro : un itinéraire peut mobiliser plusieurs véhicules d’un même prestataire, mais ne mélange pas plusieurs prestataires de transport distincts.',
     ],
     localRulesEn: [
       'Official currency: West African CFA Franc (XOF — fixed parity 1 EUR = 655.957 XOF).',
-      'Strict respect for sacred sites and traditional ceremonies: always request permission before taking photos.',
-      'Official tourist e-Visa available prior to travel via the Benin government portal (e-visa.bj).',
-      'Prefer registered drivers or verified city transport for evening travel.',
+      'Strict respect for sacred Vodun sites, royal palaces, and stilt villages: always request permission before taking photos.',
+      'Official tourist e-Visa available prior to travel via the Benin government portal (e-visa.bj); yellow fever certificate required.',
+      'Amaro Transport Rule: an itinerary may use multiple vehicles from the same transport operator, without mixing distinct transport providers.',
     ],
     emergencyNumbers: [
       {
@@ -88,30 +142,220 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
         name: 'Cotonou',
         region: 'Littoral',
         summaryFr:
-          'Capitale économique dynamique entre océan Atlantique, Route des Pêches, galeries contemporaines, gastronomie côtière et grand marché Dantokpa.',
+          'Capitale économique vibrante : Monument Amazone, Boulevard de la Marina, plage de Fidjrossè, Haie Vive, Fondation Zinsou et marché Dantokpa.',
         summaryEn:
-          'Vibrant economic hub along the Atlantic coast, featuring Route des Pêches, contemporary art spaces, coastal dining, and crafts.',
+          'Vibrant economic capital: Amazon Monument, Marina Boulevard, Fidjrossè beach, Haie Vive dining, and Dantokpa market.',
         imageKey: 'cotonou_coast',
+      },
+      {
+        id: 'ouidah',
+        name: 'Ouidah',
+        region: 'Atlantique',
+        summaryFr:
+          'Cité historique et spirituelle majeure : Route des Esclaves, Porte du Non-Retour, Temple des Pythons, Forêt sacrée de Kpassè et Villa Ajavon.',
+        summaryEn:
+          'Major historical and spiritual city: Slave Route, Door of No Return, Python Temple, Sacred Forest of Kpassè, and Villa Ajavon.',
+        imageKey: 'ouidah_memorial',
+      },
+      {
+        id: 'ganvie',
+        name: 'Ganvié (Lac Nokoué)',
+        region: 'Atlantique (So-Ava)',
+        summaryFr:
+          'Plus célèbre cité lacustre d’Afrique de l’Ouest bâtie sur pilotis au XVIIIe siècle par les Tofinu au milieu du lac Nokoué.',
+        summaryEn:
+          'West Africa’s iconic 18th-century stilt village built over Lake Nokoué by the Tofinu people.',
+        imageKey: 'ganvie_stilt',
+      },
+      {
+        id: 'porto-novo',
+        name: 'Porto-Novo & Vallée de l’Ouémé',
+        region: 'Ouémé',
+        summaryFr:
+          'Capitale constitutionnelle au charme afro-brésilien : Palais Honmè du Roi Toffa, Grande Mosquée baroque, Musée da Silva et villages des Aguégués.',
+        summaryEn:
+          'Constitutional capital famed for Afro-Brazilian architecture: King Toffa’s Honmè Palace, Great Mosque, da Silva Museum, and Ouémé Valley.',
+        imageKey: 'portonovo_heritage',
+      },
+      {
+        id: 'grand-popo',
+        name: 'Grand-Popo',
+        region: 'Mono',
+        summaryFr:
+          'Station balnéaire paisible sous les cocotiers et réserve naturelle de la Bouche du Roy où le fleuve Mono rejoint l’océan Atlantique.',
+        summaryEn:
+          'Serene palm-lined coastal town and gateway to the Bouche du Roy biosphere reserve where the Mono River meets the Atlantic.',
+        imageKey: 'grandpopo_coast',
+      },
+      {
+        id: 'possotome',
+        name: 'Possotomè (Lac Ahémé)',
+        region: 'Mono (Bopa)',
+        summaryFr:
+          'Rives paisibles du lac Ahémé réputées pour leurs sources thermales chaudes naturelles, l’écotourisme communautaire et le Dakouin.',
+        summaryEn:
+          'Peaceful shores of Lake Ahémé renowned for natural hot thermal springs, community ecotourism, and Dakouin fish cuisine.',
+        imageKey: 'grandpopo_coast',
       },
       {
         id: 'abomey-calavi',
         name: 'Abomey-Calavi',
         region: 'Atlantique',
         summaryFr:
-          'Cité universitaire verdoyante et embarcadère historique vers le lac Nokoué et les cités lacustres patrimoniales.',
+          'Grande cité universitaire verdoyante, pôle artistique de Lobozounkpa (Petit Musée de la Récade) et embarcadère officiel vers Ganvié.',
         summaryEn:
-          'Green university city and primary gateway to Lake Nokoué and historic stilt-village waterways.',
+          'Green university hub, home to Le Centre contemporary art space and the official boat pier to Ganvié.',
         imageKey: 'calavi_lagoon',
+      },
+      {
+        id: 'abomey',
+        name: 'Abomey',
+        region: 'Zou',
+        summaryFr:
+          'Capitale historique du royaume du Danxomè : Palais Royaux classés au Patrimoine Mondial de l’UNESCO, bas-reliefs et toiles appliquées.',
+        summaryEn:
+          'Historic capital of the Kingdom of Dahomey: UNESCO World Heritage Royal Palaces, bas-reliefs, and appliqué tapestries.',
+        imageKey: 'abomey_royal',
+      },
+      {
+        id: 'bohicon',
+        name: 'Bohicon',
+        region: 'Zou',
+        summaryFr:
+          'Carrefour commercial du plateau d’Abomey abritant le parc archéologique du village souterrain d’Agongointo.',
+        summaryEn:
+          'Central crossroads neighboring Abomey and home to the Agongointo underground archaeological park.',
+        imageKey: 'abomey_royal',
+      },
+      {
+        id: 'dassa-zoume',
+        name: 'Dassa-Zoumè & Savalou',
+        region: 'Collines',
+        summaryFr:
+          'Cirque spectaculaire de 41 collines granitiques sacrées, Grotte mariale d’Arigbo et terroir gastronomique de l’igname pilée à Savalou.',
+        summaryEn:
+          'Dramatic ring of 41 granite hills, Marian Grotto of Arigbo, and Savalou’s celebrated yam harvest heritage.',
+        imageKey: 'dassa_hills',
+      },
+      {
+        id: 'ketou',
+        name: 'Kétou & Pobè',
+        region: 'Plateau',
+        summaryFr:
+          'Ancienne cité royale yoruba célèbre pour la porte fortifiée d’Akaba Idena et les traditions des masques Gèlèdè inscrits à l’UNESCO.',
+        summaryEn:
+          'Ancient Yoruba royal city famed for the fortified Akaba Idena gate and UNESCO-listed Gèlèdè mask heritage.',
+        imageKey: 'dassa_hills',
+      },
+      {
+        id: 'lokossa',
+        name: 'Lokossa, Comé & Sè',
+        region: 'Mono',
+        summaryFr:
+          'Chef-lieu du Mono entouré de lacs et des célèbres ateliers féminins de poterie traditionnelle de Sè.',
+        summaryEn:
+          'Administrative heart of Mono near traditional women potters’ workshops in Sè.',
+        imageKey: 'grandpopo_coast',
+      },
+      {
+        id: 'allada',
+        name: 'Allada',
+        region: 'Atlantique',
+        summaryFr:
+          'Berceau originel des royaumes Aja-Fon du Sud-Bénin et terre ancestrale de Toussaint Louverture.',
+        summaryEn:
+          'Ancestral cradle of southern Benin’s royal lineages and heritage site of Toussaint Louverture.',
+        imageKey: 'abomey_royal',
+      },
+      {
+        id: 'seme-podji',
+        name: 'Sèmè-Podji',
+        region: 'Ouémé',
+        summaryFr:
+          'Cordon littoral oriental bordé de cocoteraies et d’hôtels balnéaires entre Cotonou et Porto-Novo.',
+        summaryEn:
+          'Eastern Atlantic beach corridor linking Cotonou and Porto-Novo.',
+        imageKey: 'cotonou_coast',
       },
       {
         id: 'parakou',
         name: 'Parakou',
         region: 'Borgou (Nord-Bénin)',
         summaryFr:
-          'Carrefour culturel et commercial du septentrion béninois, réputé pour son artisanat du coton tissé, ses marchés et son hospitalité.',
+          'Métropole culturelle et économique du Nord-Bénin, réputée pour ses maîtres tisserands, son Musée en plein air et son marché Arzéké.',
         summaryEn:
-          'Cultural crossroads of northern Benin, celebrated for handwoven textiles, lively markets, and northern hospitality.',
+          'Northern Benin’s cultural and commercial metropolis, celebrated for handwoven cotton, open-air museum, and Arzéké market.',
         imageKey: 'parakou_heritage',
+      },
+      {
+        id: 'nikki',
+        name: 'Nikki',
+        region: 'Borgou',
+        summaryFr:
+          'Capitale historique Baatonu et Wassangari, célèbre dans toute l’Afrique de l’Ouest pour la grande fête cavalière impériale de la Gani.',
+        summaryEn:
+          'Historic Baatonu imperial seat renowned across West Africa for the royal equestrian festival of Gani.',
+        imageKey: 'parakou_heritage',
+      },
+      {
+        id: 'natitingou',
+        name: 'Natitingou & Kota',
+        region: 'Atacora',
+        summaryFr:
+          'Porte des montagnes de l’Atacora, abritant le Musée régional et les rafraîchissantes Chutes de Kota.',
+        summaryEn:
+          'Mountain gateway of the Atacora range, featuring the Regional Museum and refreshing Kota Waterfalls.',
+        imageKey: 'atacora_tata',
+      },
+      {
+        id: 'boukoumbe',
+        name: 'Boukoumbé (Pays Tata Somba)',
+        region: 'Atacora',
+        summaryFr:
+          'Cœur de l’architecture vernaculaire Bètammaribè des Tata Somba à tourelles dans la vallée de Koussoucoingou.',
+        summaryEn:
+          'Heartland of Bètammaribè two-story earthen Tata Somba dwellings in Koussoucoingou valley.',
+        imageKey: 'atacora_tata',
+      },
+      {
+        id: 'tanguieta',
+        name: 'Tanguiéta, Tanougou & Pendjari',
+        region: 'Atacora',
+        summaryFr:
+          'Carrefour des Chutes de Tanougou et porte d’entrée du Parc National de la Pendjari (accès soumis aux consignes officielles).',
+        summaryEn:
+          'Crossroads to Tanougou Falls and gateway to UNESCO-listed Pendjari National Park (subject to official advisories).',
+        imageKey: 'pendjari_wildlife',
+      },
+      {
+        id: 'djougou',
+        name: 'Djougou',
+        region: 'Donga',
+        summaryFr:
+          'Grande cité commerçante Dendi et Yom reliant le Borgou aux montagnes de l’Atacora.',
+        summaryEn:
+          'Historic Dendi and Yom trading town linking Borgou and the Atacora mountains.',
+        imageKey: 'parakou_heritage',
+      },
+      {
+        id: 'kandi',
+        name: 'Kandi & Banikoara',
+        region: 'Alibori',
+        summaryFr:
+          'Bassin cotonnier du Grand Nord et porte historique du Parc National du W.',
+        summaryEn:
+          'Northern cotton heartland and historic gateway to W National Park.',
+        imageKey: 'pendjari_wildlife',
+      },
+      {
+        id: 'malanville',
+        name: 'Malanville',
+        region: 'Alibori (Vallée du Niger)',
+        summaryFr:
+          'Ville frontalière riveraine du fleuve Niger à l’extrême nord du Bénin.',
+        summaryEn:
+          'Northernmost riverside town along the Niger River.',
+        imageKey: 'pendjari_wildlife',
       },
     ],
   },
@@ -157,7 +401,14 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
   },
 ];
 
-// Clearly marked Demonstration / Test entries (PARTIE 19: never presented as verified real partners)
+// Unified Real Public Directory of Benin (168 real documented entries: 110 Accommodations + 17 Heritage/Natural Sites + 41 Transports/Linguistic/Complementary Services)
+export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
+  ...BENIN_ACCOMMODATIONS_DIRECTORY,
+  ...BENIN_TOURIST_SITES_DIRECTORY,
+  ...BENIN_SERVICES_DIRECTORY,
+];
+
+// Clearly marked Demonstration / Test entries (kept separate and never presented as real partners)
 export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
   {
     id: 'demo-cotonou-lodging-1',
@@ -171,6 +422,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Exemple d’hébergement servant à tester le Dossier de Voyage, les règles anti-doublon d’hébergement et la machine à états des réservations.',
     priceAmount: 45000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 720,
     capacity: 2,
@@ -191,6 +443,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Visite guidée permettant de tester la règle Journey Brain (maximum 2 visites par jour dans une même ville, 1 visite si changement de ville).',
     priceAmount: 18000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 180,
     capacity: 6,
@@ -211,6 +464,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Dîner découverte béninois. Conformément aux règles Amaro, aucune table n’est affichée disponible sans confirmation explicite.',
     priceAmount: 15000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 120,
     capacity: 4,
@@ -231,6 +485,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Découverte des tisserands et achat d’étoles artisanales. Permet de tester la détection de changement de ville Cotonou ↔ Parakou.',
     priceAmount: 12000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 90,
     capacity: 8,
@@ -251,6 +506,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Service de transfert sur demande permettant de tester l’unicité du prestataire de transport sur un itinéraire organisé.',
     priceAmount: 35000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 240,
     capacity: 4,
@@ -271,6 +527,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Accompagnement linguistique et médiation culturelle sur demi-journée (donnée de test clairement identifiée).',
     priceAmount: 20000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 180,
     capacity: 5,
@@ -291,6 +548,7 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
     description:
       'Soin relaxant au beurre de karité du Nord-Bénin, réservable sur créneau horaire vérifié par Journey Brain.',
     priceAmount: 22000,
+    priceKnown: true,
     currency: 'XOF',
     durationMinutes: 90,
     capacity: 2,
@@ -301,40 +559,50 @@ export const DEMO_REFERENCE_CATALOGUE: CatalogueItem[] = [
   },
 ];
 
-// PARTIE 23 — Official Validation Matrix (Strict Honesty: Real vs Pending External Providers)
 export const VALIDATION_MATRIX: ValidationMatrixRow[] = [
   {
     module: 'Infrastructure Cloud & Auth',
     feature: 'Authentification Google & Base Cloud Firestore dédiée',
     ui: 'Connectée',
-    backend: 'Connecté',
+    backend: 'Connecté (Firebase Admin SDK)',
     database: 'Provisionnée & Vérifiée',
     security: 'Règles Zero-Trust déployées (ESLint 0 erreur)',
-    tests: 'Sonde getDocFromServer active au démarrage',
+    tests: 'Sonde getDocFromServer + tests JWT serveur',
     status: 'Validé',
     remainingIssues: 'Auth Email/Mot de passe optionnelle désactivée par défaut dans la console Firebase.',
   },
   {
-    module: 'Amaro Journey Folder',
-    feature: 'Dossier de voyage partagé entre modules & persistance Firestore',
-    ui: 'Réalisée (Mobile Android & Bureau)',
-    backend: 'Connecté',
-    database: 'Collections /journey_folders & /items',
-    security: 'Master Gate sur sous-collection items + isolation propriétaire',
-    tests: 'Compilation TypeScript + validation règles',
+    module: 'Explorer le Bénin & Catalogue National',
+    feature: '110 hébergements réels, 17 sites documentés (14 points), transports, traducteurs & services',
+    ui: 'Accès 100 % gratuit sans compte + comparateur d’hébergements',
+    backend: ' Catalogue synchronisé côté serveur pour devis intègres',
+    database: 'Répertoire public + surcharges /services administrables',
+    security: 'Origine et statut de vérification affichés sans invention de prix',
+    tests: 'Vérification TypeScript & tests catalogue serveur',
+    status: 'Validé',
+    remainingIssues: 'Confirmation progressive des tarifs « sur demande » auprès des hôtels non partenaires directs.',
+  },
+  {
+    module: 'Dossier Permanent & Carnet Électronique',
+    feature: 'Reprise automatique du voyage actif, checklist dynamique, souvenirs & export PDF',
+    ui: 'Bouton intelligent Créer / Ouvrir / Suivre + vue imprimable PDF',
+    backend: 'Synchronisé avec les étapes et réservations',
+    database: 'Collections /journey_folders, /items & /journal',
+    security: 'Master Gate propriétaire strict sur le carnet et les étapes',
+    tests: 'Compilation et validation des règles Firestore',
     status: 'Validé',
     remainingIssues: 'Aucun blocage.',
   },
   {
-    module: 'Amaro Journey Brain',
-    feature: 'Détection chevauchements, temps de trajet et plafonds visites (1/2 max)',
-    ui: 'Réalisée',
-    backend: 'Route serveur /api/amaro/brain/validate',
-    database: 'Synchronisée avec /journey_folders/{id}/items',
-    security: 'Contrôle serveur + Firestore',
-    tests: 'Vérification horaire et changement de ville active',
+    module: 'Amaro Journey Brain & Unicité Transport',
+    feature: 'Détection chevauchements, plafonds visites (1/2) & unicité du prestataire de transport',
+    ui: 'Alertes claires + suggestions d’alternatives même ville',
+    backend: 'Routes /api/amaro/brain/validate & /api/amaro/reservations',
+    database: 'Lecture atomique de l’agenda et des réservations',
+    security: 'Contrôle serveur bloquant avant création de réservation',
+    tests: 'Tests automatisés multi-véhicules même transporteur vs transporteurs distincts',
     status: 'Validé',
-    remainingIssues: 'Calcul kilométrique routier précis à connecter ultérieurement à Google Maps API.',
+    remainingIssues: 'Calcul kilométrique routier fin à relier ultérieurement à Google Maps Platform.',
   },
   {
     module: 'Amaro Budget Guardian',
@@ -343,46 +611,35 @@ export const VALIDATION_MATRIX: ValidationMatrixRow[] = [
     backend: 'Routes /api/amaro/rates & /api/amaro/finance/quote',
     database: 'Synchronisée avec /reservations & /system_settings',
     security: 'Calculs financiers contrôlés côté serveur, prix immuables par le client',
-    tests: 'Parité fixe BCEAO + flux taux horodatés vérifiés',
+    tests: 'Tests anti-falsification de prix côté navigateur réussis',
     status: 'Validé',
     remainingIssues: 'Aucun blocage.',
+  },
+  {
+    module: 'Programme Affiliés — Amaro Partners',
+    feature: 'Liens ?ref=, attribution multi-pages, anti-auto-parrainage & cycle commission 8 états',
+    ui: 'Espace Amaro Partners dédié + gouvernance Admin',
+    backend: 'Validation serveur à la réservation + anti-auto-parrainage',
+    database: 'Collections /partners & /partner_referrals',
+    security: 'Statut « payable » verrouillé par Admin après paiement client ET règlement prestataire',
+    tests: 'Tests automatisés anti-auto-parrainage et non-paiement au clic',
+    status: 'Validé',
+    remainingIssues: 'Virements externes partenaires effectués manuellement en attendant API Mobile Money.',
   },
   {
     module: 'Amaro Assistant (IA)',
     feature: 'Assistant conversationnel lié sur autorisation au Dossier de Voyage',
     ui: 'Réalisée avec contrôle de partage',
-    backend: 'Route serveur /api/amaro/assistant (Gemini 3.8 Flash)',
+    backend: 'Route serveur /api/amaro/assistant (rate-limitée)',
     database: 'Lecture contextuelle autorisée du dossier actif',
-    security: 'Clé GEMINI_API_KEY conservée exclusivement côté serveur',
-    tests: 'Gestion des erreurs et consignes anti-invention actives',
+    security: 'Clé GEMINI_API_KEY conservée exclusivement côté serveur + rédaction secrets',
+    tests: 'Tests quota IP 429 et non-exposition des secrets réussis',
     status: 'Validé',
     remainingIssues: 'Nécessite GEMINI_API_KEY active dans Settings > Secrets.',
   },
   {
-    module: 'Amaro Explorer & Culture Bénin',
-    feature: 'Catalogue 7 catégories (Cotonou, Abomey-Calavi, Parakou) & Histoires modérées',
-    ui: 'Réalisée avec distinction Démo / En attente / Vérifié',
-    backend: 'Connecté',
-    database: 'Collections /services & /cultural_stories',
-    security: 'Modération administrateur obligatoire avant publication publique',
-    tests: 'Filtres ville, catégorie, budget et origine opérationnels',
-    status: 'Validé',
-    remainingIssues: 'Intégration des premiers prestataires béninois réels à saisir via l’Espace Prestataire.',
-  },
-  {
-    module: 'Parcours Réservation (10 étapes)',
-    feature: 'Machine à états complète Client ↔ Prestataire ↔ Administrateur',
-    ui: 'Réalisée dans les 3 espaces',
-    backend: 'Devis serveur /api/amaro/finance/quote',
-    database: 'Collection /reservations + /notifications',
-    security: 'Verrouillage des états terminaux (cancelled/refunded) et rôles stricts',
-    tests: 'Transitions Demande → Réponse Prestataire → Validation Client vérifiées',
-    status: 'Validé',
-    remainingIssues: 'Notifications externes Email/SMS/WhatsApp à connecter à un fournisseur tiers.',
-  },
-  {
     module: 'Paiements Mobile Money & Cartes',
-    feature: 'Architecture modulaire de paiement (MTN MoMo, Moov, Cartes)',
+    feature: 'Architecture modulaire de paiement (MTN MoMo, Moov, Celtiis, Cartes)',
     ui: 'Réalisée avec transparence des statuts',
     backend: 'Calcul serveur prêt, passerelle externe non simulée',
     database: 'Statuts paymentStatus persistés dans /reservations',
@@ -392,25 +649,14 @@ export const VALIDATION_MATRIX: ValidationMatrixRow[] = [
     remainingIssues: 'Nécessite contrat marchand (ex: FedaPay / Kkiapay / Stripe) + clés secrètes webhook.',
   },
   {
-    module: 'Amaro Rescue',
-    feature: 'Numéros d’urgence officiels vérifiés Bénin (117, 118, 138) & consignes',
-    ui: 'Réalisée (appel tactile direct tel: sur Android)',
-    backend: 'Registre international typé',
-    database: 'Données vérifiées embarquées hors-ligne',
-    security: 'Avertissement légal explicite affiché',
-    tests: 'Liens d’appel Android vérifiés',
-    status: 'Validé',
-    remainingIssues: 'Compléter les numéros consulaires spécifiques selon chaque nationalité ajoutée.',
-  },
-  {
     module: 'Sauvegarde GitHub & Spck Editor',
-    feature: 'Sauvegarde complète du code source AMARO.VOYAGE vers GitHub privé/public',
-    ui: 'Réalisée dans Espaces & Sauvegarde',
-    backend: 'Routes /api/github/connect & /api/github/backup-amaro',
+    feature: 'Sauvegarde atomique complète AMARO.VOYAGE réservée à l’Administrateur',
+    ui: 'Réalisée dans Mon Compte > Sauvegarde GitHub',
+    backend: 'Routes /api/github/* protégées par verifyIdToken + contrôle Admin',
     database: 'N/A (Git Data API distante)',
-    security: 'Jeton PAT en mémoire serveur uniquement, secrets exclus du commit',
-    tests: 'Dépôt kayne3200-ai/Amaro.voyage vérifié accessible',
+    security: '401/403 vérifiés, secrets exclus du commit',
+    tests: 'Tests automatisés 401/403 et synchronisation vérifiée',
     status: 'Validé',
-    remainingIssues: 'Exécuter un clic sur « Sauvegarder AMARO.VOYAGE sur GitHub » après chaque jalon.',
+    remainingIssues: 'Exécuter une sauvegarde GitHub après validation finale.',
   },
 ];
