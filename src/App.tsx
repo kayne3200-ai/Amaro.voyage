@@ -873,7 +873,7 @@ function AmaroPlatform() {
     };
   }, [isBootstrappedAdmin]);
 
-  // Combined Catalogue: Firestore published overrides + 168 Benin Public Directory + 7 Demo Test entries
+  // Combined Catalogue: Firestore published overrides + Benin Public Directory + Demo Test entries (strictly deduplicated)
   const combinedCatalogue = useMemo(() => {
     const overriddenIds = new Set<string>(publishedServices.map((s) => s.id));
     for (const s of allCatalogueServices) {
@@ -890,7 +890,22 @@ function AmaroPlatform() {
     const remainingDirectory = BENIN_PUBLIC_DIRECTORY.filter(
       (b) => !overriddenIds.has(b.id)
     );
-    return [...mergedPublished, ...remainingDirectory, ...DEMO_REFERENCE_CATALOGUE];
+    const remainingDemo = DEMO_REFERENCE_CATALOGUE.filter(
+      (d) => !overriddenIds.has(d.id)
+    );
+    const seenIds = new Set<string>();
+    const seenTitleCity = new Set<string>();
+    const uniqueItems: typeof mergedPublished = [];
+    for (const item of [...mergedPublished, ...remainingDirectory, ...remainingDemo]) {
+      const normKey = `${item.cityId.trim().toLowerCase()}::${item.title.trim().toLowerCase()}`;
+      if (seenIds.has(item.id) || seenTitleCity.has(normKey)) {
+        continue;
+      }
+      seenIds.add(item.id);
+      seenTitleCity.add(normKey);
+      uniqueItems.push(item);
+    }
+    return uniqueItems;
   }, [allCatalogueServices, publishedServices]);
 
   const activeFolder = useMemo(

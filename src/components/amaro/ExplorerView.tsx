@@ -438,16 +438,30 @@ export function ExplorerView({
       <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 md:px-8 py-2.5">
         <div className="max-w-7xl mx-auto flex items-center gap-2 overflow-x-auto">
           {[
-            { id: 'overview' as ExplorerSpace, label: 'Accueil & Catalogue', icon: Compass },
+            {
+              id: 'overview' as ExplorerSpace,
+              label:
+                locale === 'fr'
+                  ? `Tout le catalogue (${realCount})`
+                  : `All directory (${realCount})`,
+              icon: Compass,
+            },
             { id: 'benin_guide' as ExplorerSpace, label: t.nav.discoverBenin, icon: BookOpen },
             {
               id: 'accommodations' as ExplorerSpace,
-              label: `Hébergements (${realAccommodationCount})`,
+              label: `${t.categories.accommodation} (${realAccommodationCount})`,
               icon: Building2,
             },
-            { id: 'transports' as ExplorerSpace, label: 'Transports', icon: Car },
-            { id: 'sites' as ExplorerSpace, label: 'Sites & Patrimoine', icon: Landmark },
-            { id: 'services' as ExplorerSpace, label: 'Traduction & Services', icon: Languages },
+            { id: 'transports' as ExplorerSpace, label: t.categories.transport, icon: Car },
+            { id: 'sites' as ExplorerSpace, label: t.categories.site, icon: Landmark },
+            {
+              id: 'services' as ExplorerSpace,
+              label:
+                locale === 'fr'
+                  ? 'Traduction, Tables & Services'
+                  : 'Translation, Dining & Services',
+              icon: Languages,
+            },
           ].map((nav) => {
             const Icon = nav.icon;
             const active = space === nav.id;
@@ -516,13 +530,13 @@ export function ExplorerView({
                       onClick={() => setSpace('benin_guide')}
                       className="min-h-[46px] px-5 py-2.5 text-sm font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-xl transition-colors whitespace-nowrap"
                     >
-                      Explorer le Bénin (Gratuit)
+                      {t.hero.secondaryCta}
                     </button>
                     <a
                       href="#catalogue-benin"
                       className="min-h-[46px] inline-flex items-center px-5 py-2.5 text-sm font-semibold text-white border border-slate-600 hover:border-slate-400 rounded-xl transition-colors whitespace-nowrap"
                     >
-                      {t.hero.secondaryCta}
+                      {t.hero.catalogueCta} ({realCount})
                     </a>
                   </div>
                   <p className="text-xs text-slate-400 pt-1">{t.hero.freeNote}</p>
@@ -560,7 +574,7 @@ export function ExplorerView({
                   Règle de Cohérence Transport AMARO Journey Brain :
                 </strong>
                 <p>
-                  Pour garantir une logistique fiable sur votre séjour, votre Dossier de Voyage peut mobiliser <strong>plusieurs véhicules auprès d’un même prestataire de transport</strong> (ex. deux 4x4 chez le même loueur), mais bloque automatiquement le mélange de plusieurs prestataires de transport distincts sur un même itinéraire.
+                  Pour garantir une logistique fiable sur votre séjour, votre Dossier de Voyage s’appuie sur <strong>un seul prestataire de transport principal</strong> (plusieurs véhicules autorisés chez ce même loueur), tout en autorisant librement les <strong>courses urbaines ponctuelles</strong> (Gozem, Yango).
                 </p>
               </div>
             </div>
@@ -1071,24 +1085,35 @@ export function ExplorerView({
                 </p>
               </article>
 
-              {culturalStories
-                .filter((s) => s.moderationStatus === 'approved')
-                .map((story) => (
-                  <article
-                    key={story.id}
-                    className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2"
-                  >
-                    <div className="text-xs text-slate-500 dark:text-slate-400 capitalize">
-                      Contribution approuvée · {story.cityId} · par {story.authorName}
-                    </div>
-                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                      {story.title}
-                    </h3>
-                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                      {story.story}
-                    </p>
-                  </article>
-                ))}
+              {Array.from(
+                new Map(
+                  culturalStories
+                    .filter((s) => s.moderationStatus === 'approved')
+                    .filter((s) => {
+                      const norm = s.title.trim().toLowerCase();
+                      return (
+                        norm !== 'respect de la vie quotidienne sur les cités lacustres' &&
+                        norm !== 'savoir-faire du coton tissé et salutations traditionnelles'
+                      );
+                    })
+                    .map((s) => [s.id, s])
+                ).values()
+              ).map((story) => (
+                <article
+                  key={story.id}
+                  className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2"
+                >
+                  <div className="text-xs text-slate-500 dark:text-slate-400 capitalize">
+                    Contribution approuvée · {story.cityId} · par {story.authorName}
+                  </div>
+                  <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                    {story.title}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                    {story.story}
+                  </p>
+                </article>
+              ))}
             </div>
           </section>
         </>

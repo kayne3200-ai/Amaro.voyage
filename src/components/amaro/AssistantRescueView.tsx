@@ -426,7 +426,7 @@ export function AssistantRescueView({
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-700 dark:text-teal-400">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Conseiller conversationnel AMARO · Connecté aux 172 fiches réelles du Bénin</span>
+            <span>Conseiller conversationnel AMARO · Connecté au répertoire national réel du Bénin</span>
           </div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
             Discuter avec AMARO

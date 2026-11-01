@@ -19,6 +19,7 @@ export const TRANSLATIONS: Record<
       subtitle: string;
       primaryCta: string;
       secondaryCta: string;
+      catalogueCta: string;
       freeNote: string;
     };
     pillars: {
@@ -46,8 +47,8 @@ export const TRANSLATIONS: Record<
 > = {
   fr: {
     nav: {
-      explorer: 'Accueil & Catalogue',
-      discoverBenin: 'Explorer le Bénin',
+      explorer: 'Accueil',
+      discoverBenin: 'Guide & Formalités Bénin',
       journey: 'Mon Voyage',
       assistant: 'Assistant',
       rescue: 'Urgences',
@@ -62,6 +63,7 @@ export const TRANSLATIONS: Record<
         'Découvrez gratuitement les 12 départements du Bénin, plus de 100 hébergements réels recensés du littoral à la Pendjari, les sites patrimoniaux UNESCO, les transports nationaux, et coordonnez tout votre séjour dans un espace personnel permanent.',
       primaryCta: 'Créer mon voyage',
       secondaryCta: 'Explorer le Bénin (Gratuit)',
+      catalogueCta: 'Parcourir le catalogue',
       freeNote:
         'Encyclopédie du Bénin, catalogue national, agenda Journey Brain, carnet électronique et urgences 100 % gratuits.',
     },
@@ -109,8 +111,8 @@ export const TRANSLATIONS: Record<
   },
   en: {
     nav: {
-      explorer: 'Home & Catalogue',
-      discoverBenin: 'Explore Benin',
+      explorer: 'Home',
+      discoverBenin: 'Benin Guide & e-Visa',
       journey: 'My Journey',
       assistant: 'Assistant',
       rescue: 'Rescue',
@@ -125,6 +127,7 @@ export const TRANSLATIONS: Record<
         'Freely discover Benin’s 12 departments, 100+ real accommodations from the Atlantic coast to Pendjari National Park, UNESCO heritage sites, national transport operators, and manage your trip in one permanent personal space.',
       primaryCta: 'Create my journey',
       secondaryCta: 'Explore Benin (Free)',
+      catalogueCta: 'Browse directory',
       freeNote:
         'Benin cultural encyclopedia, national directory, Journey Brain planner, digital logbook, and emergency guide are 100% free.',
     },

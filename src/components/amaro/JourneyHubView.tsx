@@ -1707,7 +1707,7 @@ export function JourneyHubView({
           <section className="lg:col-span-7 space-y-4">
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
-                Suivre mes réservations · Chronologie &amp; Reçus Électroniques Vérifiés
+                Chronologie Contractuelle &amp; Reçus Électroniques Vérifiés
               </p>
               <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
                 Suivre mes réservations ({folderReservations.length})

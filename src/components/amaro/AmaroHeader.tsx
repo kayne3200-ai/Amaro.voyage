@@ -79,13 +79,15 @@ export function AmaroHeader({
         </nav>
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={onSmartJourneyCta}
-            className="hidden sm:inline-flex items-center min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-lg transition-colors whitespace-nowrap"
-          >
-            {smartJourneyCtaLabel}
-          </button>
+          {activeTab !== 'explorer' && activeTab !== 'journey' && (
+            <button
+              type="button"
+              onClick={onSmartJourneyCta}
+              className="hidden sm:inline-flex items-center min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-lg transition-colors whitespace-nowrap"
+            >
+              {smartJourneyCtaLabel}
+            </button>
+          )}
 
           {isSignedIn ? (
             <button
@@ -129,7 +131,9 @@ export function AmaroHeader({
             >
               <Icon className="w-5 h-5" />
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-full">
-                {item.id === 'journey' ? smartJourneyCtaLabel.split(' ')[0] + ' voyage' : item.label}
+                {item.id === 'journey' && unreadNotifications > 0
+                  ? `${item.label} (${unreadNotifications})`
+                  : item.label}
               </span>
             </button>
           );
