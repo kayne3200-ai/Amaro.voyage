@@ -7,6 +7,8 @@
 4. **Master Gate on Subcollections**: Every operation on `/journey_folders/{folderId}/items/{itemId}` fetches `/journey_folders/$(folderId)` via `get()` to verify parent folder ownership (`ownerId == request.auth.uid`).
 5. **Reservation State Machine & Terminal Locking**: Reservations in `'cancelled'` or `'refunded'` terminal states cannot be mutated by non-admins. Clients cannot forge `paymentStatus == 'succeeded'` or modify `providerPrice`/`amaroFee` after creation.
 6. **Strict Timestamp & Immutable Ownership**: All `createdAt` and `updatedAt` fields must equal `request.time`. `ownerId`, `clientId`, `providerOwnerId`, and `createdAt` are immutable across updates.
+7. **Reservation-Scoped Identity Vault Isolation**: Identity metadata lives in `/identity_verifications/{reservationId}` and AES-256-GCM encrypted images live in `/identity_verifications/{reservationId}/private_vault/files` (`allow list: if false`). Other providers receive `403`.
+8. **Admin Zero-Raw-Image Governance**: Platform Administrators may audit `/identity_verifications/{reservationId}` metadata and `/access_logs/{logId}` and revoke/purge access, but are strictly denied `get` access to raw identity images (`403` on `/view` and `PERMISSION_DENIED` on `/private_vault/files`).
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must Return PERMISSION_DENIED)
 1. **Self-Admin Injection**: Authenticated user writes `{ uid: "attacker", roleLevel: "super_admin", createdAt: SERVER_TIMESTAMP }` to `/admins/attacker`.

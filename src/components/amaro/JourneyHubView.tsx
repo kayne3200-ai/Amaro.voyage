@@ -12,6 +12,7 @@ import {
   Plus,
   Printer,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   Wallet,
   X,
@@ -19,6 +20,7 @@ import {
 import type {
   CatalogueItem,
   CurrencyCode,
+  IdentityVerificationDoc,
   JournalEntryDoc,
   JourneyFolderDoc,
   JourneyItemDoc,
@@ -28,6 +30,10 @@ import type {
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
+import {
+  IDENTITY_STATUS_META,
+  IdentityVerificationModal,
+} from './IdentityVerificationModal';
 
 interface RateInfo {
   rates: Record<'EUR' | 'XOF' | 'USD', number>;
@@ -105,6 +111,8 @@ interface JourneyHubViewProps {
   notifications: NotificationDoc[];
   onMarkNotificationRead: (notificationId: string) => Promise<void>;
   lastBrainDiagnostic: BrainDiagnostic | null;
+  identityByReservation?: Record<string, IdentityVerificationDoc>;
+  onNotify?: (msg: string) => void;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
@@ -186,6 +194,8 @@ export function JourneyHubView({
   notifications,
   onMarkNotificationRead,
   lastBrainDiagnostic,
+  identityByReservation = {},
+  onNotify,
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale];
 
@@ -211,6 +221,7 @@ export function JourneyHubView({
   const [editDaily, setEditDaily] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
   const [busyReservationId, setBusyReservationId] = useState<string | null>(null);
+  const [identityModalRes, setIdentityModalRes] = useState<ReservationDoc | null>(null);
 
   // Electronic Logbook (Carnet de Voyage Électronique) local draft states
   const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
@@ -1535,6 +1546,68 @@ export function JourneyHubView({
                         </div>
                       )}
 
+                      {/* Contextual Identity Verification Status (Never blocks services that don't require ID) */}
+                      {(() => {
+                        const idMeta = identityByReservation[res.id];
+                        const categoryMayNeedId =
+                          res.category === 'accommodation' || res.category === 'transport';
+                        const idStatus = idMeta?.status || 'not_requested';
+                        const statusUi = IDENTITY_STATUS_META[idStatus];
+                        const isActionRequested =
+                          idStatus === 'requested' || idStatus === 'renewal_required';
+
+                        return (
+                          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center gap-1 font-semibold text-slate-800 dark:text-slate-200">
+                                  <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+                                  <span>Identité voyageur :</span>
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold ${statusUi.badgeClass}`}
+                                >
+                                  {statusUi.label}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {isActionRequested
+                                  ? 'Le prestataire demande un justificatif d’identité pour finaliser cette réservation.'
+                                  : categoryMayNeedId
+                                  ? res.providerOwnerId === 'manual_concierge'
+                                    ? 'Établissement du répertoire public : aucune transmission externe automatique (coffre personnel facultatif).'
+                                    : 'Finalisation hébergement / transport : transmettez votre pièce uniquement si nécessaire, avec consentement explicite.'
+                                  : 'Aucune pièce d’identité requise pour cette prestation (accès libre sans blocage).'}
+                              </p>
+                            </div>
+
+                            {!['cancelled', 'refunded', 'rejected'].includes(res.status) &&
+                              (categoryMayNeedId || Boolean(idMeta)) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIdentityModalRes(res)}
+                                  className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
+                                    isActionRequested
+                                      ? 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                                      : 'bg-[#0B192C] hover:bg-slate-800 text-white'
+                                  }`}
+                                >
+                                  <ShieldCheck className="w-3.5 h-3.5" />
+                                  <span>
+                                    {isActionRequested
+                                      ? 'Fournir le justificatif'
+                                      : idMeta &&
+                                        idMeta.status !== 'not_requested' &&
+                                        idMeta.status !== 'deleted_retention_policy'
+                                      ? 'Gérer mon justificatif'
+                                      : 'Justificatif d’identité'}
+                                  </span>
+                                </button>
+                              )}
+                          </div>
+                        );
+                      })()}
+
                       {/* Automatic Same-City & Same-Category Alternatives if Rejected */}
                       {res.status === 'rejected' && suggestedAlternatives.length > 0 && (
                         <div className="p-4 bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-xl space-y-2.5">
@@ -1695,6 +1768,18 @@ export function JourneyHubView({
             )}
           </section>
         </div>
+      )}
+
+      {identityModalRes && (
+        <IdentityVerificationModal
+          reservation={identityModalRes}
+          viewerRole="traveler"
+          initialMetadata={identityByReservation[identityModalRes.id] || null}
+          onClose={() => setIdentityModalRes(null)}
+          onNotify={(msg) => {
+            if (onNotify) onNotify(msg);
+          }}
+        />
       )}
     </div>
   );

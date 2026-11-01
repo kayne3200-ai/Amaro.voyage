@@ -314,3 +314,95 @@ export interface ValidationMatrixRow {
   status: FeatureLifecycleStatus;
   remainingIssues: string;
 }
+
+// ===========================================================================
+// SYSTÈME DE VÉRIFICATION D'IDENTITÉ DU VOYAGEUR (KYC RÉSERVATION CLOISONNÉ)
+// ===========================================================================
+export type IdentityDocumentType =
+  | 'none'
+  | 'national_id'
+  | 'passport'
+  | 'residence_permit'
+  | 'other_official';
+
+export type IdentityVerificationStatus =
+  | 'not_requested'
+  | 'requested'
+  | 'submitted_by_client'
+  | 'pending_verification'
+  | 'shared_with_provider'
+  | 'accepted'
+  | 'rejected'
+  | 'renewal_required'
+  | 'deleted_retention_policy';
+
+export interface IdentityVerificationDoc {
+  id: string; // matches reservationId
+  reservationId: string;
+  folderId: string;
+  clientId: string;
+  providerOwnerId: string;
+  providerId: string;
+  serviceTitle: string;
+  category: ServiceCategory;
+  documentType: IdentityDocumentType;
+  otherDocumentLabel: string;
+  nationalityCountry: string;
+  residenceCountry: string;
+  hasBackSide: boolean;
+  status: IdentityVerificationStatus;
+  purposeReason: string;
+  recipientLabel: string;
+  consentGiven: boolean;
+  consentAt: string;
+  providerAuthorized: boolean;
+  retentionExpiresAt: string;
+  statusNote: string;
+  accessCount: number;
+  lastAccessedBy: string;
+  lastAccessedAt: string;
+}
+
+export interface IdentityAccessLogDoc {
+  id: string;
+  reservationId: string;
+  actorId: string;
+  actorRole: 'traveler' | 'provider' | 'admin';
+  action: string;
+  summary: string;
+  createdAtIso?: string;
+}
+
+// ===========================================================================
+// AMARO ASSISTANT CONVERSATIONNEL CONNECTÉ AU CATALOGUE
+// ===========================================================================
+export interface AssistantChatHistoryItem {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AssistantSuggestionItem {
+  id: string;
+  title: string;
+  category: ServiceCategory;
+  cityId: string;
+  priceKnown: boolean;
+  priceAmount: number;
+  currency: CurrencyCode;
+  priceRangeNote?: string;
+  verificationStatus: VerificationLevel;
+  dataOrigin: DataOriginType;
+}
+
+export interface AssistantQuickAction {
+  kind:
+    | 'explore_benin'
+    | 'filter_city'
+    | 'open_journey'
+    | 'open_logbook'
+    | 'sign_in';
+  label: string;
+  cityId?: string;
+  category?: ServiceCategory;
+}
+

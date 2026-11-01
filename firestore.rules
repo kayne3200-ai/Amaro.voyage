@@ -475,6 +475,89 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidIdentityVerification(data) {
+      return data.keys().hasAll([
+          'reservationId', 'folderId', 'clientId', 'providerOwnerId', 'providerId',
+          'serviceTitle', 'category', 'documentType', 'otherDocumentLabel',
+          'nationalityCountry', 'residenceCountry', 'hasBackSide', 'status',
+          'purposeReason', 'recipientLabel', 'consentGiven', 'consentAt',
+          'providerAuthorized', 'retentionExpiresAt', 'statusNote',
+          'accessCount', 'lastAccessedBy', 'lastAccessedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'reservationId', 'folderId', 'clientId', 'providerOwnerId', 'providerId',
+          'serviceTitle', 'category', 'documentType', 'otherDocumentLabel',
+          'nationalityCountry', 'residenceCountry', 'hasBackSide', 'status',
+          'purposeReason', 'recipientLabel', 'consentGiven', 'consentAt',
+          'providerAuthorized', 'retentionExpiresAt', 'statusNote',
+          'accessCount', 'lastAccessedBy', 'lastAccessedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.reservationId)
+        && isValidId(data.folderId)
+        && isValidId(data.clientId)
+        && isValidId(data.providerOwnerId)
+        && isValidId(data.providerId)
+        && data.serviceTitle is string && data.serviceTitle.size() >= 1 && data.serviceTitle.size() <= 160
+        && isValidCategory(data.category)
+        && data.documentType is string && data.documentType in ['none', 'national_id', 'passport', 'residence_permit', 'other_official']
+        && data.otherDocumentLabel is string && data.otherDocumentLabel.size() <= 120
+        && data.nationalityCountry is string && data.nationalityCountry.size() <= 60
+        && data.residenceCountry is string && data.residenceCountry.size() <= 60
+        && data.hasBackSide is bool
+        && data.status is string && data.status in [
+          'not_requested', 'requested', 'submitted_by_client', 'pending_verification',
+          'shared_with_provider', 'accepted', 'rejected', 'renewal_required', 'deleted_retention_policy'
+        ]
+        && data.purposeReason is string && data.purposeReason.size() <= 400
+        && data.recipientLabel is string && data.recipientLabel.size() <= 180
+        && data.consentGiven is bool
+        && data.consentAt is string && data.consentAt.size() <= 40
+        && data.providerAuthorized is bool
+        && (!(data.providerAuthorized == true) || (data.consentGiven == true && data.providerOwnerId != 'manual_concierge'))
+        && data.retentionExpiresAt is string && data.retentionExpiresAt.size() <= 40
+        && data.statusNote is string && data.statusNote.size() <= 400
+        && data.accessCount is int && data.accessCount >= 0
+        && data.lastAccessedBy is string && data.lastAccessedBy.size() <= 128
+        && data.lastAccessedAt is string && data.lastAccessedAt.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIdentityVault(data) {
+      return data.keys().hasAll([
+          'reservationId', 'clientId', 'providerOwnerId',
+          'frontMimeType', 'frontCipherPayload',
+          'backMimeType', 'backCipherPayload',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'reservationId', 'clientId', 'providerOwnerId',
+          'frontMimeType', 'frontCipherPayload',
+          'backMimeType', 'backCipherPayload',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.reservationId)
+        && isValidId(data.clientId)
+        && isValidId(data.providerOwnerId)
+        && data.frontMimeType is string && data.frontMimeType in ['image/jpeg', 'image/png', 'image/webp']
+        && data.frontCipherPayload is string && data.frontCipherPayload.size() >= 16 && data.frontCipherPayload.size() <= 750000
+        && data.backMimeType is string && (data.backMimeType == '' || data.backMimeType in ['image/jpeg', 'image/png', 'image/webp'])
+        && data.backCipherPayload is string && data.backCipherPayload.size() <= 750000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIdentityAccessLog(data) {
+      return data.keys().hasAll(['reservationId', 'actorId', 'actorRole', 'action', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['reservationId', 'actorId', 'actorRole', 'action', 'summary', 'createdAt'])
+        && isValidId(data.reservationId)
+        && isValidId(data.actorId)
+        && data.actorRole is string && data.actorRole in ['traveler', 'provider', 'admin']
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.summary is string && data.summary.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
     // --- Connectivity Probe ---
     match /test/connection {
       allow get: if true;
@@ -998,6 +1081,125 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
 
       allow update, delete: if false;
+    }
+
+    // --- 12. Reservation-Scoped Identity Verification & Private Encrypted Vault ---
+    match /identity_verifications/{reservationId} {
+      allow get: if isSignedIn()
+        && isValidId(reservationId)
+        && (
+          existing().clientId == request.auth.uid
+          || (existing().providerOwnerId != 'manual_concierge' && existing().providerOwnerId == request.auth.uid)
+          || isAdmin()
+        );
+
+      allow list: if isSignedIn()
+        && (
+          existing().clientId == request.auth.uid
+          || (existing().providerOwnerId != 'manual_concierge' && existing().providerOwnerId == request.auth.uid)
+          || isBootstrappedAdmin()
+        );
+
+      allow create: if isVerifiedUser()
+        && isValidId(reservationId)
+        && isValidIdentityVerification(incoming())
+        && incoming().reservationId == reservationId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          incoming().clientId == request.auth.uid
+          || (incoming().providerOwnerId != 'manual_concierge' && incoming().providerOwnerId == request.auth.uid && incoming().status == 'requested')
+          || isAdmin()
+        );
+
+      allow update: if isVerifiedUser()
+        && isValidId(reservationId)
+        && isValidIdentityVerification(incoming())
+        && incoming().reservationId == existing().reservationId
+        && incoming().folderId == existing().folderId
+        && incoming().clientId == existing().clientId
+        && incoming().providerOwnerId == existing().providerOwnerId
+        && incoming().providerId == existing().providerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().clientId == request.auth.uid
+            && (incoming().status != 'accepted' || existing().status == 'accepted'))
+          || (existing().providerOwnerId != 'manual_concierge'
+            && existing().providerOwnerId == request.auth.uid
+            && incoming().consentGiven == existing().consentGiven
+            && incoming().providerAuthorized == existing().providerAuthorized)
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin() && isValidId(reservationId);
+
+      // Strictly private non-listable image vault: ONLY traveler owner or explicitly authorized reservation provider (Admin has NO read access to raw documents!)
+      match /private_vault/{vaultId} {
+        allow list: if false;
+
+        allow get: if isVerifiedUser()
+          && vaultId == 'files'
+          && exists(/databases/$(database)/documents/identity_verifications/$(reservationId))
+          && (
+            get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.clientId == request.auth.uid
+            || (
+              get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.providerOwnerId != 'manual_concierge'
+              && get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.providerOwnerId == request.auth.uid
+              && get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.consentGiven == true
+              && get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.providerAuthorized == true
+              && get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.status in ['shared_with_provider', 'accepted', 'pending_verification']
+            )
+          );
+
+        allow create: if isVerifiedUser()
+          && vaultId == 'files'
+          && isValidIdentityVault(incoming())
+          && incoming().reservationId == reservationId
+          && incoming().clientId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isVerifiedUser()
+          && vaultId == 'files'
+          && isValidIdentityVault(incoming())
+          && incoming().reservationId == reservationId
+          && incoming().clientId == request.auth.uid
+          && incoming().clientId == existing().clientId
+          && (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time)
+          && incoming().updatedAt == request.time;
+
+        allow delete: if isVerifiedUser()
+          && vaultId == 'files'
+          && exists(/databases/$(database)/documents/identity_verifications/$(reservationId))
+          && (
+            get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.clientId == request.auth.uid
+            || isAdmin()
+          );
+      }
+
+      // Immutable traceability logs for identity access & governance
+      match /access_logs/{logId} {
+        allow get, list: if isSignedIn()
+          && exists(/databases/$(database)/documents/identity_verifications/$(reservationId))
+          && (
+            get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.clientId == request.auth.uid
+            || (
+              get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.providerOwnerId != 'manual_concierge'
+              && get(/databases/$(database)/documents/identity_verifications/$(reservationId)).data.providerOwnerId == request.auth.uid
+            )
+            || isAdmin()
+          );
+
+        allow create: if isVerifiedUser()
+          && isValidId(logId)
+          && isValidIdentityAccessLog(incoming())
+          && incoming().reservationId == reservationId
+          && incoming().actorId == request.auth.uid
+          && incoming().createdAt == request.time;
+
+        allow update, delete: if false;
+      }
     }
   }
 }

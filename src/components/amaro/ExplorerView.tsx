@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BookOpen,
   Building2,
@@ -66,6 +66,12 @@ interface ExplorerViewProps {
     participants: number
   ) => Promise<void>;
   onSubmitCulturalStory: (cityId: string, title: string, story: string) => Promise<boolean>;
+  externalJump?: {
+    cityId?: string;
+    category?: ServiceCategory;
+    itemId?: string;
+    nonce: number;
+  } | null;
 }
 
 type ExplorerSpace =
@@ -132,6 +138,7 @@ export function ExplorerView({
   onAddServiceToJourney,
   onRequestReservation,
   onSubmitCulturalStory,
+  externalJump,
 }: ExplorerViewProps) {
   const t = TRANSLATIONS[locale];
 
@@ -169,6 +176,37 @@ export function ExplorerView({
   const [storyBody, setStoryBody] = useState<string>('');
   const [isSavingStory, setIsSavingStory] = useState<boolean>(false);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!externalJump) return;
+    if (externalJump.cityId) {
+      setSelectedCityId(externalJump.cityId);
+    } else {
+      setSelectedCityId('all');
+    }
+    if (externalJump.category === 'accommodation') {
+      setSpace('accommodations');
+      setSelectedCategory('accommodation');
+    } else if (externalJump.category === 'transport') {
+      setSpace('transports');
+      setSelectedCategory('transport');
+    } else if (externalJump.category === 'site') {
+      setSpace('sites');
+      setSelectedCategory('site');
+    } else if (externalJump.category) {
+      setSpace('services');
+      setSelectedCategory(externalJump.category);
+    } else if (externalJump.cityId) {
+      setSpace('overview');
+      setSelectedCategory('all');
+    }
+    if (externalJump.itemId) {
+      const target = catalogue.find((c) => c.id === externalJump.itemId);
+      if (target) {
+        setDetailItem(target);
+      }
+    }
+  }, [externalJump, catalogue]);
 
   const activeCountry =
     COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) || COUNTRIES_REGISTRY[0];
@@ -1127,6 +1165,12 @@ export function ExplorerView({
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
                     Statut initial : « En attente de disponibilité ». Aucun débit automatique n’est effectué.
+                  </p>
+                  <p className="text-[11px] text-teal-800 dark:text-teal-300 mt-1">
+                    {selectedItemForAction.item.category === 'accommodation' ||
+                    selectedItemForAction.item.category === 'transport'
+                      ? 'Justificatif d’identité : non demandé maintenant ; transmissible en coffre privé chiffré uniquement lors de la finalisation si l’établissement l’exige.'
+                      : 'Aucune pièce d’identité n’est demandée pour cette prestation.'}
                   </p>
                 </div>
               ) : (

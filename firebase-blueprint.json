@@ -499,6 +499,125 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorId", "action", "targetId", "summary", "createdAt"]
+    },
+    "IdentityVerification": {
+      "title": "IdentityVerification",
+      "description": "Reservation-scoped identity verification governance record without raw images",
+      "type": "object",
+      "properties": {
+        "reservationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerOwnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "documentType": {
+          "type": "string",
+          "enum": ["none", "national_id", "passport", "residence_permit", "other_official"]
+        },
+        "otherDocumentLabel": { "type": "string", "maxLength": 120 },
+        "nationalityCountry": { "type": "string", "maxLength": 60 },
+        "residenceCountry": { "type": "string", "maxLength": 60 },
+        "hasBackSide": { "type": "boolean" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "not_requested",
+            "requested",
+            "submitted_by_client",
+            "pending_verification",
+            "shared_with_provider",
+            "accepted",
+            "rejected",
+            "renewal_required",
+            "deleted_retention_policy"
+          ]
+        },
+        "purposeReason": { "type": "string", "maxLength": 400 },
+        "recipientLabel": { "type": "string", "maxLength": 180 },
+        "consentGiven": { "type": "boolean" },
+        "consentAt": { "type": "string", "maxLength": 40 },
+        "providerAuthorized": { "type": "boolean" },
+        "retentionExpiresAt": { "type": "string", "maxLength": 40 },
+        "statusNote": { "type": "string", "maxLength": 400 },
+        "accessCount": { "type": "integer" },
+        "lastAccessedBy": { "type": "string", "maxLength": 128 },
+        "lastAccessedAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "reservationId",
+        "folderId",
+        "clientId",
+        "providerOwnerId",
+        "providerId",
+        "serviceTitle",
+        "category",
+        "documentType",
+        "otherDocumentLabel",
+        "nationalityCountry",
+        "residenceCountry",
+        "hasBackSide",
+        "status",
+        "purposeReason",
+        "recipientLabel",
+        "consentGiven",
+        "consentAt",
+        "providerAuthorized",
+        "retentionExpiresAt",
+        "statusNote",
+        "accessCount",
+        "lastAccessedBy",
+        "lastAccessedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "IdentityVaultFile": {
+      "title": "IdentityVaultFile",
+      "description": "Encrypted private identity image payload strictly isolated from public, other providers, and unnecessary admin browsing",
+      "type": "object",
+      "properties": {
+        "reservationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerOwnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "frontMimeType": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"] },
+        "frontCipherPayload": { "type": "string", "maxLength": 750000 },
+        "backMimeType": { "type": "string", "maxLength": 30 },
+        "backCipherPayload": { "type": "string", "maxLength": 750000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "reservationId",
+        "clientId",
+        "providerOwnerId",
+        "frontMimeType",
+        "frontCipherPayload",
+        "backMimeType",
+        "backCipherPayload",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "IdentityAccessLog": {
+      "title": "IdentityAccessLog",
+      "description": "Immutable traceability log of identity document submissions, views, authorizations, and deletions",
+      "type": "object",
+      "properties": {
+        "reservationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorRole": { "type": "string", "enum": ["traveler", "provider", "admin"] },
+        "action": { "type": "string", "maxLength": 80 },
+        "summary": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reservationId", "actorId", "actorRole", "action", "summary", "createdAt"]
     }
   },
   "firestore": {
@@ -565,6 +684,18 @@
     "/audit_logs/{logId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
       "description": "Append-only administrative audit logs"
+    },
+    "/identity_verifications/{reservationId}": {
+      "schema": { "$ref": "#/entities/IdentityVerification" },
+      "description": "Reservation-scoped identity verification metadata and consent governance"
+    },
+    "/identity_verifications/{reservationId}/private_vault/{vaultId}": {
+      "schema": { "$ref": "#/entities/IdentityVaultFile" },
+      "description": "Non-listable encrypted private identity document vault accessible only to traveler and authorized reservation provider"
+    },
+    "/identity_verifications/{reservationId}/access_logs/{logId}": {
+      "schema": { "$ref": "#/entities/IdentityAccessLog" },
+      "description": "Immutable traceability log for identity verification operations"
     }
   }
 }

@@ -3,7 +3,18 @@ import express, { type Express, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
-import type { CurrencyCode, ServiceCategory } from '../types/amaro';
+import type {
+  AssistantChatHistoryItem,
+  CurrencyCode,
+  IdentityDocumentType,
+  IdentityVerificationStatus,
+  ServiceCategory,
+} from '../types/amaro';
+import {
+  analyzeConversationAndCatalogue,
+  buildConversationalSystemPrompt,
+  buildResilientHumanReply,
+} from './assistantKnowledge';
 import {
   BCEAO_EUR_TO_XOF,
   buildDeterministicItemId,
@@ -19,7 +30,18 @@ import {
   CloudFirestoreServerStore,
   ConflictError,
   type AmaroServerStore,
+  type ServerIdentityMetadataRecord,
 } from './firestoreStore';
+import {
+  buildDefaultIdentityPurpose,
+  computeRetentionExpiryIso,
+  decryptVaultPayload,
+  documentRequiresBackSide,
+  encryptVaultPayload,
+  isIdentityNormallyApplicable,
+  isRetentionExpired,
+  validateAndInspectIdentityDataUrl,
+} from './identityVault';
 import {
   createFirebaseAdminTokenVerifier,
   createRequireAdmin,
@@ -46,6 +68,13 @@ const VALID_CATEGORIES: ReadonlySet<string> = new Set([
 
 const VALID_CURRENCIES: ReadonlySet<string> = new Set(['XOF', 'EUR', 'USD']);
 
+const VALID_ID_DOC_TYPES: ReadonlySet<string> = new Set([
+  'national_id',
+  'passport',
+  'residence_permit',
+  'other_official',
+]);
+
 export interface AmaroAppDependencies {
   projectId: string;
   databaseId: string;
@@ -56,6 +85,7 @@ export interface AmaroAppDependencies {
     prompt: string;
     locale: 'fr' | 'en';
     systemInstruction: string;
+    history?: AssistantChatHistoryItem[];
   }) => Promise<string>;
   githubFetcher?: typeof fetch;
   assistantMaxPerIpWindow?: number;
@@ -167,6 +197,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
   const app = express();
   app.disable('x-powered-by');
+  // Scoped payload allowance strictly for front+back compressed identity photographs (max 450 KB binary per side)
+  app.use('/api/amaro/identity/submit', express.json({ limit: '1500kb' }));
   app.use(express.json({ limit: '256kb' }));
 
   // Basic security headers on API responses
@@ -187,13 +219,14 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     deps.reservationMaxPerWindow ?? 12,
     60_000
   );
+  const identityLimiter = new SlidingWindowRateLimiter(20, 60_000);
   const githubAdminLimiter = new SlidingWindowRateLimiter(25, 60_000);
   const assistantIpLimiter = new SlidingWindowRateLimiter(
-    deps.assistantMaxPerIpWindow ?? 12,
+    deps.assistantMaxPerIpWindow ?? 18,
     5 * 60_000
   );
   const assistantUserLimiter = new SlidingWindowRateLimiter(
-    deps.assistantMaxPerUserWindow ?? 25,
+    deps.assistantMaxPerUserWindow ?? 35,
     5 * 60_000
   );
 
@@ -977,7 +1010,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   );
 
   // ===========================================================================
-  // 4. AMARO ASSISTANT — FREE PUBLIC ACCESS + RATE LIMITING + SECRET REDACTION
+  // 4. AMARO CONVERSATIONAL ASSISTANT — NATURAL DIALOGUE + REAL CATALOGUE + ZERO TECHNICAL ERRORS
   // ===========================================================================
   app.post('/api/amaro/assistant', async (req: Request, res: Response) => {
     // Optional token check to grant higher quota to verified travelers while preserving free unauthenticated access
@@ -1000,51 +1033,82 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       res.setHeader('Retry-After', String(rl.retryAfterSec));
       res.status(429).json({
         error:
-          'Limite d’utilisation temporaire atteinte pour Amaro Assistant. Réessayez dans quelques minutes.',
+          'Nous recevons beaucoup de messages en ce moment. Patientez quelques instants avant votre prochaine question.',
       });
       return;
     }
 
-    const prompt = String(req.body?.message || '').trim();
+    const prompt = String(req.body?.message ?? '').trim();
     const locale: 'fr' | 'en' = req.body?.locale === 'en' ? 'en' : 'fr';
     const rawContext = req.body?.journeyContext ?? null;
+    const rawHistory: unknown[] = Array.isArray(req.body?.history)
+      ? req.body.history.slice(-16)
+      : [];
 
     if (!prompt || prompt.length > 1500) {
       res.status(400).json({
-        error: 'Question invalide ou trop longue (maximum 1 500 caractères).',
+        error:
+          locale === 'en'
+            ? 'Please write a short message (up to 1,500 characters) so I can help you.'
+            : 'Écrivez un message de moins de 1 500 caractères afin que je puisse vous répondre clairement.',
       });
       return;
     }
+
+    const cleanHistory: AssistantChatHistoryItem[] = rawHistory
+      .filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item && typeof item === 'object')
+      )
+      .map(
+        (item): AssistantChatHistoryItem => ({
+          role: item.role === 'assistant' ? 'assistant' : 'user',
+          content: String(item.content || '').trim().slice(0, 1200),
+        })
+      )
+      .filter((item) => item.content.length > 0);
 
     let serializedContext = '';
     if (rawContext !== null && rawContext !== undefined) {
       if (typeof rawContext !== 'object' || Array.isArray(rawContext)) {
-        res.status(400).json({ error: 'Format de contexte de voyage invalide.' });
+        res.status(400).json({
+          error: 'Le contexte transmis n’est pas reconnu.',
+        });
         return;
       }
       serializedContext = JSON.stringify(rawContext);
       if (serializedContext.length > 8_000) {
-        res.status(400).json({ error: 'Contexte de voyage trop volumineux.' });
-        return;
+        serializedContext = serializedContext.slice(0, 8_000);
       }
     }
 
-    const contextBlock = serializedContext
-      ? `\nContexte autorisé du Dossier de Voyage du client : ${serializedContext}`
-      : '\nLe voyageur n’a pas partagé de Dossier de Voyage actif pour cette question.';
+    const analysis = analyzeConversationAndCatalogue(
+      prompt,
+      cleanHistory,
+      Boolean(verifiedUid),
+      locale
+    );
 
-    const systemInstruction =
-      locale === 'en'
-        ? `You are Amaro Assistant, part of Amaro Journey Intelligence on AMARO.VOYAGE (first operational country: Benin — Cotonou, Abomey-Calavi, Parakou, with international architecture).
-Strict rules:
-1. Distinguish clearly between VERIFIED general facts and INDICATIVE suggestions.
-2. NEVER invent exact hotel prices, real-time table/room availabilities, schedules, or unverified emergency numbers. Refer the traveler to the Amaro Explorer catalogue for verified tariffs and to Amaro Rescue for verified Benin official numbers (Police 117, Firefighters/SAMU 118).
-3. Keep answers concise, warm, structured, and easy to read on an Android smartphone.${contextBlock}`
-        : `Tu es Amaro Assistant, propulsé par Amaro Journey Intelligence sur la plateforme AMARO.VOYAGE (premier pays opérationnel : Bénin — Cotonou, Abomey-Calavi, Parakou, avec architecture internationale).
-Règles strictes :
-1. Distingue toujours clairement les INFORMATIONS VÉRIFIÉES des SUGGESTIONS D'ORIENTATION.
-2. N'invente JAMAIS de prix exacts, de disponibilités en temps réel, d'horaires non vérifiés ni de numéros d'urgence. Renvoie vers Amaro Explorer pour les prestations référencées et vers Amaro Rescue pour les numéros officiels vérifiés au Bénin (Police Républicaine : 117, Sapeurs-Pompiers : 118).
-3. Réponds en français simple, structuré, concis (maximum 180 mots) et agréable à lire sur téléphone Android.${contextBlock}`;
+    // Unclear symbols/gibberish -> immediate polite human clarification without wasting tokens
+    if (analysis.intent === 'unclear_gibberish') {
+      res.json({
+        reply: buildResilientHumanReply(analysis, locale),
+        suggestedItems: [],
+        suggestedActions: analysis.suggestedActions,
+        activeCityId: analysis.activeCityId,
+        activeCategory: analysis.activeCategory,
+        model: 'amaro-conversational-guard',
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const systemInstruction = buildConversationalSystemPrompt({
+      locale,
+      analysis,
+      journeyContextJson: serializedContext,
+      isSignedIn: Boolean(verifiedUid),
+    });
 
     try {
       if (deps.geminiResponder) {
@@ -1052,9 +1116,15 @@ Règles strictes :
           prompt,
           locale,
           systemInstruction,
+          history: cleanHistory,
         });
+        const cleanReply = redactSecrets(reply).trim();
         res.json({
-          reply: redactSecrets(reply) || 'Aucune réponse générée.',
+          reply: cleanReply || buildResilientHumanReply(analysis, locale),
+          suggestedItems: analysis.suggestedItems,
+          suggestedActions: analysis.suggestedActions,
+          activeCityId: analysis.activeCityId,
+          activeCategory: analysis.activeCategory,
           model: 'gemini-3.8-flash',
           generatedAt: new Date().toISOString(),
         });
@@ -1063,9 +1133,15 @@ Règles strictes :
 
       const apiKey = process.env.GEMINI_API_KEY?.trim();
       if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        res.status(503).json({
-          error:
-            'Clé GEMINI_API_KEY absente côté serveur. Vérifiez le panneau Settings > Secrets.',
+        res.json({
+          reply: buildResilientHumanReply(analysis, locale),
+          suggestedItems: analysis.suggestedItems,
+          suggestedActions: analysis.suggestedActions,
+          activeCityId: analysis.activeCityId,
+          activeCategory: analysis.activeCategory,
+          degradedFallback: true,
+          model: 'amaro-catalogue-counselor',
+          generatedAt: new Date().toISOString(),
         });
         return;
       }
@@ -1079,27 +1155,833 @@ Règles strictes :
         },
       });
 
+      const multiTurnContents = [
+        ...cleanHistory.map((turn) => ({
+          role: turn.role === 'assistant' ? ('model' as const) : ('user' as const),
+          parts: [{ text: turn.content }],
+        })),
+        {
+          role: 'user' as const,
+          parts: [{ text: prompt }],
+        },
+      ];
+
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: prompt,
+        contents: multiTurnContents,
         config: {
           systemInstruction,
         },
       });
 
+      const cleanText = redactSecrets(response.text || '').trim();
       res.json({
-        reply: redactSecrets(response.text || 'Aucune réponse générée.'),
+        reply: cleanText || buildResilientHumanReply(analysis, locale),
+        suggestedItems: analysis.suggestedItems,
+        suggestedActions: analysis.suggestedActions,
+        activeCityId: analysis.activeCityId,
+        activeCategory: analysis.activeCategory,
         model: 'gemini-3.8-flash',
         generatedAt: new Date().toISOString(),
       });
-    } catch (error: unknown) {
-      res.status(500).json({
-        error:
-          redactSecrets(error) ||
-          'Le service Amaro Assistant est momentanément indisponible.',
+    } catch {
+      // Section 2.8: NEVER expose raw server errors, JSON/syntax traces, or secrets to the traveler.
+      res.json({
+        reply: buildResilientHumanReply(analysis, locale),
+        suggestedItems: analysis.suggestedItems,
+        suggestedActions: analysis.suggestedActions,
+        activeCityId: analysis.activeCityId,
+        activeCategory: analysis.activeCategory,
+        degradedFallback: true,
+        model: 'amaro-catalogue-counselor',
+        generatedAt: new Date().toISOString(),
       });
     }
   });
+
+  // ===========================================================================
+  // 4B. RESERVATION-SCOPED TRAVELER IDENTITY VERIFICATION & ENCRYPTED VAULT
+  // ===========================================================================
+  async function checkCallerAdminFlag(uid: string, email: string, emailVerified: boolean, rawIdToken: string): Promise<boolean> {
+    if (!emailVerified) return false;
+    if (email === 'kayne3200@gmail.com') return true;
+    return store.isRegisteredAdmin(uid, rawIdToken);
+  }
+
+  app.get(
+    '/api/amaro/identity/:reservationId',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(reservationId)) {
+        res.status(400).json({ error: 'Identifiant de réservation invalide.' });
+        return;
+      }
+      if (!store.getReservation || !store.getIdentityMetadata) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const reservation = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!reservation) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+
+        const callerIsAdmin = await checkCallerAdminFlag(
+          caller.uid,
+          caller.email,
+          caller.emailVerified,
+          caller.rawIdToken
+        );
+        const isClient = reservation.clientId === caller.uid;
+        const isAssignedProvider =
+          reservation.providerOwnerId !== 'manual_concierge' &&
+          reservation.providerOwnerId === caller.uid;
+
+        if (!isClient && !isAssignedProvider && !callerIsAdmin) {
+          res.status(403).json({
+            error: 'Accès refusé : vous n’êtes pas autorisé à consulter le suivi d’identité de cette réservation.',
+          });
+          return;
+        }
+
+        const metadata = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        const accessLogs =
+          metadata && store.listIdentityAccessLogs
+            ? await store.listIdentityAccessLogs(reservationId, caller.rawIdToken)
+            : [];
+
+        const { createdAtRaw: _ignore, ...cleanMeta } = metadata || ({} as any);
+        res.json({
+          reservationId,
+          applicableByDefault: isIdentityNormallyApplicable(reservation.category),
+          defaultPurpose: buildDefaultIdentityPurpose(reservation.category),
+          hasVerifiedProviderAccount: reservation.providerOwnerId !== 'manual_concierge',
+          metadata: metadata ? cleanMeta : null,
+          accessLogs,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Impossible de lire le suivi du justificatif.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/identity/request',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const rl = identityLimiter.check(`id-req:${caller.uid}`);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        res.status(429).json({ error: 'Trop de requêtes. Réessayez dans une minute.' });
+        return;
+      }
+
+      const reservationId = String(req.body?.reservationId || '').trim();
+      const customReason = String(req.body?.purposeReason || '').trim().slice(0, 380);
+      const customRecipient = String(req.body?.recipientLabel || '').trim().slice(0, 160);
+
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(reservationId)) {
+        res.status(400).json({ error: 'Identifiant de réservation invalide.' });
+        return;
+      }
+      if (!store.getReservation || !store.getIdentityMetadata || !store.updateIdentityGovernanceOrStatus) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const reservation = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!reservation) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+
+        const callerIsAdmin = await checkCallerAdminFlag(
+          caller.uid,
+          caller.email,
+          caller.emailVerified,
+          caller.rawIdToken
+        );
+        const isAssignedProvider =
+          reservation.providerOwnerId !== 'manual_concierge' &&
+          reservation.providerOwnerId === caller.uid;
+
+        if (!isAssignedProvider && !callerIsAdmin) {
+          res.status(403).json({
+            error: 'Seul le prestataire titulaire de cette réservation ou l’administration peut demander un justificatif.',
+          });
+          return;
+        }
+
+        const existing = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        const purposeReason =
+          customReason || existing?.purposeReason || buildDefaultIdentityPurpose(reservation.category);
+        const recipientLabel =
+          customRecipient ||
+          existing?.recipientLabel ||
+          (reservation.providerOwnerId === 'manual_concierge'
+            ? `Établissement « ${reservation.serviceTitle} » (présentation sur place tant que le compte prestataire n’est pas activé)`
+            : `Prestataire vérifié titulaire de « ${reservation.serviceTitle} »`);
+
+        const nextMeta: ServerIdentityMetadataRecord = {
+          reservationId,
+          folderId: reservation.folderId,
+          clientId: reservation.clientId,
+          providerOwnerId: reservation.providerOwnerId,
+          providerId: reservation.providerId,
+          serviceTitle: reservation.serviceTitle.slice(0, 155),
+          category: reservation.category,
+          documentType: existing?.documentType || 'none',
+          otherDocumentLabel: existing?.otherDocumentLabel || '',
+          nationalityCountry: existing?.nationalityCountry || '',
+          residenceCountry: existing?.residenceCountry || '',
+          hasBackSide: existing?.hasBackSide || false,
+          status: 'requested',
+          purposeReason,
+          recipientLabel,
+          consentGiven: false,
+          consentAt: '',
+          providerAuthorized: false,
+          retentionExpiresAt: computeRetentionExpiryIso(reservation.scheduledDate, 7),
+          statusNote: 'Justificatif demandé pour finaliser la prestation.',
+          accessCount: existing?.accessCount || 0,
+          lastAccessedBy: existing?.lastAccessedBy || '',
+          lastAccessedAt: existing?.lastAccessedAt || '',
+          createdAtRaw: existing?.createdAtRaw,
+        };
+
+        await store.updateIdentityGovernanceOrStatus(
+          {
+            metadata: nextMeta,
+            isUpdate: Boolean(existing),
+            deleteVault: false,
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: callerIsAdmin ? 'admin' : 'provider',
+              action: 'REQUEST_DOCUMENT',
+              summary: `Demande de justificatif d’identité pour « ${reservation.serviceTitle} ».`,
+            },
+            notification: {
+              id: `notif-idreq-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              recipientId: reservation.clientId,
+              senderId: caller.uid,
+              title: 'Justificatif d’identité demandé',
+              body: `Un justificatif d’identité est demandé pour finaliser « ${reservation.serviceTitle} » (${purposeReason}).`,
+            },
+          },
+          caller.rawIdToken
+        );
+
+        res.json({ ok: true, status: 'requested' });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Impossible d’enregistrer la demande.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/identity/submit',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const rl = identityLimiter.check(`id-sub:${caller.uid}`);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        res.status(429).json({ error: 'Trop d’envois rapprochés. Patientez quelques instants.' });
+        return;
+      }
+
+      const reservationId = String(req.body?.reservationId || '').trim();
+      const documentType = String(req.body?.documentType || '').trim() as IdentityDocumentType;
+      const otherDocumentLabel = String(req.body?.otherDocumentLabel || '').trim().slice(0, 110);
+      const nationalityCountry = String(req.body?.nationalityCountry || '').trim().slice(0, 56);
+      const residenceCountry = String(req.body?.residenceCountry || '').trim().slice(0, 56);
+      const consentGiven = req.body?.consentGiven === true;
+      const authorizeProvider = req.body?.authorizeProviderTransmission !== false;
+
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(reservationId)) {
+        res.status(400).json({ error: 'Identifiant de réservation invalide.' });
+        return;
+      }
+      if (!VALID_ID_DOC_TYPES.has(documentType)) {
+        res.status(400).json({
+          error:
+            'Veuillez sélectionner un type de pièce reconnu : Carte nationale d’identité, Passeport, Carte de séjour ou Autre document officiel.',
+        });
+        return;
+      }
+      if (documentType === 'other_official' && otherDocumentLabel.length < 3) {
+        res.status(400).json({
+          error: 'Veuillez préciser l’intitulé exact de l’autre document officiel présenté.',
+        });
+        return;
+      }
+      if (nationalityCountry.length < 2 || residenceCountry.length < 2) {
+        res.status(400).json({
+          error: 'Veuillez indiquer votre nationalité et votre pays de résidence.',
+        });
+        return;
+      }
+      if (!consentGiven) {
+        res.status(400).json({
+          error:
+            'Votre accord explicite est obligatoire avant l’enregistrement et la transmission sécurisée de votre pièce d’identité.',
+        });
+        return;
+      }
+      if (!store.getReservation || !store.getIdentityMetadata || !store.saveIdentitySubmission) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      // Validate front image (strict MIME + binary size <= 450 KB + real JPEG/PNG/WebP magic bytes)
+      const frontCheck = validateAndInspectIdentityDataUrl(req.body?.frontDataUrl, 'recto');
+      if (!frontCheck.ok) {
+        res.status(400).json({ error: frontCheck.error });
+        return;
+      }
+
+      const rawBack = typeof req.body?.backDataUrl === 'string' ? req.body.backDataUrl.trim() : '';
+      const backRequired = documentRequiresBackSide(documentType);
+      if (backRequired && !rawBack) {
+        res.status(400).json({
+          error:
+            'Pour une carte nationale d’identité ou une carte de séjour, veuillez joindre le recto ET le verso.',
+        });
+        return;
+      }
+
+      let validatedBackMime: '' | 'image/jpeg' | 'image/png' | 'image/webp' = '';
+      let encryptedBack = '';
+      if (rawBack) {
+        const backCheck = validateAndInspectIdentityDataUrl(rawBack, 'verso');
+        if (!backCheck.ok) {
+          res.status(400).json({ error: backCheck.error });
+          return;
+        }
+        validatedBackMime = backCheck.value.mimeType;
+        encryptedBack = encryptVaultPayload(backCheck.value.normalizedDataUrl, deps.projectId);
+      }
+
+      try {
+        const reservation = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!reservation) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+        if (reservation.clientId !== caller.uid) {
+          res.status(403).json({
+            error: 'Accès refusé : seul le voyageur titulaire de cette réservation peut transmettre sa pièce d’identité.',
+          });
+          return;
+        }
+        if (['cancelled', 'rejected', 'refunded'].includes(reservation.status)) {
+          res.status(409).json({
+            error: 'Cette réservation est clôturée : aucun justificatif n’est requis.',
+          });
+          return;
+        }
+
+        const existing = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        const encryptedFront = encryptVaultPayload(
+          frontCheck.value.normalizedDataUrl,
+          deps.projectId
+        );
+
+        // Honest provider scoping: if the listing is a public_directory entry without an active verified provider account (manual_concierge), NEVER transmit externally
+        const hasVerifiedProviderAccount = reservation.providerOwnerId !== 'manual_concierge';
+        const providerAuthorized = Boolean(hasVerifiedProviderAccount && authorizeProvider);
+        const resultingStatus: IdentityVerificationStatus = providerAuthorized
+          ? 'shared_with_provider'
+          : hasVerifiedProviderAccount
+          ? 'submitted_by_client'
+          : 'pending_verification';
+
+        const statusNote = providerAuthorized
+          ? 'Document chiffré transmis uniquement au prestataire titulaire de cette réservation avec votre accord.'
+          : hasVerifiedProviderAccount
+          ? 'Document déposé dans votre coffre chiffré (partage au prestataire désactivé tant que vous ne l’activez pas).'
+          : 'Établissement référencé sans compte prestataire connecté : votre pièce reste dans votre coffre privé chiffré sans envoi externe (présentez l’original sur place).';
+
+        const retentionExpiresAt = computeRetentionExpiryIso(reservation.scheduledDate, 7);
+        const nowIso = new Date().toISOString();
+
+        const nextMeta: ServerIdentityMetadataRecord = {
+          reservationId,
+          folderId: reservation.folderId,
+          clientId: caller.uid,
+          providerOwnerId: reservation.providerOwnerId,
+          providerId: reservation.providerId,
+          serviceTitle: reservation.serviceTitle.slice(0, 155),
+          category: reservation.category,
+          documentType,
+          otherDocumentLabel: documentType === 'other_official' ? otherDocumentLabel : '',
+          nationalityCountry,
+          residenceCountry,
+          hasBackSide: Boolean(encryptedBack),
+          status: resultingStatus,
+          purposeReason:
+            existing?.purposeReason || buildDefaultIdentityPurpose(reservation.category),
+          recipientLabel:
+            existing?.recipientLabel ||
+            (hasVerifiedProviderAccount
+              ? `Prestataire vérifié titulaire de « ${reservation.serviceTitle} »`
+              : `Coffre privé client uniquement (aucun compte prestataire connecté pour « ${reservation.serviceTitle} »)`),
+          consentGiven: true,
+          consentAt: nowIso,
+          providerAuthorized,
+          retentionExpiresAt,
+          statusNote,
+          accessCount: existing?.accessCount || 0,
+          lastAccessedBy: existing?.lastAccessedBy || '',
+          lastAccessedAt: existing?.lastAccessedAt || '',
+          createdAtRaw: existing?.createdAtRaw,
+        };
+
+        await store.saveIdentitySubmission(
+          {
+            metadata: nextMeta,
+            isUpdate: Boolean(existing),
+            vault: {
+              reservationId,
+              clientId: caller.uid,
+              providerOwnerId: reservation.providerOwnerId,
+              frontMimeType: frontCheck.value.mimeType,
+              frontCipherPayload: encryptedFront,
+              backMimeType: validatedBackMime,
+              backCipherPayload: encryptedBack,
+            },
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: 'traveler',
+              action: providerAuthorized ? 'SUBMIT_AND_AUTHORIZE_PROVIDER' : 'SUBMIT_PRIVATE_VAULT',
+              summary: `Dépôt chiffré (${documentType}) avec consentement explicite. Conservation jusqu’au ${retentionExpiresAt}.`,
+            },
+            notification: providerAuthorized
+              ? {
+                  id: `notif-idsub-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+                  recipientId: reservation.providerOwnerId,
+                  senderId: caller.uid,
+                  title: 'Justificatif d’identité mis à disposition',
+                  body: `Le voyageur a autorisé la consultation sécurisée de son justificatif pour « ${reservation.serviceTitle} ».`,
+                }
+              : null,
+          },
+          caller.rawIdToken
+        );
+
+        const { createdAtRaw: _ignore, ...cleanMeta } = nextMeta;
+        res.status(201).json({
+          ok: true,
+          status: resultingStatus,
+          providerAuthorized,
+          retentionExpiresAt,
+          metadata: cleanMeta,
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: redactSecrets(err) || 'Échec de l’enregistrement chiffré du justificatif.',
+        });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/identity/:reservationId/view',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const rl = identityLimiter.check(`id-view:${caller.uid}`);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        res.status(429).json({ error: 'Trop de consultations rapprochées.' });
+        return;
+      }
+
+      const reservationId = String(req.params.reservationId || '').trim();
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(reservationId)) {
+        res.status(400).json({ error: 'Identifiant de réservation invalide.' });
+        return;
+      }
+      if (
+        !store.getIdentityMetadata ||
+        !store.getIdentityVault ||
+        !store.updateIdentityGovernanceOrStatus
+      ) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const metadata = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        if (!metadata) {
+          res.status(404).json({ error: 'Aucun justificatif enregistré pour cette réservation.' });
+          return;
+        }
+
+        const isClientOwner = metadata.clientId === caller.uid;
+        const isAuthorizedReservationProvider =
+          metadata.providerOwnerId !== 'manual_concierge' &&
+          metadata.providerOwnerId === caller.uid;
+
+        // STRICT PRIVACY ENFORCEMENT (Section 1.4, 1.5 & 1.6):
+        // - Other providers and unrelated users are strictly blocked (403).
+        // - Even the platform Administrator is DENIED access to raw identity images unless they are personally the client or provider of that booking!
+        if (!isClientOwner && !isAuthorizedReservationProvider) {
+          res.status(403).json({
+            error:
+              'Accès strictement refusé : seuls le voyageur titulaire et le prestataire expressément autorisé de cette réservation peuvent consulter l’image.',
+          });
+          return;
+        }
+
+        if (metadata.status === 'deleted_retention_policy' || !metadata.consentGiven) {
+          res.status(410).json({
+            error: 'Ce justificatif a été supprimé ou le consentement a été retiré par le client.',
+          });
+          return;
+        }
+
+        if (isRetentionExpired(metadata.retentionExpiresAt)) {
+          res.status(410).json({
+            error: `La durée légale de conservation (${metadata.retentionExpiresAt}) a expiré : consultation bloquée.`,
+          });
+          return;
+        }
+
+        if (isAuthorizedReservationProvider && !isClientOwner) {
+          if (
+            !metadata.providerAuthorized ||
+            !['shared_with_provider', 'accepted', 'pending_verification'].includes(metadata.status)
+          ) {
+            res.status(403).json({
+              error:
+                'Accès non autorisé : le voyageur n’a pas autorisé la consultation de ce document ou l’accès a été révoqué.',
+            });
+            return;
+          }
+        }
+
+        const vault = await store.getIdentityVault(reservationId, caller.rawIdToken);
+        if (!vault) {
+          res.status(410).json({
+            error: 'Les fichiers chiffrés de ce justificatif ne sont plus présents dans le coffre.',
+          });
+          return;
+        }
+
+        const frontDataUrl = decryptVaultPayload(vault.frontCipherPayload, deps.projectId);
+        const backDataUrl = vault.backCipherPayload
+          ? decryptVaultPayload(vault.backCipherPayload, deps.projectId)
+          : '';
+
+        const nowIso = new Date().toISOString();
+        const viewerRole: 'traveler' | 'provider' = isClientOwner ? 'traveler' : 'provider';
+        const updatedMeta: ServerIdentityMetadataRecord = {
+          ...metadata,
+          accessCount: metadata.accessCount + 1,
+          lastAccessedBy: viewerRole === 'provider' ? `Prestataire (${caller.uid.slice(0, 8)})` : 'Voyageur titulaire',
+          lastAccessedAt: nowIso,
+        };
+
+        await store.updateIdentityGovernanceOrStatus(
+          {
+            metadata: updatedMeta,
+            isUpdate: true,
+            deleteVault: false,
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: viewerRole,
+              action: 'VIEW_DOCUMENT',
+              summary:
+                viewerRole === 'provider'
+                  ? 'Consultation temporaire (120 s) du justificatif par le prestataire autorisé.'
+                  : 'Vérification du justificatif par le voyageur titulaire.',
+            },
+            notification: null,
+          },
+          caller.rawIdToken
+        );
+
+        res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+        res.json({
+          ok: true,
+          reservationId,
+          documentType: metadata.documentType,
+          hasBackSide: Boolean(backDataUrl),
+          frontDataUrl,
+          backDataUrl,
+          expiresInSeconds: 120,
+          recipientNotice: `Document strictement réservé à la réservation ${reservationId} (${metadata.serviceTitle}). Toute copie ou diffusion externe est interdite.`,
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: redactSecrets(err) || 'Impossible de déchiffrer le justificatif.',
+        });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/identity/:reservationId/provider-decision',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      const decision = String(req.body?.decision || '').trim();
+      const note = String(req.body?.note || '').trim().slice(0, 360);
+
+      if (!['accepted', 'rejected', 'renewal_required'].includes(decision)) {
+        res.status(400).json({
+          error: 'Décision invalide (attendu : accepted, rejected ou renewal_required).',
+        });
+        return;
+      }
+      if (!store.getIdentityMetadata || !store.updateIdentityGovernanceOrStatus) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const metadata = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        if (!metadata) {
+          res.status(404).json({ error: 'Aucun justificatif trouvé pour cette réservation.' });
+          return;
+        }
+        if (
+          metadata.providerOwnerId === 'manual_concierge' ||
+          metadata.providerOwnerId !== caller.uid
+        ) {
+          res.status(403).json({
+            error: 'Accès refusé : seul le prestataire titulaire de cette réservation peut valider ou refuser ce justificatif.',
+          });
+          return;
+        }
+
+        const nextStatus = decision as 'accepted' | 'rejected' | 'renewal_required';
+        const defaultNotes: Record<'accepted' | 'rejected' | 'renewal_required', string> = {
+          accepted: 'Justificatif d’identité vérifié et accepté par le prestataire.',
+          rejected: 'Justificatif refusé : document non conforme pour cette prestation.',
+          renewal_required: 'Photographie floue, coupée ou expirée : merci de transmettre une nouvelle image nette.',
+        };
+
+        const updatedMeta: ServerIdentityMetadataRecord = {
+          ...metadata,
+          status: nextStatus,
+          statusNote: note || defaultNotes[nextStatus],
+        };
+
+        await store.updateIdentityGovernanceOrStatus(
+          {
+            metadata: updatedMeta,
+            isUpdate: true,
+            deleteVault: false,
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: 'provider',
+              action: `PROVIDER_${nextStatus.toUpperCase()}`,
+              summary: updatedMeta.statusNote,
+            },
+            notification: {
+              id: `notif-iddec-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              recipientId: metadata.clientId,
+              senderId: caller.uid,
+              title:
+                nextStatus === 'accepted'
+                  ? 'Justificatif d’identité accepté'
+                  : nextStatus === 'renewal_required'
+                  ? 'Justificatif à renouveler'
+                  : 'Justificatif refusé',
+              body: `Pour « ${metadata.serviceTitle} » : ${updatedMeta.statusNote}`,
+            },
+          },
+          caller.rawIdToken
+        );
+
+        res.json({ ok: true, status: nextStatus, statusNote: updatedMeta.statusNote });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Mise à jour refusée.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/identity/:reservationId/revoke-or-delete',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      if (!store.getIdentityMetadata || !store.updateIdentityGovernanceOrStatus) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const metadata = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        if (!metadata) {
+          res.status(404).json({ error: 'Aucun justificatif trouvé.' });
+          return;
+        }
+        if (metadata.clientId !== caller.uid) {
+          res.status(403).json({
+            error: 'Seul le voyageur titulaire peut retirer son consentement et supprimer son document.',
+          });
+          return;
+        }
+
+        const updatedMeta: ServerIdentityMetadataRecord = {
+          ...metadata,
+          status: 'deleted_retention_policy',
+          consentGiven: false,
+          providerAuthorized: false,
+          statusNote:
+            'Consentement retiré par le voyageur : images chiffrées détruites immédiatement du coffre privé.',
+        };
+
+        await store.updateIdentityGovernanceOrStatus(
+          {
+            metadata: updatedMeta,
+            isUpdate: true,
+            deleteVault: true,
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: 'traveler',
+              action: 'WITHDRAW_CONSENT_AND_DELETE',
+              summary: 'Retrait du consentement client et destruction immédiate des fichiers chiffrés.',
+            },
+            notification: null,
+          },
+          caller.rawIdToken
+        );
+
+        res.json({ ok: true, status: 'deleted_retention_policy' });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de la suppression sécurisée.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/identity/:reservationId/admin-governance',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      const action = String(req.body?.action || '').trim();
+      const note = String(req.body?.note || '').trim().slice(0, 360);
+
+      if (
+        ![
+          'revoke_provider_access',
+          'authorize_provider_access',
+          'purge_retention_or_incident',
+          'request_renewal',
+        ].includes(action)
+      ) {
+        res.status(400).json({ error: 'Action de gouvernance invalide.' });
+        return;
+      }
+      if (!store.getIdentityMetadata || !store.updateIdentityGovernanceOrStatus) {
+        res.status(501).json({ error: 'Module de vérification d’identité non configuré.' });
+        return;
+      }
+
+      try {
+        const metadata = await store.getIdentityMetadata(reservationId, caller.rawIdToken);
+        if (!metadata) {
+          res.status(404).json({ error: 'Aucun dossier de justificatif trouvé.' });
+          return;
+        }
+
+        let updatedMeta: ServerIdentityMetadataRecord = { ...metadata };
+        let deleteVault = false;
+        let logCode = 'ADMIN_GOVERNANCE';
+
+        if (action === 'revoke_provider_access') {
+          updatedMeta = {
+            ...metadata,
+            providerAuthorized: false,
+            status: metadata.consentGiven ? 'pending_verification' : metadata.status,
+            statusNote: note || 'Autorisation prestataire révoquée par la gouvernance AMARO.',
+          };
+          logCode = 'ADMIN_REVOKE_PROVIDER_ACCESS';
+        } else if (action === 'authorize_provider_access') {
+          if (!metadata.consentGiven || metadata.providerOwnerId === 'manual_concierge') {
+            res.status(400).json({
+              error:
+                'Impossible d’autoriser la transmission sans consentement actif du voyageur et sans compte prestataire vérifié.',
+            });
+            return;
+          }
+          updatedMeta = {
+            ...metadata,
+            providerAuthorized: true,
+            status: 'shared_with_provider',
+            statusNote: note || 'Transmission au prestataire vérifié activée conformément au consentement client.',
+          };
+          logCode = 'ADMIN_AUTHORIZE_PROVIDER_ACCESS';
+        } else if (action === 'request_renewal') {
+          updatedMeta = {
+            ...metadata,
+            providerAuthorized: false,
+            status: 'renewal_required',
+            statusNote: note || 'Renouvellement du justificatif demandé par la gouvernance.',
+          };
+          logCode = 'ADMIN_REQUEST_RENEWAL';
+        } else {
+          // purge_retention_or_incident
+          deleteVault = true;
+          updatedMeta = {
+            ...metadata,
+            consentGiven: false,
+            providerAuthorized: false,
+            status: 'deleted_retention_policy',
+            statusNote:
+              note ||
+              'Suppression sécurisée appliquée selon la politique de conservation / sécurité des données.',
+          };
+          logCode = 'ADMIN_PURGE_VAULT';
+        }
+
+        await store.updateIdentityGovernanceOrStatus(
+          {
+            metadata: updatedMeta,
+            isUpdate: true,
+            deleteVault,
+            log: {
+              logId: `idlog-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+              reservationId,
+              actorId: caller.uid,
+              actorRole: 'admin',
+              action: logCode,
+              summary: updatedMeta.statusNote,
+            },
+            notification: null,
+          },
+          caller.rawIdToken
+        );
+
+        res.json({ ok: true, status: updatedMeta.status, providerAuthorized: updatedMeta.providerAuthorized });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de l’opération de gouvernance.' });
+      }
+    }
+  );
 
   // ===========================================================================
   // 5. ADMIN-ONLY GITHUB & SPCK EDITOR BACKUP ROUTES (SERVER-VERIFIED ADMIN)

@@ -31,6 +31,7 @@ import type {
   CulturalStoryDoc,
   CurrencyCode,
   DataOriginType,
+  IdentityVerificationDoc,
   JournalEntryDoc,
   JourneyFolderDoc,
   JourneyItemDoc,
@@ -148,6 +149,12 @@ interface RateInfo {
 
 function AmaroPlatform() {
   const [activeTab, setActiveTab] = useState<AmaroTab>('explorer');
+  const [explorerJump, setExplorerJump] = useState<{
+    cityId?: string;
+    category?: ServiceCategory;
+    itemId?: string;
+    nonce: number;
+  } | null>(null);
   const [locale, setLocale] = useState<LocaleCode>('fr');
   const [currency, setCurrency] = useState<CurrencyCode>('XOF');
   const [isDark, setIsDark] = useState<boolean>(false);
@@ -248,6 +255,17 @@ function AmaroPlatform() {
       summary: string;
     }>
   >([]);
+
+  // Scoped Identity Verification Metadata Maps (Zero raw images in Firestore root docs)
+  const [clientIdentityByRes, setClientIdentityByRes] = useState<
+    Record<string, IdentityVerificationDoc>
+  >({});
+  const [providerIdentityByRes, setProviderIdentityByRes] = useState<
+    Record<string, IdentityVerificationDoc>
+  >({});
+  const [adminIdentityByRes, setAdminIdentityByRes] = useState<
+    Record<string, IdentityVerificationDoc>
+  >({});
 
   const isBootstrappedAdmin =
     Boolean(authUser?.emailVerified) &&
@@ -599,6 +617,36 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'partner_referrals(owner)')
     );
 
+    const unsubClientIdentity = onSnapshot(
+      query(collection(db, 'identity_verifications'), where('clientId', '==', uid)),
+      (snap) => {
+        const map: Record<string, IdentityVerificationDoc> = {};
+        for (const d of snap.docs) {
+          map[d.id] = {
+            reservationId: d.id,
+            ...(d.data() as Omit<IdentityVerificationDoc, 'reservationId'>),
+          };
+        }
+        setClientIdentityByRes(map);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(client)')
+    );
+
+    const unsubProviderIdentity = onSnapshot(
+      query(collection(db, 'identity_verifications'), where('providerOwnerId', '==', uid)),
+      (snap) => {
+        const map: Record<string, IdentityVerificationDoc> = {};
+        for (const d of snap.docs) {
+          map[d.id] = {
+            reservationId: d.id,
+            ...(d.data() as Omit<IdentityVerificationDoc, 'reservationId'>),
+          };
+        }
+        setProviderIdentityByRes(map);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(provider)')
+    );
+
     return () => {
       unsubUserPub();
       unsubUserPriv();
@@ -611,6 +659,8 @@ function AmaroPlatform() {
       unsubMyServices();
       unsubMyPartner();
       unsubMyReferrals();
+      unsubClientIdentity();
+      unsubProviderIdentity();
     };
   }, [authUser?.uid]);
 
@@ -796,6 +846,21 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'partner_referrals(admin)')
     );
 
+    const u7 = onSnapshot(
+      collection(db, 'identity_verifications'),
+      (snap) => {
+        const map: Record<string, IdentityVerificationDoc> = {};
+        for (const d of snap.docs) {
+          map[d.id] = {
+            reservationId: d.id,
+            ...(d.data() as Omit<IdentityVerificationDoc, 'reservationId'>),
+          };
+        }
+        setAdminIdentityByRes(map);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(admin)')
+    );
+
     return () => {
       u0();
       u1();
@@ -804,6 +869,7 @@ function AmaroPlatform() {
       u4();
       u5();
       u6();
+      u7();
     };
   }, [isBootstrappedAdmin]);
 
@@ -1944,6 +2010,7 @@ function AmaroPlatform() {
             onAddServiceToJourney={handleAddServiceToJourney}
             onRequestReservation={handleRequestReservation}
             onSubmitCulturalStory={handleSubmitCulturalStory}
+            externalJump={explorerJump}
           />
         )}
 
@@ -1974,6 +2041,8 @@ function AmaroPlatform() {
             notifications={notifications}
             onMarkNotificationRead={handleMarkNotificationRead}
             lastBrainDiagnostic={lastBrainDiagnostic}
+            identityByReservation={clientIdentityByRes}
+            onNotify={showToast}
           />
         )}
 
@@ -1983,6 +2052,13 @@ function AmaroPlatform() {
             locale={locale}
             activeFolder={activeFolder}
             folderItems={folderItems}
+            isSignedIn={Boolean(authUser)}
+            onOpenExplorer={(cityId, category, itemId) => {
+              setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
+              setActiveTab('explorer');
+            }}
+            onOpenJourney={() => setActiveTab('journey')}
+            onRequireSignIn={() => void handleSignIn()}
           />
         )}
 
@@ -2026,6 +2102,8 @@ function AmaroPlatform() {
             onAdminModerateStory={handleAdminModerateStory}
             onAdminSaveSettings={handleAdminSaveSettings}
             onAdminSettleReservation={handleAdminSettleReservation}
+            providerIdentityByRes={providerIdentityByRes}
+            adminIdentityByRes={adminIdentityByRes}
             onNotify={showToast}
           />
         )}

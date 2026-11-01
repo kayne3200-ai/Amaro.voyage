@@ -19,7 +19,11 @@ import {
   type AtomicReferralPayload,
   type AtomicReservationPayload,
   type ServerFolderRecord,
+  type ServerIdentityAccessLogInput,
+  type ServerIdentityMetadataRecord,
+  type ServerIdentityVaultRecord,
   type ServerPartnerRecord,
+  type ServerReservationRecord,
 } from '../src/server/firestoreStore';
 import {
   createFirebaseAdminTokenVerifier,
@@ -28,7 +32,7 @@ import {
   redactSecrets,
   type TokenVerifierFn,
 } from '../src/server/securityMiddleware';
-import type { ReservationStatus } from '../src/types/amaro';
+import type { IdentityAccessLogDoc, ReservationStatus } from '../src/types/amaro';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +57,9 @@ class InMemoryTestStore implements AmaroServerStore {
     string,
     AtomicReferralPayload & { status: string; clientPaid: boolean; providerSettled: boolean }
   >();
+  readonly identityMeta = new Map<string, ServerIdentityMetadataRecord>();
+  readonly identityVaults = new Map<string, ServerIdentityVaultRecord>();
+  readonly identityLogs = new Map<string, IdentityAccessLogDoc[]>();
   private readonly inFlight = new Set<string>();
   artificialCommitDelayMs = 0;
 
@@ -68,6 +75,9 @@ class InMemoryTestStore implements AmaroServerStore {
     this.reservations.clear();
     this.partnersByCode.clear();
     this.referrals.clear();
+    this.identityMeta.clear();
+    this.identityVaults.clear();
+    this.identityLogs.clear();
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
 
@@ -206,6 +216,85 @@ class InMemoryTestStore implements AmaroServerStore {
     return this.partnersByCode.get(referralCode.toUpperCase()) || null;
   }
 
+  async getReservation(reservationId: string): Promise<ServerReservationRecord | null> {
+    const r = this.reservations.get(reservationId);
+    if (!r) return null;
+    return {
+      id: r.reservationId,
+      clientId: r.clientId,
+      providerOwnerId: r.providerOwnerId,
+      providerId: r.providerId,
+      folderId: r.folderId,
+      serviceId: r.serviceId,
+      serviceTitle: r.serviceTitle,
+      category: r.category,
+      cityId: r.cityId,
+      scheduledDate: r.scheduledDate,
+      scheduledTime: r.scheduledTime,
+      status: r.status,
+    };
+  }
+
+  async getIdentityMetadata(
+    reservationId: string
+  ): Promise<ServerIdentityMetadataRecord | null> {
+    return this.identityMeta.get(reservationId) || null;
+  }
+
+  async saveIdentitySubmission(params: {
+    metadata: ServerIdentityMetadataRecord;
+    isUpdate: boolean;
+    vault: ServerIdentityVaultRecord;
+    log: ServerIdentityAccessLogInput;
+  }): Promise<void> {
+    this.identityMeta.set(params.metadata.reservationId, { ...params.metadata });
+    this.identityVaults.set(params.vault.reservationId, { ...params.vault });
+    const logs = this.identityLogs.get(params.log.reservationId) || [];
+    logs.unshift({
+      id: params.log.logId,
+      reservationId: params.log.reservationId,
+      actorId: params.log.actorId,
+      actorRole: params.log.actorRole,
+      action: params.log.action,
+      summary: params.log.summary,
+      createdAtIso: new Date().toISOString(),
+    });
+    this.identityLogs.set(params.log.reservationId, logs);
+  }
+
+  async updateIdentityGovernanceOrStatus(params: {
+    metadata: ServerIdentityMetadataRecord;
+    isUpdate: boolean;
+    deleteVault: boolean;
+    log: ServerIdentityAccessLogInput;
+  }): Promise<void> {
+    this.identityMeta.set(params.metadata.reservationId, { ...params.metadata });
+    if (params.deleteVault) {
+      this.identityVaults.delete(params.metadata.reservationId);
+    }
+    const logs = this.identityLogs.get(params.log.reservationId) || [];
+    logs.unshift({
+      id: params.log.logId,
+      reservationId: params.log.reservationId,
+      actorId: params.log.actorId,
+      actorRole: params.log.actorRole,
+      action: params.log.action,
+      summary: params.log.summary,
+      createdAtIso: new Date().toISOString(),
+    });
+    this.identityLogs.set(params.log.reservationId, logs);
+  }
+
+  async getIdentityVault(
+    reservationId: string
+  ): Promise<ServerIdentityVaultRecord | null> {
+    return this.identityVaults.get(reservationId) || null;
+  }
+
+  async listIdentityAccessLogs(reservationId: string): Promise<IdentityAccessLogDoc[]> {
+    return [...(this.identityLogs.get(reservationId) || [])];
+  }
+
   async listClientScheduleAndActiveReservations(
     folderId: string,
     clientId: string
@@ -329,6 +418,18 @@ const TEST_TOKENS: Record<
     emailVerified: true,
     aud: 'gen-lang-client-0368830750',
   },
+  'valid-provider-jwt': {
+    uid: 'provider-owner-uid',
+    email: 'hotel.lagune@example.com',
+    emailVerified: true,
+    aud: 'gen-lang-client-0368830750',
+  },
+  'other-provider-jwt': {
+    uid: 'other-provider-uid',
+    email: 'autre.prestataire@example.com',
+    emailVerified: true,
+    aud: 'gen-lang-client-0368830750',
+  },
   'unverified-email-jwt': {
     uid: 'unverified-uid',
     email: 'kayne3200@gmail.com',
@@ -349,6 +450,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   const store = new InMemoryTestStore();
   let server: http.Server;
   let baseUrl = '';
+  let simulateHumanFallback = false;
   const FAKE_SECRET_GH = 'ghp_TestSecretTokenNeverExpose999999';
   const FAKE_SECRET_GEMINI = 'AIzaFakeServerGeminiSecretKey888888';
   const prevGh = process.env.GITHUB_TOKEN;
@@ -372,6 +474,9 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
           throw new Error(
             `Upstream failure using key ${FAKE_SECRET_GEMINI} and pat ${FAKE_SECRET_GH}`
           );
+        }
+        if (simulateHumanFallback) {
+          throw new Error('Simulated offline LLM to test human catalogue fallback');
         }
         return `Information vérifiée : Cotonou est le pôle économique du Bénin. (${prompt.slice(0, 30)})`;
       },
@@ -726,17 +831,21 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     });
     assert.equal(a1.status, 200);
 
-    // 7b. Trigger an upstream error containing raw secrets -> response must redact them!
+    // 7b. Trigger an upstream error containing raw secrets -> Assistant NEVER shows raw technical errors or secrets to client (200 human fallback)!
     const errRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'TRIGGER_SECRET_ERROR', locale: 'fr' }),
     });
-    assert.equal(errRes.status, 500);
+    assert.equal(errRes.status, 200);
     const errText = await errRes.text();
     assert.equal(errText.includes(FAKE_SECRET_GEMINI), false);
     assert.equal(errText.includes(FAKE_SECRET_GH), false);
-    assert.match(errText, /\[REDACTED\]/);
+    assert.equal(errText.includes('Upstream failure'), false);
+    const errJson: any = JSON.parse(errText);
+    assert.equal(errJson.degradedFallback, true);
+    assert.equal(typeof errJson.reply, 'string');
+    assert.equal(errJson.reply.length > 20, true);
 
     // 3rd request allowed, 4th request from unauthenticated IP hits rate limit (429)
     const a3 = await fetch(`${baseUrl}/api/amaro/assistant`, {
@@ -883,7 +992,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     });
     assert.equal(resUnknownPrice.status, 201);
     const unknownBody: any = await resUnknownPrice.json();
-    assert.equal(unknownBody.breakdown.totalAmount, 0);
+    assert.equal(unknownBody.breakdown.providerPrice, 0);
+    assert.equal(unknownBody.breakdown.totalAmount, 1_180);
     const snap = JSON.parse(unknownBody.pricingSnapshot);
     assert.equal(snap.priceKnown, false);
     assert.equal(snap.verifiedByServer, true);
@@ -939,6 +1049,391 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(storedRef.commissionRatePercent, 6);
     // 6% of providerPrice (100,000 XOF) = 6,000 XOF
     assert.equal(storedRef.commissionAmount, 6_000);
+  });
+
+  it('11. Vérification d’identité voyageur : rejette absence de consentement, rejette faux fichiers/SVG/scripts, impose recto+verso CNI, chiffre en AES-256-GCM et bloque la transmission externe sur le répertoire public', async () => {
+    store.reset();
+
+    // Valid 1x1 PNG binary (real magic bytes: 89 50 4E 47 0D 0A 1A 0A ...)
+    const VALID_PNG_DATA_URL =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    // Disguised SVG/HTML script pretending to be image/png
+    const FAKE_SCRIPT_DATA_URL = `data:image/png;base64,${Buffer.from(
+      '<svg onload="alert(1)"><script>evil()</script></svg>',
+      'utf-8'
+    ).toString('base64')}`;
+
+    // Create a verified-partner hotel reservation for traveler-uid-1
+    const resPartner = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-11-25',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(resPartner.status, 201);
+    const { reservationId: partnerResId }: any = await resPartner.json();
+
+    // 11a. Missing explicit consent -> 400
+    const noConsent = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId: partnerResId,
+        documentType: 'passport',
+        nationalityCountry: 'FR',
+        residenceCountry: 'FR',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: false,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(noConsent.status, 400);
+
+    // 11b. Disguised SVG/script payload -> rejected by binary magic-byte inspection (400)
+    const fakeImg = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId: partnerResId,
+        documentType: 'passport',
+        nationalityCountry: 'FR',
+        residenceCountry: 'FR',
+        frontDataUrl: FAKE_SCRIPT_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(fakeImg.status, 400);
+
+    // 11c. National ID (CNI) without back side -> 400
+    const cniNoBack = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId: partnerResId,
+        documentType: 'national_id',
+        nationalityCountry: 'BJ',
+        residenceCountry: 'BJ',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(cniNoBack.status, 400);
+
+    // 11d. Valid National ID (front + back) with consent -> 201 & stored encrypted (AES-256-GCM)
+    const validSubmit = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId: partnerResId,
+        documentType: 'national_id',
+        nationalityCountry: 'BJ',
+        residenceCountry: 'BJ',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        backDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(validSubmit.status, 201);
+    const submitBody: any = await validSubmit.json();
+    assert.equal(submitBody.metadata.status, 'shared_with_provider');
+    assert.equal(submitBody.metadata.providerAuthorized, true);
+    assert.equal(submitBody.metadata.hasBackSide, true);
+
+    // Verify raw base64 is NEVER stored unencrypted in vault
+    const rawVault = store.identityVaults.get(partnerResId);
+    assert(rawVault);
+    assert.equal(rawVault.frontCipherPayload.startsWith('enc:v1:'), true);
+    assert.equal(rawVault.frontCipherPayload.includes('iVBORw0KGgo'), false);
+
+    // 11e. Public directory hotel (manual_concierge) -> honest rule: providerAuthorized forced to false
+    const resDir = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'acc-hotel-du-fleuve-malanville',
+        scheduledDate: '2026-11-27',
+        scheduledTime: '15:00',
+        participants: 1,
+      }),
+    });
+    assert.equal(resDir.status, 201);
+    const { reservationId: dirResId }: any = await resDir.json();
+
+    const submitDir = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId: dirResId,
+        documentType: 'passport',
+        nationalityCountry: 'FR',
+        residenceCountry: 'FR',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(submitDir.status, 201);
+    const dirBody: any = await submitDir.json();
+    assert.equal(dirBody.metadata.providerAuthorized, false);
+    assert.equal(dirBody.metadata.status, 'pending_verification');
+  });
+
+  it('12. Isolation stricte des pièces d’identité : 200 prestataire autorisé, 403 autre prestataire, 403 lecture image Admin, gouvernance Admin active et purge immédiate au retrait du consentement (410)', async () => {
+    store.reset();
+    const VALID_PNG_DATA_URL =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    // Create reservation with verified provider ('provider-owner-uid')
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-11-28',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    const { reservationId }: any = await createRes.json();
+
+    // Provider requests identity verification -> status 'requested'
+    const reqId = await fetch(`${baseUrl}/api/amaro/identity/request`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId,
+        purposeReason: 'Fiche de police hôtelière obligatoire à l’enregistrement.',
+      }),
+    });
+    assert.equal(reqId.status, 200);
+    const reqBody: any = await reqId.json();
+    assert.equal(reqBody.status, 'requested');
+
+    // Traveler submits passport with explicit authorization for this provider
+    const sub = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId,
+        documentType: 'passport',
+        nationalityCountry: 'CA',
+        residenceCountry: 'CA',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProviderTransmission: true,
+      }),
+    });
+    assert.equal(sub.status, 201);
+
+    // 12a. Authorized provider of THIS reservation can view decrypted document -> 200
+    const provView = await fetch(`${baseUrl}/api/amaro/identity/${reservationId}/view`, {
+      headers: { Authorization: 'Bearer valid-provider-jwt' },
+    });
+    assert.equal(provView.status, 200);
+    const provViewJson: any = await provView.json();
+    assert.equal(provViewJson.frontDataUrl, VALID_PNG_DATA_URL);
+
+    // 12b. Another provider ('other-provider-uid') is strictly blocked -> 403
+    const otherProvView = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/view`,
+      {
+        headers: { Authorization: 'Bearer other-provider-jwt' },
+      }
+    );
+    assert.equal(otherProvView.status, 403);
+
+    // 12c. Platform Admin ('owner-admin-uid') is strictly blocked from viewing raw identity images -> 403
+    const adminView = await fetch(`${baseUrl}/api/amaro/identity/${reservationId}/view`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(adminView.status, 403);
+
+    // 12d. Authorized provider accepts the identity document -> status 'accepted'
+    const acceptRes = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/provider-decision`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-provider-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          decision: 'accepted',
+          note: 'Passeport net et conforme.',
+        }),
+      }
+    );
+    assert.equal(acceptRes.status, 200);
+    const acceptJson: any = await acceptRes.json();
+    assert.equal(acceptJson.status, 'accepted');
+
+    // 12e. Admin revokes provider access without viewing raw images -> provider immediately gets 403
+    const adminRevoke = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/admin-governance`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'revoke_provider_access',
+          note: 'Fin de contrôle hôtelier — révocation préventive.',
+        }),
+      }
+    );
+    assert.equal(adminRevoke.status, 200);
+
+    const provViewAfterRevoke = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/view`,
+      {
+        headers: { Authorization: 'Bearer valid-provider-jwt' },
+      }
+    );
+    assert.equal(provViewAfterRevoke.status, 403);
+
+    // 12f. Traveler withdraws consent & deletes document -> vault wiped, status 'deleted_retention_policy', subsequent view returns 410
+    const withdrawRes = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/revoke-or-delete`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      }
+    );
+    assert.equal(withdrawRes.status, 200);
+    const withdrawBody: any = await withdrawRes.json();
+    assert.equal(withdrawBody.status, 'deleted_retention_policy');
+    assert.equal(store.identityVaults.has(reservationId), false);
+
+    const travelerViewAfterDelete = await fetch(
+      `${baseUrl}/api/amaro/identity/${reservationId}/view`,
+      {
+        headers: { Authorization: 'Bearer valid-traveler-jwt' },
+      }
+    );
+    assert.equal(travelerViewAfterDelete.status, 410);
+  });
+
+  it('13. Assistant AMARO conversationnel naturel : comprend salutations, abréviations, suivi multi-tours (« Ouidah » -> « Un hôtel » -> « Combien ? ») sur les 172 vraies fiches et reformule poliment un message incompréhensible', async () => {
+    simulateHumanFallback = true;
+    try {
+      // 13a. Casual greeting / abbreviation ("bjr") -> warm human reply, zero technical jargon
+      const greetRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'bjr',
+          locale: 'fr',
+          history: [],
+        }),
+      });
+      assert.equal(greetRes.status, 200);
+      const greetJson: any = await greetRes.json();
+      assert.match(greetJson.reply, /bonjour/i);
+
+      // 13b. Multi-turn context: Turn 1 "ouida" (typo for Ouidah) -> Turn 2 "Un hôtel" -> Turn 3 "Combien ?"
+      const multiTurnRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'Combien ?',
+          locale: 'fr',
+          history: [
+            { role: 'user', content: 'ouida' },
+            {
+              role: 'assistant',
+              content: 'Ouidah est la capitale historique et spirituelle côtière.',
+            },
+            { role: 'user', content: 'Un hôtel' },
+            {
+              role: 'assistant',
+              content: 'Voici des hébergements réels référencés à Ouidah.',
+            },
+          ],
+        }),
+      });
+      assert.equal(multiTurnRes.status, 200);
+      const multiJson: any = await multiTurnRes.json();
+      assert.equal(multiJson.activeCityId, 'ouidah');
+      assert.equal(multiJson.activeCategory, 'accommodation');
+      assert.equal(Array.isArray(multiJson.suggestedItems), true);
+      assert.equal(multiJson.suggestedItems.length > 0, true);
+      assert.equal(
+        multiJson.suggestedItems.every(
+          (it: any) => it.cityId === 'ouidah' && it.category === 'accommodation'
+        ),
+        true
+      );
+
+      // 13c. Unintelligible message ("???") -> polite clarification without technical error
+      const unclearRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '???',
+          locale: 'fr',
+          history: [],
+        }),
+      });
+      assert.equal(unclearRes.status, 200);
+      const unclearJson: any = await unclearRes.json();
+      assert.match(unclearJson.reply, /Je veux être sûr de bien vous comprendre/i);
+    } finally {
+      simulateHumanFallback = false;
+    }
   });
 });
 

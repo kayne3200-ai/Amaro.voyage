@@ -1,5 +1,13 @@
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
-import type { CurrencyCode, ReservationStatus, PaymentStatus, ServiceCategory } from '../types/amaro';
+import type {
+  CurrencyCode,
+  IdentityAccessLogDoc,
+  IdentityDocumentType,
+  IdentityVerificationStatus,
+  PaymentStatus,
+  ReservationStatus,
+  ServiceCategory,
+} from '../types/amaro';
 import {
   OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   parseMinutes,
@@ -27,6 +35,67 @@ export interface ServerPartnerRecord {
   referralCode: string;
   status: 'pending' | 'active' | 'suspended';
   customCommissionRate: number;
+}
+
+export interface ServerReservationRecord {
+  id: string;
+  clientId: string;
+  providerOwnerId: string;
+  providerId: string;
+  folderId: string;
+  serviceId: string;
+  serviceTitle: string;
+  category: ServiceCategory;
+  cityId: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  status: ReservationStatus;
+}
+
+export interface ServerIdentityMetadataRecord {
+  reservationId: string;
+  folderId: string;
+  clientId: string;
+  providerOwnerId: string;
+  providerId: string;
+  serviceTitle: string;
+  category: ServiceCategory;
+  documentType: IdentityDocumentType;
+  otherDocumentLabel: string;
+  nationalityCountry: string;
+  residenceCountry: string;
+  hasBackSide: boolean;
+  status: IdentityVerificationStatus;
+  purposeReason: string;
+  recipientLabel: string;
+  consentGiven: boolean;
+  consentAt: string;
+  providerAuthorized: boolean;
+  retentionExpiresAt: string;
+  statusNote: string;
+  accessCount: number;
+  lastAccessedBy: string;
+  lastAccessedAt: string;
+  createdAtRaw?: unknown;
+}
+
+export interface ServerIdentityVaultRecord {
+  reservationId: string;
+  clientId: string;
+  providerOwnerId: string;
+  frontMimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  frontCipherPayload: string;
+  backMimeType: '' | 'image/jpeg' | 'image/png' | 'image/webp';
+  backCipherPayload: string;
+}
+
+export interface ServerIdentityAccessLogInput {
+  logId: string;
+  reservationId: string;
+  actorId: string;
+  actorRole: 'traveler' | 'provider' | 'admin';
+  action: string;
+  summary: string;
 }
 
 export interface AtomicReferralPayload {
@@ -71,6 +140,51 @@ export interface AmaroServerStore {
   getSystemSetting(countryCode: string, rawIdToken?: string): Promise<ServerSystemSetting>;
   getJourneyFolder(folderId: string, rawIdToken: string): Promise<ServerFolderRecord | null>;
   getPartnerByCode?(referralCode: string, rawIdToken?: string): Promise<ServerPartnerRecord | null>;
+  getReservation?(reservationId: string, rawIdToken: string): Promise<ServerReservationRecord | null>;
+  getIdentityMetadata?(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<ServerIdentityMetadataRecord | null>;
+  saveIdentitySubmission?(
+    params: {
+      metadata: ServerIdentityMetadataRecord;
+      isUpdate: boolean;
+      vault: ServerIdentityVaultRecord;
+      log: ServerIdentityAccessLogInput;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void>;
+  updateIdentityGovernanceOrStatus?(
+    params: {
+      metadata: ServerIdentityMetadataRecord;
+      isUpdate: boolean;
+      deleteVault: boolean;
+      log: ServerIdentityAccessLogInput;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void>;
+  getIdentityVault?(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<ServerIdentityVaultRecord | null>;
+  listIdentityAccessLogs?(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<IdentityAccessLogDoc[]>;
   listClientScheduleAndActiveReservations(
     folderId: string,
     clientId: string,
@@ -851,5 +965,530 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     } finally {
       this.inFlightKeys.delete(lockKey);
     }
+  }
+
+  async getReservation(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<ServerReservationRecord | null> {
+    let raw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('reservations').doc(reservationId).get();
+      raw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else {
+      try {
+        raw = await this.restGetDoc(
+          `reservations/${encodeURIComponent(reservationId)}`,
+          rawIdToken
+        );
+      } catch {
+        raw = null;
+      }
+    }
+    if (!raw) return null;
+    return {
+      id: reservationId,
+      clientId: String(raw.clientId || ''),
+      providerOwnerId: String(raw.providerOwnerId || 'manual_concierge'),
+      providerId: String(raw.providerId || ''),
+      folderId: String(raw.folderId || ''),
+      serviceId: String(raw.serviceId || ''),
+      serviceTitle: String(raw.serviceTitle || ''),
+      category: raw.category as ServiceCategory,
+      cityId: String(raw.cityId || 'cotonou'),
+      scheduledDate: String(raw.scheduledDate || ''),
+      scheduledTime: String(raw.scheduledTime || '09:00'),
+      status: (raw.status || 'pending_provider') as ReservationStatus,
+    };
+  }
+
+  async getIdentityMetadata(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<ServerIdentityMetadataRecord | null> {
+    let raw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb()
+        .collection('identity_verifications')
+        .doc(reservationId)
+        .get();
+      raw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else {
+      try {
+        raw = await this.restGetDoc(
+          `identity_verifications/${encodeURIComponent(reservationId)}`,
+          rawIdToken
+        );
+      } catch {
+        raw = null;
+      }
+    }
+    if (!raw) return null;
+    return {
+      reservationId,
+      folderId: String(raw.folderId || ''),
+      clientId: String(raw.clientId || ''),
+      providerOwnerId: String(raw.providerOwnerId || 'manual_concierge'),
+      providerId: String(raw.providerId || ''),
+      serviceTitle: String(raw.serviceTitle || ''),
+      category: raw.category as ServiceCategory,
+      documentType: (raw.documentType || 'none') as IdentityDocumentType,
+      otherDocumentLabel: String(raw.otherDocumentLabel || ''),
+      nationalityCountry: String(raw.nationalityCountry || ''),
+      residenceCountry: String(raw.residenceCountry || ''),
+      hasBackSide: Boolean(raw.hasBackSide),
+      status: (raw.status || 'not_requested') as IdentityVerificationStatus,
+      purposeReason: String(raw.purposeReason || ''),
+      recipientLabel: String(raw.recipientLabel || ''),
+      consentGiven: Boolean(raw.consentGiven),
+      consentAt: String(raw.consentAt || ''),
+      providerAuthorized: Boolean(raw.providerAuthorized),
+      retentionExpiresAt: String(raw.retentionExpiresAt || ''),
+      statusNote: String(raw.statusNote || ''),
+      accessCount: Number(raw.accessCount ?? 0),
+      lastAccessedBy: String(raw.lastAccessedBy || ''),
+      lastAccessedAt: String(raw.lastAccessedAt || ''),
+      createdAtRaw: raw.createdAt,
+    };
+  }
+
+  private encodeIdentityMetadataFields(
+    m: ServerIdentityMetadataRecord,
+    preserveCreatedAtIso?: string
+  ): Record<string, any> {
+    const fields: Record<string, any> = {
+      reservationId: encodeString(m.reservationId),
+      folderId: encodeString(m.folderId),
+      clientId: encodeString(m.clientId),
+      providerOwnerId: encodeString(m.providerOwnerId),
+      providerId: encodeString(m.providerId),
+      serviceTitle: encodeString(m.serviceTitle),
+      category: encodeString(m.category),
+      documentType: encodeString(m.documentType),
+      otherDocumentLabel: encodeString(m.otherDocumentLabel),
+      nationalityCountry: encodeString(m.nationalityCountry),
+      residenceCountry: encodeString(m.residenceCountry),
+      hasBackSide: { booleanValue: Boolean(m.hasBackSide) },
+      status: encodeString(m.status),
+      purposeReason: encodeString(m.purposeReason),
+      recipientLabel: encodeString(m.recipientLabel),
+      consentGiven: { booleanValue: Boolean(m.consentGiven) },
+      consentAt: encodeString(m.consentAt),
+      providerAuthorized: { booleanValue: Boolean(m.providerAuthorized) },
+      retentionExpiresAt: encodeString(m.retentionExpiresAt),
+      statusNote: encodeString(m.statusNote),
+      accessCount: encodeInt(m.accessCount),
+      lastAccessedBy: encodeString(m.lastAccessedBy),
+      lastAccessedAt: encodeString(m.lastAccessedAt),
+    };
+    if (preserveCreatedAtIso) {
+      fields.createdAt = { timestampValue: preserveCreatedAtIso };
+    }
+    return fields;
+  }
+
+  async saveIdentitySubmission(
+    params: {
+      metadata: ServerIdentityMetadataRecord;
+      isUpdate: boolean;
+      vault: ServerIdentityVaultRecord;
+      log: ServerIdentityAccessLogInput;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void> {
+    const { metadata, isUpdate, vault, log, notification } = params;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const nowTs = FieldValue.serverTimestamp();
+      const metaRef = db.collection('identity_verifications').doc(metadata.reservationId);
+      const { createdAtRaw, ...plainMeta } = metadata;
+      batch.set(
+        metaRef,
+        {
+          ...plainMeta,
+          createdAt: isUpdate && createdAtRaw ? createdAtRaw : nowTs,
+          updatedAt: nowTs,
+        },
+        { merge: false }
+      );
+
+      const vaultRef = metaRef.collection('private_vault').doc('files');
+      batch.set(vaultRef, {
+        ...vault,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      });
+
+      const logRef = metaRef.collection('access_logs').doc(log.logId);
+      batch.set(logRef, {
+        reservationId: log.reservationId,
+        actorId: log.actorId,
+        actorRole: log.actorRole,
+        action: log.action,
+        summary: log.summary,
+        createdAt: nowTs,
+      });
+
+      if (notification) {
+        const notifRef = db.collection('notifications').doc(notification.id);
+        batch.set(notifRef, {
+          recipientId: notification.recipientId,
+          senderId: notification.senderId,
+          kind: 'reservation',
+          title: notification.title,
+          body: notification.body.slice(0, 780),
+          read: false,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+      }
+
+      await batch.commit();
+      return;
+    }
+
+    const metaDocName = `${this.dbResourcePath}/identity_verifications/${metadata.reservationId}`;
+    const vaultDocName = `${metaDocName}/private_vault/files`;
+    const logDocName = `${metaDocName}/access_logs/${log.logId}`;
+
+    const preservedIso =
+      isUpdate && typeof metadata.createdAtRaw === 'string'
+        ? metadata.createdAtRaw
+        : undefined;
+
+    const writes: any[] = [
+      {
+        update: {
+          name: metaDocName,
+          fields: this.encodeIdentityMetadataFields(metadata, preservedIso),
+        },
+        currentDocument: { exists: isUpdate },
+        updateTransforms: preservedIso
+          ? [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }]
+          : [
+              { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+              { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+            ],
+      },
+      {
+        update: {
+          name: vaultDocName,
+          fields: {
+            reservationId: encodeString(vault.reservationId),
+            clientId: encodeString(vault.clientId),
+            providerOwnerId: encodeString(vault.providerOwnerId),
+            frontMimeType: encodeString(vault.frontMimeType),
+            frontCipherPayload: encodeString(vault.frontCipherPayload),
+            backMimeType: encodeString(vault.backMimeType),
+            backCipherPayload: encodeString(vault.backCipherPayload),
+          },
+        },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      },
+      {
+        update: {
+          name: logDocName,
+          fields: {
+            reservationId: encodeString(log.reservationId),
+            actorId: encodeString(log.actorId),
+            actorRole: encodeString(log.actorRole),
+            action: encodeString(log.action),
+            summary: encodeString(log.summary),
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+      },
+    ];
+
+    if (notification) {
+      const notifDocName = `${this.dbResourcePath}/notifications/${notification.id}`;
+      writes.push({
+        update: {
+          name: notifDocName,
+          fields: {
+            recipientId: encodeString(notification.recipientId),
+            senderId: encodeString(notification.senderId),
+            kind: encodeString('reservation'),
+            title: encodeString(notification.title),
+            body: encodeString(notification.body.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      });
+    }
+
+    const commitRes = await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ writes }),
+      }
+    );
+
+    if (!commitRes.ok) {
+      throw new Error(`Échec d’enregistrement sécurisé du justificatif (${commitRes.status}).`);
+    }
+  }
+
+  async updateIdentityGovernanceOrStatus(
+    params: {
+      metadata: ServerIdentityMetadataRecord;
+      isUpdate: boolean;
+      deleteVault: boolean;
+      log: ServerIdentityAccessLogInput;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void> {
+    const { metadata, isUpdate, deleteVault, log, notification } = params;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const nowTs = FieldValue.serverTimestamp();
+      const metaRef = db.collection('identity_verifications').doc(metadata.reservationId);
+      const { createdAtRaw, ...plainMeta } = metadata;
+      batch.set(
+        metaRef,
+        {
+          ...plainMeta,
+          createdAt: isUpdate && createdAtRaw ? createdAtRaw : nowTs,
+          updatedAt: nowTs,
+        },
+        { merge: false }
+      );
+
+      if (deleteVault) {
+        batch.delete(metaRef.collection('private_vault').doc('files'));
+      }
+
+      const logRef = metaRef.collection('access_logs').doc(log.logId);
+      batch.set(logRef, {
+        reservationId: log.reservationId,
+        actorId: log.actorId,
+        actorRole: log.actorRole,
+        action: log.action,
+        summary: log.summary,
+        createdAt: nowTs,
+      });
+
+      if (notification) {
+        const notifRef = db.collection('notifications').doc(notification.id);
+        batch.set(notifRef, {
+          recipientId: notification.recipientId,
+          senderId: notification.senderId,
+          kind: 'reservation',
+          title: notification.title,
+          body: notification.body.slice(0, 780),
+          read: false,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+      }
+
+      await batch.commit();
+      return;
+    }
+
+    const metaDocName = `${this.dbResourcePath}/identity_verifications/${metadata.reservationId}`;
+    const vaultDocName = `${metaDocName}/private_vault/files`;
+    const logDocName = `${metaDocName}/access_logs/${log.logId}`;
+
+    const preservedIso =
+      isUpdate && typeof metadata.createdAtRaw === 'string'
+        ? metadata.createdAtRaw
+        : undefined;
+
+    const writes: any[] = [
+      {
+        update: {
+          name: metaDocName,
+          fields: this.encodeIdentityMetadataFields(metadata, preservedIso),
+        },
+        currentDocument: { exists: isUpdate },
+        updateTransforms: preservedIso
+          ? [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }]
+          : [
+              { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+              { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+            ],
+      },
+    ];
+
+    if (deleteVault) {
+      writes.push({ delete: vaultDocName });
+    }
+
+    writes.push({
+      update: {
+        name: logDocName,
+        fields: {
+          reservationId: encodeString(log.reservationId),
+          actorId: encodeString(log.actorId),
+          actorRole: encodeString(log.actorRole),
+          action: encodeString(log.action),
+          summary: encodeString(log.summary),
+        },
+      },
+      currentDocument: { exists: false },
+      updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+    });
+
+    if (notification) {
+      const notifDocName = `${this.dbResourcePath}/notifications/${notification.id}`;
+      writes.push({
+        update: {
+          name: notifDocName,
+          fields: {
+            recipientId: encodeString(notification.recipientId),
+            senderId: encodeString(notification.senderId),
+            kind: encodeString('reservation'),
+            title: encodeString(notification.title),
+            body: encodeString(notification.body.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      });
+    }
+
+    const commitRes = await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ writes }),
+      }
+    );
+
+    if (!commitRes.ok) {
+      throw new Error(`Mise à jour du statut d’identité refusée (${commitRes.status}).`);
+    }
+  }
+
+  async getIdentityVault(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<ServerIdentityVaultRecord | null> {
+    let raw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb()
+        .collection('identity_verifications')
+        .doc(reservationId)
+        .collection('private_vault')
+        .doc('files')
+        .get();
+      raw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else {
+      raw = await this.restGetDoc(
+        `identity_verifications/${encodeURIComponent(reservationId)}/private_vault/files`,
+        rawIdToken
+      );
+    }
+    if (!raw || !raw.frontCipherPayload) return null;
+    return {
+      reservationId,
+      clientId: String(raw.clientId || ''),
+      providerOwnerId: String(raw.providerOwnerId || 'manual_concierge'),
+      frontMimeType: (raw.frontMimeType || 'image/jpeg') as ServerIdentityVaultRecord['frontMimeType'],
+      frontCipherPayload: String(raw.frontCipherPayload || ''),
+      backMimeType: (raw.backMimeType || '') as ServerIdentityVaultRecord['backMimeType'],
+      backCipherPayload: String(raw.backCipherPayload || ''),
+    };
+  }
+
+  async listIdentityAccessLogs(
+    reservationId: string,
+    rawIdToken: string
+  ): Promise<IdentityAccessLogDoc[]> {
+    const out: Array<IdentityAccessLogDoc & { sortTs: string }> = [];
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb()
+        .collection('identity_verifications')
+        .doc(reservationId)
+        .collection('access_logs')
+        .get();
+      for (const doc of snap.docs) {
+        const d = doc.data();
+        const tsIso =
+          typeof d.createdAt?.toDate === 'function'
+            ? d.createdAt.toDate().toISOString()
+            : String(d.createdAt || '');
+        out.push({
+          id: doc.id,
+          reservationId,
+          actorId: String(d.actorId || ''),
+          actorRole: (d.actorRole || 'traveler') as IdentityAccessLogDoc['actorRole'],
+          action: String(d.action || ''),
+          summary: String(d.summary || ''),
+          createdAtIso: tsIso,
+          sortTs: tsIso,
+        });
+      }
+    } else {
+      const res = await fetch(
+        `${this.baseUrl}/identity_verifications/${encodeURIComponent(reservationId)}/access_logs?pageSize=50`,
+        {
+          headers: { Authorization: `Bearer ${rawIdToken}` },
+        }
+      );
+      if (res.ok) {
+        const json: any = await res.json();
+        const docs: any[] = Array.isArray(json?.documents) ? json.documents : [];
+        for (const doc of docs) {
+          const fields = decodeFirestoreFields(doc.fields);
+          const id = String(doc.name || '').split('/').pop() || '';
+          const tsIso = String(fields.createdAt || '');
+          out.push({
+            id,
+            reservationId,
+            actorId: String(fields.actorId || ''),
+            actorRole: (fields.actorRole || 'traveler') as IdentityAccessLogDoc['actorRole'],
+            action: String(fields.action || ''),
+            summary: String(fields.summary || ''),
+            createdAtIso: tsIso,
+            sortTs: tsIso,
+          });
+        }
+      }
+    }
+    return out
+      .sort((a, b) => b.sortTs.localeCompare(a.sortTs))
+      .map(({ sortTs: _ignore, ...rest }) => rest);
   }
 }
