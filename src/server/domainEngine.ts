@@ -1,5 +1,9 @@
 import crypto from 'crypto';
-import type { CurrencyCode, ServiceCategory } from '../types/amaro';
+import type {
+  CurrencyCode,
+  PartnerActivationLevel,
+  ServiceCategory,
+} from '../types/amaro';
 import { BENIN_ACCOMMODATIONS_DIRECTORY } from '../data/beninAccommodations';
 import {
   BENIN_SERVICES_DIRECTORY,
@@ -23,6 +27,37 @@ export interface ServerServiceRecord {
   capacity: number;
   status: 'draft' | 'published' | 'archived';
   dataOrigin: 'verified_partner' | 'pending_verification' | 'public_directory' | 'demo_test';
+  activationLevel?: PartnerActivationLevel;
+  pilotConventionSigned?: boolean;
+  cancellationPolicy?: string;
+}
+
+export interface ServerPilotStockRecord {
+  id: string;
+  pilotId: string;
+  serviceId: string;
+  providerId: string;
+  providerOwnerId: string;
+  category: 'accommodation' | 'transport';
+  cityId: string;
+  unitCode: string;
+  unitLabel: string;
+  capacity: number;
+  baggageCapacity: number;
+  withDriver: boolean;
+  pickupAndCoverageZone: string;
+  startDate: string;
+  endDate: string;
+  totalUnits: number;
+  bookedUnits: number;
+  contractualPrice: number;
+  currency: CurrencyCode;
+  cancellationRules: string;
+  instantBookingAgreed: boolean;
+  settlementMode: 'pay_on_arrival_agreed' | 'online_gateway_required';
+  confirmationSource: string;
+  expiresAt: string;
+  status: 'active' | 'paused' | 'expired';
 }
 
 export interface ServerSystemSetting {
@@ -558,3 +593,145 @@ export function buildDeterministicReservationId(
 export function buildDeterministicItemId(reservationId: string): string {
   return `step-${reservationId.replace(/^res-/, '')}`;
 }
+
+export interface EffectiveBookingModeDecision {
+  allowed: boolean;
+  blockedReason?: string;
+  effectiveMode: 'directory_concierge' | 'level_b_validation' | 'level_c_instant';
+  fallbackReason?: string;
+  matchedStock?: ServerPilotStockRecord;
+  unitsNeeded: number;
+}
+
+/**
+ * Sections 7, 8 & 10 — Server-authoritative 3-level activation & anti-double-booking gate:
+ * - Level A (`level_a_verified`): Consultation only; blocks online reservation (`409`).
+ * - Level C (`level_c_instant`): Allowed ONLY when ALL cumulative conditions hold:
+ *   1) `dataOrigin === 'verified_partner'` and `pilotConventionSigned === true`
+ *   2) Active stock record covering `scheduledDate`, non-expired (`expiresAt >= today`)
+ *   3) Explicit partner agreement (`instantBookingAgreed === true`)
+ *   4) Contractual price > 0 and cancellation rules defined
+ *   5) Honest settlement mode (`pay_on_arrival_agreed` while online gateway is unconfigured)
+ *   6) Available units >= `unitsNeeded` (if active stock exists for that date and is 100% booked, blocks double-booking with `allowed: false` / `409`).
+ *   If any non-exhaustion prerequisite is missing, falls back cleanly to `level_b_validation`.
+ */
+export function resolveEffectiveBookingMode(params: {
+  service: ServerServiceRecord;
+  candidateStocks: ServerPilotStockRecord[];
+  scheduledDate: string;
+  participants: number;
+  requestedStockId?: string;
+  nowIsoDate?: string;
+}): EffectiveBookingModeDecision {
+  const { service, candidateStocks, scheduledDate, participants, requestedStockId } = params;
+  const todayIso = (params.nowIsoDate || new Date().toISOString()).slice(0, 10);
+
+  if (service.activationLevel === 'level_a_verified') {
+    return {
+      allowed: false,
+      blockedReason:
+        'Niveau A — Catalogue vérifié (consultation seule) : cette offre est documentée pour préparer votre itinéraire, mais la réservation en ligne n’est pas activée.',
+      effectiveMode: 'level_b_validation',
+      unitsNeeded: 1,
+    };
+  }
+
+  const defaultMode: 'directory_concierge' | 'level_b_validation' =
+    service.dataOrigin === 'verified_partner' || service.activationLevel === 'level_b_validation'
+      ? 'level_b_validation'
+      : 'directory_concierge';
+
+  if (service.activationLevel !== 'level_c_instant') {
+    return {
+      allowed: true,
+      effectiveMode: defaultMode,
+      unitsNeeded: 1,
+    };
+  }
+
+  // Evaluate cumulative conditions for Level C Instant Booking (Section 10)
+  if (service.dataOrigin !== 'verified_partner' || service.pilotConventionSigned !== true) {
+    return {
+      allowed: true,
+      effectiveMode: 'level_b_validation',
+      fallbackReason:
+        'Bascule automatique vers Niveau B (validation prestataire) : convention partenaire non marquée signée ou statut partenaire non vérifié.',
+      unitsNeeded: 1,
+    };
+  }
+
+  const dateMatchingActiveStocks = candidateStocks.filter(
+    (st) =>
+      st.serviceId === service.id &&
+      st.status === 'active' &&
+      (!requestedStockId || st.id === requestedStockId) &&
+      scheduledDate >= st.startDate &&
+      scheduledDate <= st.endDate
+  );
+
+  if (dateMatchingActiveStocks.length === 0) {
+    return {
+      allowed: true,
+      effectiveMode: 'level_b_validation',
+      fallbackReason:
+        'Bascule automatique vers Niveau B (validation prestataire) : aucun stock confirmé actif ne couvre la date demandée.',
+      unitsNeeded: 1,
+    };
+  }
+
+  const nonExpiredStocks = dateMatchingActiveStocks.filter(
+    (st) => st.expiresAt.slice(0, 10) >= todayIso
+  );
+  if (nonExpiredStocks.length === 0) {
+    return {
+      allowed: true,
+      effectiveMode: 'level_b_validation',
+      fallbackReason:
+        'Bascule automatique vers Niveau B (validation prestataire) : la date de confirmation du stock pilote a expiré.',
+      unitsNeeded: 1,
+    };
+  }
+
+  const fullyQualifiedStocks = nonExpiredStocks.filter(
+    (st) =>
+      st.instantBookingAgreed === true &&
+      st.contractualPrice > 0 &&
+      st.cancellationRules.trim().length >= 5 &&
+      st.settlementMode === 'pay_on_arrival_agreed'
+  );
+
+  if (fullyQualifiedStocks.length === 0) {
+    return {
+      allowed: true,
+      effectiveMode: 'level_b_validation',
+      fallbackReason:
+        'Bascule automatique vers Niveau B (validation prestataire) : accord instantané, règles d’annulation ou modalité de règlement sur place non réunis.',
+      unitsNeeded: 1,
+    };
+  }
+
+  // Check unit availability on qualified stocks (Anti-Double-Booking Gate)
+  for (const st of fullyQualifiedStocks) {
+    const unitCap = Math.max(1, st.capacity || service.capacity || 1);
+    const unitsNeeded = Math.max(1, Math.ceil(participants / unitCap));
+    const remaining = st.totalUnits - st.bookedUnits;
+    if (remaining >= unitsNeeded) {
+      return {
+        allowed: true,
+        effectiveMode: 'level_c_instant',
+        matchedStock: st,
+        unitsNeeded,
+      };
+    }
+  }
+
+  // All qualified stocks for this date are already fully booked -> strictly block double-booking!
+  return {
+    allowed: false,
+    blockedReason:
+      'Indisponibilité confirmée (protection anti-double réservation) : toutes les chambres ou tous les véhicules confirmés sur ce créneau sont déjà réservés.',
+    effectiveMode: 'level_c_instant',
+    unitsNeeded: 1,
+  };
+}
+

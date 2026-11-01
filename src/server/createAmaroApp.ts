@@ -8,6 +8,8 @@ import type {
   CurrencyCode,
   IdentityDocumentType,
   IdentityVerificationStatus,
+  ReservationDispatchChannel,
+  ReservationDispatchStatus,
   ServiceCategory,
 } from '../types/amaro';
 import {
@@ -24,6 +26,7 @@ import {
   evaluateJourneyBrain,
   isValidIsoDate,
   isValidTimeHhMm,
+  resolveEffectiveBookingMode,
   type ScheduleSlot,
 } from './domainEngine';
 import {
@@ -621,9 +624,33 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           : service.currency
       ) as CurrencyCode;
 
+      const requestedDate = String(req.body?.scheduledDate || '').trim();
+      const requestedStockId = String(req.body?.stockId || '').trim() || undefined;
+      let effectiveUnitPrice = service.priceAmount;
+      let effectivePriceKnown = service.priceKnown;
+
+      if (
+        service.activationLevel === 'level_c_instant' &&
+        isValidIsoDate(requestedDate) &&
+        store.listActivePilotStocksForService
+      ) {
+        const stocks = await store.listActivePilotStocksForService(service.id, bearer);
+        const decision = resolveEffectiveBookingMode({
+          service,
+          candidateStocks: stocks,
+          scheduledDate: requestedDate,
+          participants: rawParticipants,
+          requestedStockId,
+        });
+        if (decision.allowed && decision.effectiveMode === 'level_c_instant' && decision.matchedStock) {
+          effectiveUnitPrice = decision.matchedStock.contractualPrice;
+          effectivePriceKnown = true;
+        }
+      }
+
       const quote = computeAuthoritativeQuote({
-        unitPrice: service.priceAmount,
-        priceKnown: service.priceKnown,
+        unitPrice: effectiveUnitPrice,
+        priceKnown: effectivePriceKnown,
         participants: rawParticipants,
         currency: service.currency,
         displayCurrency,
@@ -638,7 +665,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         (req.body || {}) as Record<string, unknown>,
         quote.breakdown,
         setting,
-        service.priceKnown === false ? 0 : service.priceAmount
+        effectivePriceKnown === false ? 0 : effectiveUnitPrice
       );
       if (tamper.tampered) {
         res.status(400).json({ error: tamper.reason });
@@ -801,6 +828,37 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
+        // 2b. Evaluate 3-Level Booking Activation (Levels A / B / C) & Confirmed Stock Anti-Double-Booking
+        const requestedStockId = String(req.body?.stockId || '').trim() || undefined;
+        const candidateStocks = store.listActivePilotStocksForService
+          ? await store.listActivePilotStocksForService(service.id, caller.rawIdToken)
+          : [];
+        const modeDecision = resolveEffectiveBookingMode({
+          service,
+          candidateStocks,
+          scheduledDate,
+          participants: rawParticipants,
+          requestedStockId,
+        });
+
+        if (!modeDecision.allowed) {
+          res.status(409).json({
+            error:
+              modeDecision.blockedReason ||
+              'Réservation refusée selon le niveau d’activation ou l’état du stock confirmé.',
+          });
+          return;
+        }
+
+        const effectiveUnitPrice =
+          modeDecision.effectiveMode === 'level_c_instant' && modeDecision.matchedStock
+            ? modeDecision.matchedStock.contractualPrice
+            : service.priceAmount;
+        const effectivePriceKnown =
+          modeDecision.effectiveMode === 'level_c_instant' && modeDecision.matchedStock
+            ? true
+            : service.priceKnown;
+
         const setting = await store.getSystemSetting(
           service.countryCode,
           caller.rawIdToken
@@ -809,8 +867,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
         // 3. Server-side authoritative financial calculation & tamper rejection
         const quote = computeAuthoritativeQuote({
-          unitPrice: service.priceAmount,
-          priceKnown: service.priceKnown,
+          unitPrice: effectiveUnitPrice,
+          priceKnown: effectivePriceKnown,
           participants: rawParticipants,
           currency: service.currency,
           displayCurrency: service.currency,
@@ -824,7 +882,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           (req.body || {}) as Record<string, unknown>,
           quote.breakdown,
           setting,
-          service.priceKnown === false ? 0 : service.priceAmount
+          effectivePriceKnown === false ? 0 : effectiveUnitPrice
         );
         if (tamper.tampered) {
           res.status(400).json({ error: tamper.reason });
@@ -950,6 +1008,20 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             ? `notif-${reservationId.replace(/^res-/, '')}`
             : null;
 
+        const initialStatus =
+          modeDecision.effectiveMode === 'level_c_instant' ? 'confirmed' : 'pending_provider';
+        const itemStage =
+          modeDecision.effectiveMode === 'level_c_instant' ? 'confirmed' : 'requested';
+        const dispatchChannel: ReservationDispatchChannel =
+          providerOwnerId !== 'manual_concierge' ? 'amaro_portal' : 'manual_concierge';
+        const dispatchStatus: ReservationDispatchStatus =
+          modeDecision.effectiveMode === 'level_c_instant'
+            ? 'accepted'
+            : providerOwnerId !== 'manual_concierge'
+            ? 'sent'
+            : 'prepared';
+        const responseDeadlineAt = new Date(Date.now() + 24 * 3600_000).toISOString();
+
         const created = await store.createReservationAtomically(
           {
             reservationId,
@@ -974,6 +1046,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             totalAmount: quote.breakdown.totalAmount,
             currency: service.currency,
             pricingSnapshot: quote.pricingSnapshot,
+            initialStatus,
+            itemStage,
+            activationMode: modeDecision.effectiveMode,
+            allocatedStockId: modeDecision.matchedStock?.id || '',
+            allocatedUnits: modeDecision.matchedStock ? modeDecision.unitsNeeded : 0,
+            dispatchChannel,
+            dispatchStatus,
+            responseDeadlineAt,
+            followUpCount: 0,
             referral: validatedReferral
               ? {
                   ...validatedReferral,
@@ -988,8 +1069,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           ok: true,
           reservationId: created.reservationId,
           itemId: created.itemId,
-          status: 'pending_provider',
+          status: initialStatus,
           paymentStatus: 'unpaid',
+          activationMode: modeDecision.effectiveMode,
+          fallbackReason: modeDecision.fallbackReason || null,
+          allocatedStockId: modeDecision.matchedStock?.id || null,
+          allocatedUnits: modeDecision.matchedStock ? modeDecision.unitsNeeded : 0,
+          dispatchChannel,
+          dispatchStatus,
+          responseDeadlineAt,
           priceKnown: quote.priceKnown,
           referralAttached: Boolean(validatedReferral),
           breakdown: quote.breakdown,
@@ -1064,6 +1152,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         let nextDate = existing.scheduledDate;
         let nextTime = existing.scheduledTime;
         let nextProposal = existing.alternativeProposal || '';
+        let nextDispatchChannel: ReservationDispatchChannel | undefined = undefined;
+        let nextDispatchStatus: ReservationDispatchStatus | undefined = undefined;
+        let nextResponseDeadlineAt: string | undefined = undefined;
+        let nextFollowUpCount: number | undefined = undefined;
         let notifRecipientId: string | null = null;
         let notifKind: 'reservation' | 'payment' | 'alternative' = 'reservation';
         let notifTitle = '';
@@ -1095,7 +1187,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           if (
             existing.status !== 'accepted' &&
             existing.status !== 'awaiting_payment' &&
-            existing.status !== 'alternative_proposed'
+            existing.status !== 'alternative_proposed' &&
+            existing.status !== 'confirmed'
           ) {
             res.status(409).json({
               error:
@@ -1142,21 +1235,66 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
           if (action === 'provider_accept') {
             nextStatus = 'accepted';
+            nextDispatchStatus = 'accepted';
             notifKind = 'reservation';
             notifTitle = `Disponibilité confirmée : ${existing.serviceTitle}`;
             notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement encadré AMARO.`;
           } else if (action === 'provider_propose_alternative') {
             nextStatus = 'alternative_proposed';
+            nextDispatchStatus = 'response_received';
             notifKind = 'alternative';
             notifTitle = `Alternative proposée : ${existing.serviceTitle}`;
             notifBody = `Nouvelle proposition prestataire (${nextDate} à ${nextTime}) : ${nextProposal || 'Veuillez consulter votre suivi de réservation.'}`;
           } else {
             nextStatus = 'rejected';
+            nextDispatchStatus = 'rejected';
             notifKind = 'reservation';
             notifTitle = `Indisponibilité signalée : ${existing.serviceTitle}`;
             notifBody = nextProposal || 'Le créneau demandé n’est pas disponible. Vous pouvez choisir une alternative dans le catalogue.';
           }
           notifRecipientId = existing.clientId;
+        } else if (
+          action === 'admin_mark_dispatched' ||
+          action === 'admin_mark_send_failed' ||
+          action === 'admin_record_followup' ||
+          action === 'admin_mark_expired'
+        ) {
+          if (!isAdmin) {
+            res.status(403).json({
+              error:
+                'Le suivi opérationnel de transmission et de relance prestataire est strictement réservé à l’administration AMARO.',
+            });
+            return;
+          }
+          const requestedChannel = String(req.body?.dispatchChannel || '').trim();
+          if (
+            requestedChannel === 'amaro_portal' ||
+            requestedChannel === 'configured_email' ||
+            requestedChannel === 'manual_concierge'
+          ) {
+            nextDispatchChannel = requestedChannel;
+          }
+
+          if (action === 'admin_mark_dispatched') {
+            nextDispatchStatus = 'sent';
+            nextResponseDeadlineAt = new Date(Date.now() + 24 * 3600_000).toISOString();
+          } else if (action === 'admin_mark_send_failed') {
+            nextDispatchStatus = 'send_failed';
+          } else if (action === 'admin_record_followup') {
+            nextDispatchStatus = 'sent';
+            nextFollowUpCount = Math.min(50, Number(existing.followUpCount || 0) + 1);
+            nextResponseDeadlineAt = new Date(Date.now() + 24 * 3600_000).toISOString();
+          } else if (action === 'admin_mark_expired') {
+            nextStatus = 'rejected';
+            nextDispatchStatus = 'expired';
+            nextProposal =
+              String(req.body?.alternativeProposal || '').trim().slice(0, 780) ||
+              'Délai de réponse prestataire expiré sans confirmation. Aucune réservation fictive n’a été validée ; veuillez sélectionner une alternative.';
+            notifRecipientId = existing.clientId;
+            notifKind = 'reservation';
+            notifTitle = `Délai de réponse expiré : ${existing.serviceTitle}`;
+            notifBody = nextProposal;
+          }
         } else if (
           action === 'admin_confirm_payment' ||
           action === 'admin_refund'
@@ -1187,6 +1325,14 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
+        const wasTerminal = ['cancelled', 'rejected', 'refunded'].includes(existing.status);
+        const becomesTerminal = ['cancelled', 'rejected', 'refunded'].includes(nextStatus);
+        const shouldReleaseStock =
+          !wasTerminal &&
+          becomesTerminal &&
+          Boolean(existing.allocatedStockId) &&
+          Number(existing.allocatedUnits || 0) > 0;
+
         const notifId = notifRecipientId
           ? `notif-tr-${crypto
               .createHash('sha256')
@@ -1203,6 +1349,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             scheduledDate: nextDate,
             scheduledTime: nextTime,
             alternativeProposal: nextProposal,
+            dispatchChannel: nextDispatchChannel,
+            dispatchStatus: nextDispatchStatus,
+            responseDeadlineAt: nextResponseDeadlineAt,
+            followUpCount: nextFollowUpCount,
+            releaseStock: shouldReleaseStock
+              ? {
+                  stockId: existing.allocatedStockId!,
+                  units: Number(existing.allocatedUnits || 1),
+                }
+              : null,
             notification:
               notifRecipientId && notifId
                 ? {
@@ -1223,6 +1379,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           reservationId,
           status: nextStatus,
           paymentStatus: nextPaymentStatus,
+          dispatchChannel: nextDispatchChannel ?? existing.dispatchChannel ?? null,
+          dispatchStatus: nextDispatchStatus ?? existing.dispatchStatus ?? null,
+          followUpCount: nextFollowUpCount ?? existing.followUpCount ?? 0,
+          stockReleased: shouldReleaseStock,
           scheduledDate: nextDate,
           scheduledTime: nextTime,
           receiptEligible: nextPaymentStatus === 'succeeded',

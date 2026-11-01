@@ -1828,7 +1828,41 @@ export function JourneyHubView({
                         <p>
                           État réservation :{' '}
                           <strong>{RESERVATION_STATUS_LABELS[res.status]}</strong>
+                          {res.activationMode && (
+                            <span className="text-slate-500">
+                              {' '}
+                              ·{' '}
+                              {res.activationMode === 'level_c_instant'
+                                ? 'Niveau C (stock partenaire confirmé)'
+                                : res.activationMode === 'level_b_validation'
+                                ? 'Niveau B (validation prestataire pilote)'
+                                : 'Conciergerie annuaire'}
+                            </span>
+                          )}
                         </p>
+                        {res.dispatchStatus && (
+                          <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                            Suivi transmission prestataire :{' '}
+                            <strong>
+                              {res.dispatchStatus === 'prepared'
+                                ? 'Préparée pour transmission conciergerie'
+                                : res.dispatchStatus === 'sent'
+                                ? 'Transmise au prestataire'
+                                : res.dispatchStatus === 'send_failed'
+                                ? 'Incident d’envoi pris en charge par AMARO'
+                                : res.dispatchStatus === 'response_received'
+                                ? 'Réponse prestataire reçue'
+                                : res.dispatchStatus === 'accepted'
+                                ? 'Disponibilité acceptée'
+                                : res.dispatchStatus === 'expired'
+                                ? 'Délai prestataire expiré sans validation'
+                                : 'Indisponible'}
+                            </strong>
+                            {res.allocatedStockId
+                              ? ` · Unité réservée : ${res.allocatedStockId} (${res.allocatedUnits || 1})`
+                              : ''}
+                          </p>
+                        )}
                         <p>
                           État paiement :{' '}
                           <strong>{PAYMENT_STATUS_LABELS[res.paymentStatus]}</strong>

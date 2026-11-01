@@ -138,6 +138,10 @@ export interface CatalogueItem {
   sourceUrl?: string;
   verifiedAt?: string;
   siteEditorial?: TouristSiteEditorial;
+  // Pilot Partner Conventioning & 3-Level Activation Metadata (Public-safe only; never internal notes)
+  activationLevel?: PartnerActivationLevel;
+  pilotConventionSigned?: boolean;
+  cancellationPolicy?: string;
 }
 
 export interface JourneyFolderDoc {
@@ -213,6 +217,13 @@ export interface ReservationDoc {
   pricingSnapshot?: string;
   referralCode?: string;
   providerSettled?: boolean;
+  activationMode?: 'directory_concierge' | 'level_b_validation' | 'level_c_instant';
+  allocatedStockId?: string;
+  allocatedUnits?: number;
+  dispatchChannel?: ReservationDispatchChannel;
+  dispatchStatus?: ReservationDispatchStatus;
+  responseDeadlineAt?: string;
+  followUpCount?: number;
 }
 
 export interface ProviderProfileDoc {
@@ -404,5 +415,116 @@ export interface AssistantQuickAction {
   label: string;
   cityId?: string;
   category?: ServiceCategory;
+}
+
+// ===========================================================================
+// PARTENAIRES PILOTES — CONVENTIONNEMENT, STOCKS CONFIRMÉS & NIVEAUX A / B / C
+// ===========================================================================
+export type PilotZoneId =
+  | 'cotonou'
+  | 'ouidah'
+  | 'abomey'
+  | 'grand-popo'
+  | 'natitingou';
+
+export type PilotPartnerCategory = 'accommodation' | 'transport';
+
+export type PilotConventionStatus =
+  | 'to_identify'
+  | 'identified'
+  | 'contacts_to_verify'
+  | 'to_contact'
+  | 'contacted'
+  | 'response_received'
+  | 'negotiation_in_progress'
+  | 'awaiting_documents'
+  | 'commercial_terms_agreed'
+  | 'convention_pending_signature'
+  | 'convention_signed'
+  | 'catalogue_to_complete'
+  | 'offers_under_verification'
+  | 'pilot_activated'
+  | 'suspended'
+  | 'convention_terminated';
+
+export type PartnerActivationLevel =
+  | 'directory_only'
+  | 'level_a_verified'
+  | 'level_b_validation'
+  | 'level_c_instant';
+
+export type ReservationDispatchChannel =
+  | 'amaro_portal'
+  | 'configured_email'
+  | 'manual_concierge';
+
+export type ReservationDispatchStatus =
+  | 'prepared'
+  | 'sent'
+  | 'send_failed'
+  | 'response_received'
+  | 'accepted'
+  | 'rejected'
+  | 'expired';
+
+export interface PilotPartnerDoc {
+  id: string;
+  businessName: string;
+  category: PilotPartnerCategory;
+  cityId: PilotZoneId;
+  coveredZones: string;
+  businessAddress: string;
+  businessPhone: string;
+  businessEmail: string;
+  officialWebsite: string;
+  contactNameAndRole: string;
+  infoSource: string;
+  verifiedDate: string;
+  conventionStatus: PilotConventionStatus;
+  contactStatus: string;
+  negotiationStatus: string;
+  documentsReceived: string;
+  conventionSigned: boolean;
+  conventionSignedRef: string;
+  registeredServiceId: string;
+  tariffsConfirmed: boolean;
+  availabilitiesConfirmed: boolean;
+  allowedBookingMode: 'none' | 'level_a_verified' | 'level_b_validation' | 'level_c_instant';
+  dispatchChannel: ReservationDispatchChannel;
+  nextAction: string;
+  internalNotes: string;
+  updatedBy: string;
+  updatedAtIso?: string;
+}
+
+export interface PilotStockDoc {
+  id: string;
+  pilotId: string;
+  serviceId: string;
+  providerId: string;
+  providerOwnerId: string;
+  category: PilotPartnerCategory;
+  cityId: PilotZoneId;
+  unitCode: string;
+  unitLabel: string;
+  capacity: number;
+  baggageCapacity: number;
+  withDriver: boolean;
+  pickupAndCoverageZone: string;
+  startDate: string;
+  endDate: string;
+  totalUnits: number;
+  bookedUnits: number;
+  contractualPrice: number;
+  currency: CurrencyCode;
+  cancellationRules: string;
+  instantBookingAgreed: boolean;
+  settlementMode: 'pay_on_arrival_agreed' | 'online_gateway_required';
+  confirmationSource: string;
+  expiresAt: string;
+  status: 'active' | 'paused' | 'expired';
+  lastReservationId?: string;
+  updatedBy: string;
+  updatedAtIso?: string;
 }
 

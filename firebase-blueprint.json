@@ -112,8 +112,29 @@
         "neighborhood": { "type": "string", "maxLength": 140 },
         "standing": {
           "type": "string",
-          "enum": ["international_5", "upper_4", "comfort_3", "boutique_charm", "eco_nature", "residence_apart", "budget_2"]
+          "enum": [
+            "international_5",
+            "upper_4",
+            "comfort_3",
+            "boutique_charm",
+            "eco_nature",
+            "residence_apart",
+            "budget_2",
+            "luxe",
+            "haut_de_gamme",
+            "intermediaire",
+            "economique",
+            "residence_meublee",
+            "maison_hotes",
+            "ecolodge"
+          ]
         },
+        "activationLevel": {
+          "type": "string",
+          "enum": ["directory_only", "level_a_verified", "level_b_validation", "level_c_instant"]
+        },
+        "pilotConventionSigned": { "type": "boolean" },
+        "cancellationPolicy": { "type": "string", "maxLength": 500 },
         "status": { "type": "string", "enum": ["draft", "published", "archived"] },
         "imageKey": { "type": "string", "maxLength": 100 },
         "imageLicense": { "type": "string", "maxLength": 200 },
@@ -300,6 +321,22 @@
         "pricingSnapshot": { "type": "string", "minLength": 2, "maxLength": 600 },
         "referralCode": { "type": "string", "maxLength": 40 },
         "providerSettled": { "type": "boolean" },
+        "activationMode": {
+          "type": "string",
+          "enum": ["directory_concierge", "level_b_validation", "level_c_instant"]
+        },
+        "allocatedStockId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "allocatedUnits": { "type": "integer" },
+        "dispatchChannel": {
+          "type": "string",
+          "enum": ["amaro_portal", "configured_email", "manual_concierge"]
+        },
+        "dispatchStatus": {
+          "type": "string",
+          "enum": ["prepared", "sent", "send_failed", "response_received", "accepted", "rejected", "expired"]
+        },
+        "responseDeadlineAt": { "type": "string", "maxLength": 40 },
+        "followUpCount": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -618,6 +655,168 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reservationId", "actorId", "actorRole", "action", "summary", "createdAt"]
+    },
+    "PilotPartner": {
+      "title": "PilotPartner",
+      "description": "Confidential administrative CRM and conventioning record for priority Benin pilot hotels and transporters",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "category": { "type": "string", "enum": ["accommodation", "transport"] },
+        "cityId": {
+          "type": "string",
+          "enum": ["cotonou", "ouidah", "abomey", "grand-popo", "natitingou"]
+        },
+        "coveredZones": { "type": "string", "maxLength": 240 },
+        "businessAddress": { "type": "string", "maxLength": 240 },
+        "businessPhone": { "type": "string", "maxLength": 60 },
+        "businessEmail": { "type": "string", "maxLength": 200 },
+        "officialWebsite": { "type": "string", "maxLength": 300 },
+        "contactNameAndRole": { "type": "string", "maxLength": 180 },
+        "infoSource": { "type": "string", "maxLength": 240 },
+        "verifiedDate": { "type": "string", "maxLength": 30 },
+        "conventionStatus": {
+          "type": "string",
+          "enum": [
+            "to_identify",
+            "identified",
+            "contacts_to_verify",
+            "to_contact",
+            "contacted",
+            "response_received",
+            "negotiation_in_progress",
+            "awaiting_documents",
+            "commercial_terms_agreed",
+            "convention_pending_signature",
+            "convention_signed",
+            "catalogue_to_complete",
+            "offers_under_verification",
+            "pilot_activated",
+            "suspended",
+            "convention_terminated"
+          ]
+        },
+        "contactStatus": { "type": "string", "maxLength": 120 },
+        "negotiationStatus": { "type": "string", "maxLength": 200 },
+        "documentsReceived": { "type": "string", "maxLength": 500 },
+        "conventionSigned": { "type": "boolean" },
+        "conventionSignedRef": { "type": "string", "maxLength": 160 },
+        "registeredServiceId": { "type": "string", "maxLength": 128 },
+        "tariffsConfirmed": { "type": "boolean" },
+        "availabilitiesConfirmed": { "type": "boolean" },
+        "allowedBookingMode": {
+          "type": "string",
+          "enum": ["none", "level_a_verified", "level_b_validation", "level_c_instant"]
+        },
+        "dispatchChannel": {
+          "type": "string",
+          "enum": ["amaro_portal", "configured_email", "manual_concierge"]
+        },
+        "nextAction": { "type": "string", "maxLength": 300 },
+        "internalNotes": { "type": "string", "maxLength": 2000 },
+        "updatedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "businessName",
+        "category",
+        "cityId",
+        "coveredZones",
+        "businessAddress",
+        "businessPhone",
+        "businessEmail",
+        "officialWebsite",
+        "contactNameAndRole",
+        "infoSource",
+        "verifiedDate",
+        "conventionStatus",
+        "contactStatus",
+        "negotiationStatus",
+        "documentsReceived",
+        "conventionSigned",
+        "conventionSignedRef",
+        "registeredServiceId",
+        "tariffsConfirmed",
+        "availabilitiesConfirmed",
+        "allowedBookingMode",
+        "dispatchChannel",
+        "nextAction",
+        "internalNotes",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PilotStock": {
+      "title": "PilotStock",
+      "description": "Confirmed room or vehicle unit stock with contractual tariff, provenance, expiration, and atomic anti-double-booking counter",
+      "type": "object",
+      "properties": {
+        "pilotId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "providerOwnerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": { "type": "string", "enum": ["accommodation", "transport"] },
+        "cityId": {
+          "type": "string",
+          "enum": ["cotonou", "ouidah", "abomey", "grand-popo", "natitingou"]
+        },
+        "unitCode": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "unitLabel": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "capacity": { "type": "integer" },
+        "baggageCapacity": { "type": "integer" },
+        "withDriver": { "type": "boolean" },
+        "pickupAndCoverageZone": { "type": "string", "maxLength": 240 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "totalUnits": { "type": "integer" },
+        "bookedUnits": { "type": "integer" },
+        "contractualPrice": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "cancellationRules": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "instantBookingAgreed": { "type": "boolean" },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["pay_on_arrival_agreed", "online_gateway_required"]
+        },
+        "confirmationSource": { "type": "string", "minLength": 3, "maxLength": 240 },
+        "expiresAt": { "type": "string", "minLength": 10, "maxLength": 30 },
+        "status": { "type": "string", "enum": ["active", "paused", "expired"] },
+        "lastReservationId": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "pilotId",
+        "serviceId",
+        "providerId",
+        "providerOwnerId",
+        "category",
+        "cityId",
+        "unitCode",
+        "unitLabel",
+        "capacity",
+        "baggageCapacity",
+        "withDriver",
+        "pickupAndCoverageZone",
+        "startDate",
+        "endDate",
+        "totalUnits",
+        "bookedUnits",
+        "contractualPrice",
+        "currency",
+        "cancellationRules",
+        "instantBookingAgreed",
+        "settlementMode",
+        "confirmationSource",
+        "expiresAt",
+        "status",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -696,6 +895,14 @@
     "/identity_verifications/{reservationId}/access_logs/{logId}": {
       "schema": { "$ref": "#/entities/IdentityAccessLog" },
       "description": "Immutable traceability log for identity verification operations"
+    },
+    "/pilot_partners/{pilotId}": {
+      "schema": { "$ref": "#/entities/PilotPartner" },
+      "description": "Strictly Admin-only confidential CRM, prospection, and conventioning workspace for priority Benin pilot partners"
+    },
+    "/pilot_stocks/{stockId}": {
+      "schema": { "$ref": "#/entities/PilotStock" },
+      "description": "Confirmed room and vehicle stock records supporting Level C instant booking and anti-double-booking"
     }
   }
 }

@@ -22,10 +22,14 @@ import type {
   DataOriginType,
   IdentityVerificationDoc,
   LocaleCode,
+  PartnerActivationLevel,
   PartnerCommissionStatus,
   PartnerProfileDoc,
   PartnerReferralDoc,
+  PilotPartnerDoc,
+  PilotStockDoc,
   ProviderProfileDoc,
+  ReservationDispatchChannel,
   ReservationDoc,
   ServiceCategory,
   SystemSettingDoc,
@@ -41,6 +45,7 @@ import {
 } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { AmaroPartnersView } from './AmaroPartnersView';
+import { PilotConventioningView } from './PilotConventioningView';
 import {
   IDENTITY_STATUS_META,
   IdentityVerificationModal,
@@ -209,10 +214,45 @@ interface WorkspacesAdminViewProps {
   ) => Promise<void>;
   providerIdentityByRes?: Record<string, IdentityVerificationDoc>;
   adminIdentityByRes?: Record<string, IdentityVerificationDoc>;
+  pilotPartners?: PilotPartnerDoc[];
+  pilotStocks?: PilotStockDoc[];
+  onSavePilotPartner?: (
+    draft: Omit<PilotPartnerDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
+  ) => Promise<void>;
+  onDeletePilotPartner?: (pilotId: string) => Promise<void>;
+  onSyncPilotOfferActivation?: (params: {
+    pilot: PilotPartnerDoc;
+    activationLevel: PartnerActivationLevel;
+    priceAmount: number;
+    currency: CurrencyCode;
+    capacity: number;
+    cancellationPolicy: string;
+  }) => Promise<void>;
+  onSavePilotStock?: (
+    draft: Omit<PilotStockDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
+  ) => Promise<void>;
+  onDeletePilotStock?: (stockId: string) => Promise<void>;
+  onDispatchReservationAction?: (params: {
+    reservationId: string;
+    action:
+      | 'admin_mark_dispatched'
+      | 'admin_mark_send_failed'
+      | 'admin_record_followup'
+      | 'admin_mark_expired';
+    dispatchChannel?: ReservationDispatchChannel;
+    alternativeProposal?: string;
+  }) => Promise<void>;
   onNotify: (message: string) => void;
 }
 
-type SubWorkspace = 'github' | 'partners' | 'profile' | 'provider' | 'admin' | 'matrix';
+type SubWorkspace =
+  | 'github'
+  | 'partners'
+  | 'profile'
+  | 'provider'
+  | 'pilots'
+  | 'admin'
+  | 'matrix';
 
 const CATEGORIES: ServiceCategory[] = [
   'accommodation',
@@ -268,6 +308,14 @@ export function WorkspacesAdminView({
   onAdminSettleReservation,
   providerIdentityByRes = {},
   adminIdentityByRes = {},
+  pilotPartners = [],
+  pilotStocks = [],
+  onSavePilotPartner,
+  onDeletePilotPartner,
+  onSyncPilotOfferActivation,
+  onSavePilotStock,
+  onDeletePilotStock,
+  onDispatchReservationAction,
   onNotify,
 }: WorkspacesAdminViewProps) {
   const t = TRANSLATIONS[locale];
@@ -278,7 +326,7 @@ export function WorkspacesAdminView({
   } | null>(null);
 
   useEffect(() => {
-    if (!isAdmin && (subTab === 'admin' || subTab === 'github')) {
+    if (!isAdmin && (subTab === 'admin' || subTab === 'github' || subTab === 'pilots')) {
       setSubTab('profile');
     }
   }, [isAdmin, subTab]);
@@ -600,6 +648,12 @@ export function WorkspacesAdminView({
               icon: FileCheck2,
               adminOnly: false,
             },
+            {
+              id: 'pilots' as SubWorkspace,
+              label: 'Partenaires pilotes — Conventionnement',
+              icon: FolderKanban,
+              adminOnly: true,
+            },
             { id: 'admin' as SubWorkspace, label: 'Administration & Catalogue', icon: ShieldCheck, adminOnly: true },
             { id: 'github' as SubWorkspace, label: 'Sauvegarde GitHub & Spck', icon: GitBranch, adminOnly: true },
           ] as const
@@ -625,6 +679,32 @@ export function WorkspacesAdminView({
             );
           })}
       </div>
+
+      {/* =====================================================================
+          TAB PILOTS: PARTENAIRES PILOTES — CONVENTIONNEMENT (ADMIN ONLY)
+         ===================================================================== */}
+      {subTab === 'pilots' &&
+        isAdmin &&
+        onSavePilotPartner &&
+        onDeletePilotPartner &&
+        onSyncPilotOfferActivation &&
+        onSavePilotStock &&
+        onDeletePilotStock &&
+        onDispatchReservationAction && (
+          <PilotConventioningView
+            pilotPartners={pilotPartners}
+            pilotStocks={pilotStocks}
+            allCatalogueServices={allCatalogueServices}
+            allReservations={allReservations}
+            defaultCommissionPercent={countrySetting?.commissionPercent ?? 10}
+            onSavePilotPartner={onSavePilotPartner}
+            onDeletePilotPartner={onDeletePilotPartner}
+            onSyncPilotOfferActivation={onSyncPilotOfferActivation}
+            onSavePilotStock={onSavePilotStock}
+            onDeletePilotStock={onDeletePilotStock}
+            onDispatchReservationAction={onDispatchReservationAction}
+          />
+        )}
 
       {/* =====================================================================
           TAB 0: AMARO PARTNERS (INFLUENCERS, GUIDES & AFFILIATES)

@@ -4,7 +4,10 @@ import type {
   IdentityAccessLogDoc,
   IdentityDocumentType,
   IdentityVerificationStatus,
+  PartnerActivationLevel,
   PaymentStatus,
+  ReservationDispatchChannel,
+  ReservationDispatchStatus,
   ReservationStatus,
   ServiceCategory,
 } from '../types/amaro';
@@ -12,6 +15,7 @@ import {
   OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   parseMinutes,
   type ScheduleSlot,
+  type ServerPilotStockRecord,
   type ServerServiceRecord,
   type ServerSystemSetting,
 } from './domainEngine';
@@ -59,6 +63,13 @@ export interface ServerReservationRecord {
   status: ReservationStatus;
   paymentStatus?: PaymentStatus;
   alternativeProposal?: string;
+  activationMode?: 'directory_concierge' | 'level_b_validation' | 'level_c_instant';
+  allocatedStockId?: string;
+  allocatedUnits?: number;
+  dispatchChannel?: ReservationDispatchChannel;
+  dispatchStatus?: ReservationDispatchStatus;
+  responseDeadlineAt?: string;
+  followUpCount?: number;
   updatedAtIso?: string;
 }
 
@@ -141,12 +152,25 @@ export interface AtomicReservationPayload {
   totalAmount: number;
   currency: CurrencyCode;
   pricingSnapshot: string;
+  initialStatus?: ReservationStatus;
+  itemStage?: 'requested' | 'confirmed';
+  activationMode?: 'directory_concierge' | 'level_b_validation' | 'level_c_instant';
+  allocatedStockId?: string;
+  allocatedUnits?: number;
+  dispatchChannel?: ReservationDispatchChannel;
+  dispatchStatus?: ReservationDispatchStatus;
+  responseDeadlineAt?: string;
+  followUpCount?: number;
   referral?: AtomicReferralPayload | null;
 }
 
 export interface AmaroServerStore {
   isRegisteredAdmin(uid: string, rawIdToken?: string): Promise<boolean>;
   getService(serviceId: string, rawIdToken?: string): Promise<ServerServiceRecord | null>;
+  listActivePilotStocksForService?(
+    serviceId: string,
+    rawIdToken?: string
+  ): Promise<ServerPilotStockRecord[]>;
   getSystemSetting(countryCode: string, rawIdToken?: string): Promise<ServerSystemSetting>;
   getJourneyFolder(folderId: string, rawIdToken: string): Promise<ServerFolderRecord | null>;
   getPartnerByCode?(referralCode: string, rawIdToken?: string): Promise<ServerPartnerRecord | null>;
@@ -159,6 +183,14 @@ export interface AmaroServerStore {
       scheduledDate: string;
       scheduledTime: string;
       alternativeProposal: string;
+      dispatchChannel?: ReservationDispatchChannel;
+      dispatchStatus?: ReservationDispatchStatus;
+      responseDeadlineAt?: string;
+      followUpCount?: number;
+      releaseStock?: {
+        stockId: string;
+        units: number;
+      } | null;
       notification?: {
         id: string;
         recipientId: string;
@@ -364,6 +396,16 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           | 'pending_verification'
           | 'public_directory'
           | 'demo_test',
+        activationLevel: raw.activationLevel
+          ? (String(raw.activationLevel) as PartnerActivationLevel)
+          : undefined,
+        pilotConventionSigned:
+          typeof raw.pilotConventionSigned === 'boolean'
+            ? raw.pilotConventionSigned
+            : undefined,
+        cancellationPolicy: raw.cancellationPolicy
+          ? String(raw.cancellationPolicy)
+          : undefined,
       };
     }
 
@@ -372,6 +414,104 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     }
 
     return null;
+  }
+
+  private mapPilotStockRecord(id: string, raw: Record<string, any>): ServerPilotStockRecord {
+    return {
+      id,
+      pilotId: String(raw.pilotId || ''),
+      serviceId: String(raw.serviceId || ''),
+      providerId: String(raw.providerId || ''),
+      providerOwnerId: String(raw.providerOwnerId || 'manual_concierge'),
+      category: raw.category === 'transport' ? 'transport' : 'accommodation',
+      cityId: String(raw.cityId || 'cotonou'),
+      unitCode: String(raw.unitCode || ''),
+      unitLabel: String(raw.unitLabel || ''),
+      capacity: Math.max(1, Number(raw.capacity ?? 1)),
+      baggageCapacity: Math.max(0, Number(raw.baggageCapacity ?? 0)),
+      withDriver: Boolean(raw.withDriver),
+      pickupAndCoverageZone: String(raw.pickupAndCoverageZone || ''),
+      startDate: String(raw.startDate || ''),
+      endDate: String(raw.endDate || ''),
+      totalUnits: Math.max(1, Number(raw.totalUnits ?? 1)),
+      bookedUnits: Math.max(0, Number(raw.bookedUnits ?? 0)),
+      contractualPrice: Math.max(0, Number(raw.contractualPrice ?? 0)),
+      currency: (raw.currency || 'XOF') as CurrencyCode,
+      cancellationRules: String(raw.cancellationRules || ''),
+      instantBookingAgreed: Boolean(raw.instantBookingAgreed),
+      settlementMode:
+        raw.settlementMode === 'online_gateway_required'
+          ? 'online_gateway_required'
+          : 'pay_on_arrival_agreed',
+      confirmationSource: String(raw.confirmationSource || ''),
+      expiresAt: String(raw.expiresAt || ''),
+      status: (raw.status || 'active') as 'active' | 'paused' | 'expired',
+    };
+  }
+
+  async listActivePilotStocksForService(
+    serviceId: string,
+    rawIdToken?: string
+  ): Promise<ServerPilotStockRecord[]> {
+    const cleanId = serviceId.trim();
+    if (!cleanId) return [];
+
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb()
+        .collection('pilot_stocks')
+        .where('serviceId', '==', cleanId)
+        .where('status', '==', 'active')
+        .get();
+      return snap.docs.map((d) => this.mapPilotStockRecord(d.id, d.data()));
+    }
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (rawIdToken) headers.Authorization = `Bearer ${rawIdToken}`;
+    const res = await fetch(`${this.baseUrl}:runQuery`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'pilot_stocks' }],
+          where: {
+            compositeFilter: {
+              op: 'AND',
+              filters: [
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'serviceId' },
+                    op: 'EQUAL',
+                    value: { stringValue: cleanId },
+                  },
+                },
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'status' },
+                    op: 'EQUAL',
+                    value: { stringValue: 'active' },
+                  },
+                },
+              ],
+            },
+          },
+          limit: 50,
+        },
+      }),
+    });
+
+    if (!res.ok) return [];
+    const rows: any[] = await res.json();
+    const out: ServerPilotStockRecord[] = [];
+    for (const row of rows) {
+      if (!row?.document?.fields) continue;
+      const fields = decodeFirestoreFields(row.document.fields);
+      const docName = String(row.document.name || '');
+      const id = docName.split('/').pop() || '';
+      if (id) {
+        out.push(this.mapPilotStockRecord(id, fields));
+      }
+    }
+    return out;
   }
 
   async getSystemSetting(
@@ -721,6 +861,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     }
     this.inFlightKeys.add(lockKey);
 
+    const effectiveStatus: ReservationStatus = payload.initialStatus || 'pending_provider';
+    const effectiveItemStage = payload.itemStage || 'requested';
+    const itemNotes =
+      effectiveStatus === 'confirmed'
+        ? 'Réservation instantanée confirmée sur stock partenaire pilote vérifié'
+        : 'Demande de réservation transmise';
+
     try {
       if (this.hasServiceAccount) {
         const db = this.getAdminDb();
@@ -732,6 +879,30 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             if (!st || !['cancelled', 'rejected', 'refunded'].includes(st)) {
               throw new ConflictError(
                 'Une réservation identique existe déjà pour ce créneau.'
+              );
+            }
+          }
+
+          let stockRef: FirebaseFirestore.DocumentReference | null = null;
+          let nextBookedUnits = 0;
+          if (payload.allocatedStockId && (payload.allocatedUnits || 0) > 0) {
+            stockRef = db.collection('pilot_stocks').doc(payload.allocatedStockId);
+            const stockSnap = await tx.get(stockRef);
+            if (!stockSnap.exists) {
+              throw new ConflictError('Stock partenaire pilote introuvable.');
+            }
+            const sData = stockSnap.data() || {};
+            if (sData.status !== 'active' || sData.instantBookingAgreed !== true) {
+              throw new ConflictError(
+                'Ce stock partenaire pilote n’est plus actif en réservation instantanée.'
+              );
+            }
+            const curBooked = Math.max(0, Number(sData.bookedUnits ?? 0));
+            const totalUnits = Math.max(1, Number(sData.totalUnits ?? 1));
+            nextBookedUnits = curBooked + (payload.allocatedUnits || 1);
+            if (nextBookedUnits > totalUnits) {
+              throw new ConflictError(
+                'Indisponibilité confirmée (anti-double réservation) : la dernière unité vient d’être réservée.'
               );
             }
           }
@@ -754,7 +925,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             taxAmount: payload.taxAmount,
             totalAmount: payload.totalAmount,
             currency: payload.currency,
-            status: 'pending_provider' satisfies ReservationStatus,
+            status: effectiveStatus,
             paymentStatus: 'unpaid' satisfies PaymentStatus,
             alternativeProposal: '',
             pricingSnapshot: payload.pricingSnapshot,
@@ -765,7 +936,31 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           if (payload.referral?.referralCode) {
             resDoc.referralCode = payload.referral.referralCode;
           }
+          if (payload.activationMode) resDoc.activationMode = payload.activationMode;
+          if (payload.allocatedStockId !== undefined) {
+            resDoc.allocatedStockId = payload.allocatedStockId;
+          }
+          if (payload.allocatedUnits !== undefined) {
+            resDoc.allocatedUnits = payload.allocatedUnits;
+          }
+          if (payload.dispatchChannel) resDoc.dispatchChannel = payload.dispatchChannel;
+          if (payload.dispatchStatus) resDoc.dispatchStatus = payload.dispatchStatus;
+          if (payload.responseDeadlineAt) {
+            resDoc.responseDeadlineAt = payload.responseDeadlineAt;
+          }
+          if (payload.followUpCount !== undefined) {
+            resDoc.followUpCount = payload.followUpCount;
+          }
+
           tx.set(resRef, resDoc);
+
+          if (stockRef) {
+            tx.update(stockRef, {
+              bookedUnits: nextBookedUnits,
+              lastReservationId: payload.reservationId,
+              updatedAt: nowTs,
+            });
+          }
 
           const itemRef = db
             .collection('journey_folders')
@@ -786,8 +981,8 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             durationMinutes: payload.durationMinutes,
             estimatedCost: payload.totalAmount,
             currency: payload.currency,
-            stage: 'requested',
-            notes: 'Demande de réservation transmise',
+            stage: effectiveItemStage,
+            notes: itemNotes,
             createdAt: nowTs,
             updatedAt: nowTs,
           });
@@ -820,8 +1015,11 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               recipientId: payload.providerOwnerId,
               senderId: payload.clientId,
               kind: 'reservation',
-              title: 'Nouvelle demande de réservation',
-              body: `Demande reçue pour « ${payload.serviceTitle} » le ${payload.scheduledDate} à ${payload.scheduledTime} (${payload.participants} pers.).`.slice(
+              title:
+                effectiveStatus === 'confirmed'
+                  ? 'Réservation instantanée confirmée sur votre stock'
+                  : 'Nouvelle demande de réservation',
+              body: `Réservation pour « ${payload.serviceTitle} » le ${payload.scheduledDate} à ${payload.scheduledTime} (${payload.participants} pers.).`.slice(
                 0,
                 780
               ),
@@ -835,7 +1033,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         return { reservationId: payload.reservationId, itemId: payload.itemId };
       }
 
-      // Atomic Cloud Firestore REST :commit with currentDocument: { exists: false } precondition
+      // Atomic Cloud Firestore REST :commit with currentDocument preconditions
       const resDocName = `${this.dbResourcePath}/reservations/${payload.reservationId}`;
       const itemDocName = `${this.dbResourcePath}/journey_folders/${payload.folderId}/items/${payload.itemId}`;
 
@@ -856,7 +1054,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         taxAmount: encodeNumber(payload.taxAmount),
         totalAmount: encodeNumber(payload.totalAmount),
         currency: encodeString(payload.currency),
-        status: encodeString('pending_provider'),
+        status: encodeString(effectiveStatus),
         paymentStatus: encodeString('unpaid'),
         alternativeProposal: encodeString(''),
         pricingSnapshot: encodeString(payload.pricingSnapshot),
@@ -864,6 +1062,27 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       };
       if (payload.referral?.referralCode) {
         resFields.referralCode = encodeString(payload.referral.referralCode);
+      }
+      if (payload.activationMode) {
+        resFields.activationMode = encodeString(payload.activationMode);
+      }
+      if (payload.allocatedStockId !== undefined) {
+        resFields.allocatedStockId = encodeString(payload.allocatedStockId);
+      }
+      if (payload.allocatedUnits !== undefined) {
+        resFields.allocatedUnits = encodeInt(payload.allocatedUnits);
+      }
+      if (payload.dispatchChannel) {
+        resFields.dispatchChannel = encodeString(payload.dispatchChannel);
+      }
+      if (payload.dispatchStatus) {
+        resFields.dispatchStatus = encodeString(payload.dispatchStatus);
+      }
+      if (payload.responseDeadlineAt) {
+        resFields.responseDeadlineAt = encodeString(payload.responseDeadlineAt);
+      }
+      if (payload.followUpCount !== undefined) {
+        resFields.followUpCount = encodeInt(payload.followUpCount);
       }
 
       const writes: any[] = [
@@ -895,8 +1114,8 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               durationMinutes: encodeInt(payload.durationMinutes),
               estimatedCost: encodeNumber(payload.totalAmount),
               currency: encodeString(payload.currency),
-              stage: encodeString('requested'),
-              notes: encodeString('Demande de réservation transmise'),
+              stage: encodeString(effectiveItemStage),
+              notes: encodeString(itemNotes),
             },
           },
           currentDocument: { exists: false },
@@ -906,6 +1125,44 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           ],
         },
       ];
+
+      // Optimistic concurrency lock on pilot_stocks/{stockId} preventing simultaneous double-booking
+      if (payload.allocatedStockId && (payload.allocatedUnits || 0) > 0) {
+        const stockRel = `pilot_stocks/${encodeURIComponent(payload.allocatedStockId)}`;
+        const stockRes = await fetch(`${this.baseUrl}/${stockRel}`, {
+          headers: { Authorization: `Bearer ${rawIdToken}` },
+        });
+        if (!stockRes.ok) {
+          throw new ConflictError('Stock partenaire pilote indisponible.');
+        }
+        const stockJson: any = await stockRes.json();
+        const stockFields = decodeFirestoreFields(stockJson.fields);
+        const curBooked = Math.max(0, Number(stockFields.bookedUnits ?? 0));
+        const totalUnits = Math.max(1, Number(stockFields.totalUnits ?? 1));
+        const nextBooked = curBooked + (payload.allocatedUnits || 1);
+        if (nextBooked > totalUnits) {
+          throw new ConflictError(
+            'Indisponibilité confirmée (anti-double réservation) : toutes les unités confirmées sur ce créneau sont déjà réservées.'
+          );
+        }
+        const stockDocName = `${this.dbResourcePath}/pilot_stocks/${payload.allocatedStockId}`;
+        writes.push({
+          update: {
+            name: stockDocName,
+            fields: {
+              bookedUnits: encodeInt(nextBooked),
+              lastReservationId: encodeString(payload.reservationId),
+            },
+          },
+          updateMask: {
+            fieldPaths: ['bookedUnits', 'lastReservationId'],
+          },
+          currentDocument: stockJson.updateTime
+            ? { updateTime: stockJson.updateTime }
+            : { exists: true },
+          updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        });
+      }
 
       if (payload.referral) {
         const refDocName = `${this.dbResourcePath}/partner_referrals/${payload.referral.referralId}`;
@@ -946,9 +1203,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               recipientId: encodeString(payload.providerOwnerId),
               senderId: encodeString(payload.clientId),
               kind: encodeString('reservation'),
-              title: encodeString('Nouvelle demande de réservation'),
+              title: encodeString(
+                effectiveStatus === 'confirmed'
+                  ? 'Réservation instantanée confirmée sur votre stock'
+                  : 'Nouvelle demande de réservation'
+              ),
               body: encodeString(
-                `Demande reçue pour « ${payload.serviceTitle} » le ${payload.scheduledDate} à ${payload.scheduledTime} (${payload.participants} pers.).`.slice(
+                `Réservation pour « ${payload.serviceTitle} » le ${payload.scheduledDate} à ${payload.scheduledTime} (${payload.participants} pers.).`.slice(
                   0,
                   780
                 )
@@ -978,9 +1239,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
 
       if (commitRes.status === 400 || commitRes.status === 409) {
         const errBody = await commitRes.text();
-        if (errBody.includes('ALREADY_EXISTS') || commitRes.status === 409) {
+        if (
+          errBody.includes('ALREADY_EXISTS') ||
+          errBody.includes('FAILED_PRECONDITION') ||
+          commitRes.status === 409
+        ) {
           throw new ConflictError(
-            'Une réservation identique existe déjà pour ce créneau.'
+            'Conflit de réservation ou stock simultanément modifié : veuillez revérifier la disponibilité.'
           );
         }
         throw new Error(`Transaction réservation refusée (${commitRes.status}).`);
@@ -1041,6 +1306,24 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       status: (raw.status || 'pending_provider') as ReservationStatus,
       paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
       alternativeProposal: String(raw.alternativeProposal || ''),
+      activationMode: raw.activationMode
+        ? (String(raw.activationMode) as
+            | 'directory_concierge'
+            | 'level_b_validation'
+            | 'level_c_instant')
+        : undefined,
+      allocatedStockId: raw.allocatedStockId ? String(raw.allocatedStockId) : undefined,
+      allocatedUnits:
+        raw.allocatedUnits !== undefined ? Number(raw.allocatedUnits) : undefined,
+      dispatchChannel: raw.dispatchChannel
+        ? (String(raw.dispatchChannel) as ReservationDispatchChannel)
+        : undefined,
+      dispatchStatus: raw.dispatchStatus
+        ? (String(raw.dispatchStatus) as ReservationDispatchStatus)
+        : undefined,
+      responseDeadlineAt: raw.responseDeadlineAt ? String(raw.responseDeadlineAt) : undefined,
+      followUpCount:
+        raw.followUpCount !== undefined ? Number(raw.followUpCount) : undefined,
       updatedAtIso,
     };
   }
@@ -1053,6 +1336,14 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       scheduledDate: string;
       scheduledTime: string;
       alternativeProposal: string;
+      dispatchChannel?: ReservationDispatchChannel;
+      dispatchStatus?: ReservationDispatchStatus;
+      responseDeadlineAt?: string;
+      followUpCount?: number;
+      releaseStock?: {
+        stockId: string;
+        units: number;
+      } | null;
       notification?: {
         id: string;
         recipientId: string;
@@ -1066,59 +1357,142 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
   ): Promise<void> {
     if (this.hasServiceAccount) {
       const db = this.getAdminDb();
-      const batch = db.batch();
-      const resRef = db.collection('reservations').doc(params.reservationId);
-      batch.update(resRef, {
-        status: params.status,
-        paymentStatus: params.paymentStatus,
-        scheduledDate: params.scheduledDate,
-        scheduledTime: params.scheduledTime,
-        alternativeProposal: params.alternativeProposal.slice(0, 780),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      if (params.notification) {
-        const notifRef = db.collection('notifications').doc(params.notification.id);
-        batch.set(notifRef, {
-          recipientId: params.notification.recipientId,
-          senderId: params.notification.senderId,
-          kind: params.notification.kind,
-          title: params.notification.title.slice(0, 155),
-          body: params.notification.body.slice(0, 780),
-          read: false,
-          createdAt: FieldValue.serverTimestamp(),
+      await db.runTransaction(async (tx) => {
+        let stockRef: FirebaseFirestore.DocumentReference | null = null;
+        let nextBooked = 0;
+        if (params.releaseStock && params.releaseStock.stockId && params.releaseStock.units > 0) {
+          stockRef = db.collection('pilot_stocks').doc(params.releaseStock.stockId);
+          const stockSnap = await tx.get(stockRef);
+          if (stockSnap.exists) {
+            const curBooked = Math.max(0, Number(stockSnap.data()?.bookedUnits ?? 0));
+            nextBooked = Math.max(0, curBooked - params.releaseStock.units);
+          } else {
+            stockRef = null;
+          }
+        }
+
+        const resRef = db.collection('reservations').doc(params.reservationId);
+        const updatePayload: Record<string, any> = {
+          status: params.status,
+          paymentStatus: params.paymentStatus,
+          scheduledDate: params.scheduledDate,
+          scheduledTime: params.scheduledTime,
+          alternativeProposal: params.alternativeProposal.slice(0, 780),
           updatedAt: FieldValue.serverTimestamp(),
-        });
-      }
-      await batch.commit();
+        };
+        if (params.dispatchChannel !== undefined) {
+          updatePayload.dispatchChannel = params.dispatchChannel;
+        }
+        if (params.dispatchStatus !== undefined) {
+          updatePayload.dispatchStatus = params.dispatchStatus;
+        }
+        if (params.responseDeadlineAt !== undefined) {
+          updatePayload.responseDeadlineAt = params.responseDeadlineAt;
+        }
+        if (params.followUpCount !== undefined) {
+          updatePayload.followUpCount = params.followUpCount;
+        }
+        tx.update(resRef, updatePayload);
+
+        if (stockRef) {
+          tx.update(stockRef, {
+            bookedUnits: nextBooked,
+            lastReservationId: params.reservationId,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        if (params.notification) {
+          const notifRef = db.collection('notifications').doc(params.notification.id);
+          tx.set(notifRef, {
+            recipientId: params.notification.recipientId,
+            senderId: params.notification.senderId,
+            kind: params.notification.kind,
+            title: params.notification.title.slice(0, 155),
+            body: params.notification.body.slice(0, 780),
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      });
       return;
     }
 
     const resDocName = `${this.dbResourcePath}/reservations/${params.reservationId}`;
+    const resUpdateFields: Record<string, any> = {
+      status: encodeString(params.status),
+      paymentStatus: encodeString(params.paymentStatus),
+      scheduledDate: encodeString(params.scheduledDate),
+      scheduledTime: encodeString(params.scheduledTime),
+      alternativeProposal: encodeString(params.alternativeProposal.slice(0, 780)),
+    };
+    const resFieldPaths = [
+      'status',
+      'paymentStatus',
+      'scheduledDate',
+      'scheduledTime',
+      'alternativeProposal',
+    ];
+    if (params.dispatchChannel !== undefined) {
+      resUpdateFields.dispatchChannel = encodeString(params.dispatchChannel);
+      resFieldPaths.push('dispatchChannel');
+    }
+    if (params.dispatchStatus !== undefined) {
+      resUpdateFields.dispatchStatus = encodeString(params.dispatchStatus);
+      resFieldPaths.push('dispatchStatus');
+    }
+    if (params.responseDeadlineAt !== undefined) {
+      resUpdateFields.responseDeadlineAt = encodeString(params.responseDeadlineAt);
+      resFieldPaths.push('responseDeadlineAt');
+    }
+    if (params.followUpCount !== undefined) {
+      resUpdateFields.followUpCount = encodeInt(params.followUpCount);
+      resFieldPaths.push('followUpCount');
+    }
+
     const writes: any[] = [
       {
         update: {
           name: resDocName,
-          fields: {
-            status: encodeString(params.status),
-            paymentStatus: encodeString(params.paymentStatus),
-            scheduledDate: encodeString(params.scheduledDate),
-            scheduledTime: encodeString(params.scheduledTime),
-            alternativeProposal: encodeString(params.alternativeProposal.slice(0, 780)),
-          },
+          fields: resUpdateFields,
         },
         updateMask: {
-          fieldPaths: [
-            'status',
-            'paymentStatus',
-            'scheduledDate',
-            'scheduledTime',
-            'alternativeProposal',
-          ],
+          fieldPaths: resFieldPaths,
         },
         currentDocument: { exists: true },
         updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
       },
     ];
+
+    if (params.releaseStock && params.releaseStock.stockId && params.releaseStock.units > 0) {
+      const stockRel = `pilot_stocks/${encodeURIComponent(params.releaseStock.stockId)}`;
+      const stockRes = await fetch(`${this.baseUrl}/${stockRel}`, {
+        headers: { Authorization: `Bearer ${rawIdToken}` },
+      });
+      if (stockRes.ok) {
+        const stockJson: any = await stockRes.json();
+        const stockFields = decodeFirestoreFields(stockJson.fields);
+        const curBooked = Math.max(0, Number(stockFields.bookedUnits ?? 0));
+        const nextBooked = Math.max(0, curBooked - params.releaseStock.units);
+        writes.push({
+          update: {
+            name: `${this.dbResourcePath}/pilot_stocks/${params.releaseStock.stockId}`,
+            fields: {
+              bookedUnits: encodeInt(nextBooked),
+              lastReservationId: encodeString(params.reservationId),
+            },
+          },
+          updateMask: {
+            fieldPaths: ['bookedUnits', 'lastReservationId'],
+          },
+          currentDocument: stockJson.updateTime
+            ? { updateTime: stockJson.updateTime }
+            : { exists: true },
+          updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        });
+      }
+    }
 
     if (params.notification) {
       const notifDocName = `${this.dbResourcePath}/notifications/${params.notification.id}`;

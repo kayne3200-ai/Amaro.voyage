@@ -9,6 +9,8 @@
 6. **Strict Timestamp & Immutable Ownership**: All `createdAt` and `updatedAt` fields must equal `request.time`. `ownerId`, `clientId`, `providerOwnerId`, and `createdAt` are immutable across updates.
 7. **Reservation-Scoped Identity Vault Isolation**: Identity metadata lives in `/identity_verifications/{reservationId}` and AES-256-GCM encrypted images live in `/identity_verifications/{reservationId}/private_vault/files` (`allow list: if false`). Other providers receive `403`.
 8. **Admin Zero-Raw-Image Governance**: Platform Administrators may audit `/identity_verifications/{reservationId}` metadata and `/access_logs/{logId}` and revoke/purge access, but are strictly denied `get` access to raw identity images (`403` on `/view` and `PERMISSION_DENIED` on `/private_vault/files`).
+9. **Pilot Partner CRM Isolation (`/pilot_partners/{pilotId}`)**: Internal notes, negotiation grids, commercial contact PII, and convention references are strictly Admin-only (`isAdmin()` for single-doc, `isBootstrappedAdmin()` for zero-lookup list). An identified prospect can never be set to `convention_signed` or `pilot_activated` without `conventionSigned == true` and a non-empty `conventionSignedRef`.
+10. **Confirmed Stock & Atomic Anti-Double-Booking (`/pilot_stocks/{stockId}`)**: `bookedUnits` must satisfy `0 <= bookedUnits <= totalUnits`. Non-admin travelers can only mutate `bookedUnits` and `lastReservationId` atomically (`getAfter`) alongside their own `/reservations/$(lastReservationId)` tied to `allocatedStockId == stockId`.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must Return PERMISSION_DENIED)
 1. **Self-Admin Injection**: Authenticated user writes `{ uid: "attacker", roleLevel: "super_admin", createdAt: SERVER_TIMESTAMP }` to `/admins/attacker`.

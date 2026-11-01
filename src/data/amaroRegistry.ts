@@ -670,4 +670,16 @@ export const VALIDATION_MATRIX: ValidationMatrixRow[] = [
     status: 'Validé',
     remainingIssues: 'Exécuter une sauvegarde GitHub après validation finale.',
   },
+  {
+    module: 'Partenaires pilotes — Conventionnement & Stocks (A / B / C)',
+    feature: 'CRM prospection 5 zones (16 statuts), kit 10 modèles éditables, stocks confirmés & activation A/B/C',
+    ui: 'Espace Admin « Partenaires pilotes », suivi des transmissions & stocks visibles côté Explorer',
+    backend: 'Résolution serveur Niveaux A/B/C, verrouillage atomique anti-surréservation & libération sur annulation',
+    database: 'Collections /pilot_partners (Admin privé) & /pilot_stocks + extensions /services & /reservations',
+    security: 'Notes internes et contacts commerciaux isolés (Admin seul), zéro contrat ou stock fictif pré-signé',
+    tests: 'Tests automatisés Niveaux A/B/C, repli honnête Niveau B, anti-double-booking & libération stock',
+    status: 'Validé',
+    remainingIssues: 'Démarchage humain réel et signature physique/électronique des conventions au Bénin requis avant activation Niveau C.',
+  },
 ];
+

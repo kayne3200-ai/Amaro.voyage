@@ -119,6 +119,7 @@ service cloud.firestore {
           'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
           'address', 'description', 'priceAmount', 'priceKnown', 'currency', 'durationMinutes',
           'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'neighborhood', 'standing',
+          'activationLevel', 'pilotConventionSigned', 'cancellationPolicy',
           'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.providerId)
@@ -138,7 +139,13 @@ service cloud.firestore {
         && (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus in ['verified', 'partially_verified', 'to_confirm']))
         && (!('sourceName' in data) || (data.sourceName is string && data.sourceName.size() <= 240))
         && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 140))
-        && (!('standing' in data) || (data.standing is string && data.standing in ['international_5', 'upper_4', 'comfort_3', 'boutique_charm', 'eco_nature', 'residence_apart', 'budget_2']))
+        && (!('standing' in data) || (data.standing is string && data.standing in [
+          'international_5', 'upper_4', 'comfort_3', 'boutique_charm', 'eco_nature', 'residence_apart', 'budget_2',
+          'luxe', 'haut_de_gamme', 'intermediaire', 'economique', 'residence_meublee', 'maison_hotes', 'ecolodge'
+        ]))
+        && (!('activationLevel' in data) || (data.activationLevel is string && data.activationLevel in ['directory_only', 'level_a_verified', 'level_b_validation', 'level_c_instant']))
+        && (!('pilotConventionSigned' in data) || data.pilotConventionSigned is bool)
+        && (!('cancellationPolicy' in data) || (data.cancellationPolicy is string && data.cancellationPolicy.size() <= 500))
         && data.status is string && data.status in ['draft', 'published', 'archived']
         && data.imageKey is string && data.imageKey.size() <= 100
         && data.imageLicense is string && data.imageLicense.size() <= 200
@@ -266,6 +273,7 @@ service cloud.firestore {
 
     function matchesPublishedCatalogService(data, svc) {
       return svc.status == 'published'
+        && !(('activationLevel' in svc) && svc.activationLevel == 'level_a_verified')
         && data.providerId == svc.providerId
         && data.providerOwnerId == svc.ownerId
         && data.category == svc.category
@@ -273,7 +281,19 @@ service cloud.firestore {
         && data.currency == svc.currency
         && data.participants >= 1
         && data.participants <= svc.capacity
-        && isWithinCurrencyTolerance(data.providerPrice, svc.priceAmount * data.participants, data.currency)
+        && (
+          isWithinCurrencyTolerance(data.providerPrice, svc.priceAmount * data.participants, data.currency)
+          || (
+            'allocatedStockId' in data
+            && isValidId(data.allocatedStockId)
+            && exists(/databases/$(database)/documents/pilot_stocks/$(data.allocatedStockId))
+            && isWithinCurrencyTolerance(
+              data.providerPrice,
+              get(/databases/$(database)/documents/pilot_stocks/$(data.allocatedStockId)).data.contractualPrice * data.participants,
+              data.currency
+            )
+          )
+        )
         && matchesCountrySettingFees(data, svc.countryCode);
     }
 
@@ -324,7 +344,10 @@ service cloud.firestore {
           'serviceTitle', 'category', 'cityId', 'scheduledDate', 'scheduledTime',
           'participants', 'providerPrice', 'amaroFee', 'taxAmount', 'totalAmount',
           'currency', 'status', 'paymentStatus', 'alternativeProposal', 'pricingSnapshot',
-          'referralCode', 'providerSettled', 'createdAt', 'updatedAt'
+          'referralCode', 'providerSettled',
+          'activationMode', 'allocatedStockId', 'allocatedUnits',
+          'dispatchChannel', 'dispatchStatus', 'responseDeadlineAt', 'followUpCount',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
         && isValidId(data.providerOwnerId)
@@ -353,6 +376,13 @@ service cloud.firestore {
         && data.pricingSnapshot is string && data.pricingSnapshot.size() >= 2 && data.pricingSnapshot.size() <= 600
         && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() <= 40))
         && (!('providerSettled' in data) || data.providerSettled is bool)
+        && (!('activationMode' in data) || (data.activationMode is string && data.activationMode in ['directory_concierge', 'level_b_validation', 'level_c_instant']))
+        && (!('allocatedStockId' in data) || data.allocatedStockId == '' || isValidId(data.allocatedStockId))
+        && (!('allocatedUnits' in data) || (data.allocatedUnits is int && data.allocatedUnits >= 0 && data.allocatedUnits <= 100))
+        && (!('dispatchChannel' in data) || (data.dispatchChannel is string && data.dispatchChannel in ['amaro_portal', 'configured_email', 'manual_concierge']))
+        && (!('dispatchStatus' in data) || (data.dispatchStatus is string && data.dispatchStatus in ['prepared', 'sent', 'send_failed', 'response_received', 'accepted', 'rejected', 'expired']))
+        && (!('responseDeadlineAt' in data) || (data.responseDeadlineAt is string && data.responseDeadlineAt.size() <= 40))
+        && (!('followUpCount' in data) || (data.followUpCount is int && data.followUpCount >= 0 && data.followUpCount <= 50))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -556,6 +586,111 @@ service cloud.firestore {
         && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
         && data.summary is string && data.summary.size() <= 500
         && data.createdAt is timestamp;
+    }
+
+    function isValidPilotPartner(data) {
+      return data.keys().hasAll([
+          'businessName', 'category', 'cityId', 'coveredZones', 'businessAddress',
+          'businessPhone', 'businessEmail', 'officialWebsite', 'contactNameAndRole',
+          'infoSource', 'verifiedDate', 'conventionStatus', 'contactStatus',
+          'negotiationStatus', 'documentsReceived', 'conventionSigned',
+          'conventionSignedRef', 'registeredServiceId', 'tariffsConfirmed',
+          'availabilitiesConfirmed', 'allowedBookingMode', 'dispatchChannel',
+          'nextAction', 'internalNotes', 'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'businessName', 'category', 'cityId', 'coveredZones', 'businessAddress',
+          'businessPhone', 'businessEmail', 'officialWebsite', 'contactNameAndRole',
+          'infoSource', 'verifiedDate', 'conventionStatus', 'contactStatus',
+          'negotiationStatus', 'documentsReceived', 'conventionSigned',
+          'conventionSignedRef', 'registeredServiceId', 'tariffsConfirmed',
+          'availabilitiesConfirmed', 'allowedBookingMode', 'dispatchChannel',
+          'nextAction', 'internalNotes', 'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160
+        && data.category is string && data.category in ['accommodation', 'transport']
+        && data.cityId is string && data.cityId in ['cotonou', 'ouidah', 'abomey', 'grand-popo', 'natitingou']
+        && data.coveredZones is string && data.coveredZones.size() <= 240
+        && data.businessAddress is string && data.businessAddress.size() <= 240
+        && data.businessPhone is string && data.businessPhone.size() <= 60
+        && data.businessEmail is string && data.businessEmail.size() <= 200
+        && data.officialWebsite is string && data.officialWebsite.size() <= 300
+        && data.contactNameAndRole is string && data.contactNameAndRole.size() <= 180
+        && data.infoSource is string && data.infoSource.size() <= 240
+        && data.verifiedDate is string && data.verifiedDate.size() <= 30
+        && data.conventionStatus is string && data.conventionStatus in [
+          'to_identify', 'identified', 'contacts_to_verify', 'to_contact',
+          'contacted', 'response_received', 'negotiation_in_progress', 'awaiting_documents',
+          'commercial_terms_agreed', 'convention_pending_signature', 'convention_signed',
+          'catalogue_to_complete', 'offers_under_verification', 'pilot_activated',
+          'suspended', 'convention_terminated'
+        ]
+        && data.contactStatus is string && data.contactStatus.size() <= 120
+        && data.negotiationStatus is string && data.negotiationStatus.size() <= 200
+        && data.documentsReceived is string && data.documentsReceived.size() <= 500
+        && data.conventionSigned is bool
+        && data.conventionSignedRef is string && data.conventionSignedRef.size() <= 160
+        && (!(data.conventionStatus in ['convention_signed', 'pilot_activated']) || (data.conventionSigned == true && data.conventionSignedRef.size() >= 3))
+        && data.registeredServiceId is string && data.registeredServiceId.size() <= 128
+        && data.tariffsConfirmed is bool
+        && data.availabilitiesConfirmed is bool
+        && data.allowedBookingMode is string && data.allowedBookingMode in ['none', 'level_a_verified', 'level_b_validation', 'level_c_instant']
+        && (!(data.allowedBookingMode == 'level_c_instant') || (data.conventionSigned == true && data.tariffsConfirmed == true && data.availabilitiesConfirmed == true && data.conventionStatus == 'pilot_activated'))
+        && data.dispatchChannel is string && data.dispatchChannel in ['amaro_portal', 'configured_email', 'manual_concierge']
+        && data.nextAction is string && data.nextAction.size() <= 300
+        && data.internalNotes is string && data.internalNotes.size() <= 2000
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPilotStock(data) {
+      return data.keys().hasAll([
+          'pilotId', 'serviceId', 'providerId', 'providerOwnerId', 'category',
+          'cityId', 'unitCode', 'unitLabel', 'capacity', 'baggageCapacity',
+          'withDriver', 'pickupAndCoverageZone', 'startDate', 'endDate',
+          'totalUnits', 'bookedUnits', 'contractualPrice', 'currency',
+          'cancellationRules', 'instantBookingAgreed', 'settlementMode',
+          'confirmationSource', 'expiresAt', 'status', 'updatedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'pilotId', 'serviceId', 'providerId', 'providerOwnerId', 'category',
+          'cityId', 'unitCode', 'unitLabel', 'capacity', 'baggageCapacity',
+          'withDriver', 'pickupAndCoverageZone', 'startDate', 'endDate',
+          'totalUnits', 'bookedUnits', 'contractualPrice', 'currency',
+          'cancellationRules', 'instantBookingAgreed', 'settlementMode',
+          'confirmationSource', 'expiresAt', 'status', 'lastReservationId',
+          'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.pilotId)
+        && isValidId(data.serviceId)
+        && isValidId(data.providerId)
+        && isValidId(data.providerOwnerId)
+        && data.category is string && data.category in ['accommodation', 'transport']
+        && data.cityId is string && data.cityId in ['cotonou', 'ouidah', 'abomey', 'grand-popo', 'natitingou']
+        && data.unitCode is string && data.unitCode.size() >= 1 && data.unitCode.size() <= 80
+        && data.unitLabel is string && data.unitLabel.size() >= 2 && data.unitLabel.size() <= 160
+        && data.capacity is int && data.capacity >= 1 && data.capacity <= 100
+        && data.baggageCapacity is int && data.baggageCapacity >= 0 && data.baggageCapacity <= 50
+        && data.withDriver is bool
+        && data.pickupAndCoverageZone is string && data.pickupAndCoverageZone.size() <= 240
+        && data.startDate is string && data.startDate.size() >= 8 && data.startDate.size() <= 20
+        && data.endDate is string && data.endDate.size() >= 8 && data.endDate.size() <= 20
+        && data.totalUnits is int && data.totalUnits >= 1 && data.totalUnits <= 500
+        && data.bookedUnits is int && data.bookedUnits >= 0 && data.bookedUnits <= data.totalUnits
+        && data.contractualPrice is number && data.contractualPrice > 0 && data.contractualPrice <= 1000000000
+        && isValidCurrency(data.currency)
+        && data.cancellationRules is string && data.cancellationRules.size() >= 5 && data.cancellationRules.size() <= 500
+        && data.instantBookingAgreed is bool
+        && data.settlementMode is string && data.settlementMode in ['pay_on_arrival_agreed', 'online_gateway_required']
+        && data.confirmationSource is string && data.confirmationSource.size() >= 3 && data.confirmationSource.size() <= 240
+        && data.expiresAt is string && data.expiresAt.size() >= 10 && data.expiresAt.size() <= 30
+        && data.status is string && data.status in ['active', 'paused', 'expired']
+        && (!('lastReservationId' in data) || data.lastReservationId == '' || isValidId(data.lastReservationId))
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     // --- Connectivity Probe ---
@@ -874,7 +1009,21 @@ service cloud.firestore {
         && isValidId(reservationId)
         && isValidReservation(incoming())
         && incoming().clientId == request.auth.uid
-        && incoming().status == 'pending_provider'
+        && (
+          incoming().status == 'pending_provider'
+          || (
+            'activationMode' in incoming()
+            && incoming().activationMode == 'level_c_instant'
+            && incoming().status == 'confirmed'
+            && 'allocatedStockId' in incoming()
+            && isValidId(incoming().allocatedStockId)
+            && exists(/databases/$(database)/documents/pilot_stocks/$(incoming().allocatedStockId))
+            && get(/databases/$(database)/documents/pilot_stocks/$(incoming().allocatedStockId)).data.status == 'active'
+            && get(/databases/$(database)/documents/pilot_stocks/$(incoming().allocatedStockId)).data.instantBookingAgreed == true
+            && get(/databases/$(database)/documents/pilot_stocks/$(incoming().allocatedStockId)).data.settlementMode == 'pay_on_arrival_agreed'
+            && get(/databases/$(database)/documents/pilot_stocks/$(incoming().allocatedStockId)).data.serviceId == incoming().serviceId
+          )
+        )
         && incoming().paymentStatus == 'unpaid'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
@@ -905,13 +1054,13 @@ service cloud.firestore {
             && existing().status == 'pending_provider'
             && incoming().status in ['accepted', 'rejected', 'alternative_proposed']
             && incoming().paymentStatus == existing().paymentStatus
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'alternativeProposal', 'scheduledDate', 'scheduledTime', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'alternativeProposal', 'scheduledDate', 'scheduledTime', 'dispatchStatus', 'updatedAt']))
           || (existing().clientId == request.auth.uid
             && incoming().status in ['awaiting_payment', 'cancelled']
             && incoming().paymentStatus == existing().paymentStatus
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
           || (existing().clientId == request.auth.uid
-            && existing().status in ['accepted', 'awaiting_payment']
+            && existing().status in ['accepted', 'awaiting_payment', 'confirmed']
             && incoming().status == 'awaiting_payment'
             && incoming().paymentStatus == 'initiated'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'updatedAt']))
@@ -1200,6 +1349,80 @@ service cloud.firestore {
 
         allow update, delete: if false;
       }
+    }
+
+    // --- 13. Pilot Partners Confidential Conventioning CRM (Strictly Admin-Only) ---
+    match /pilot_partners/{pilotId} {
+      allow get: if isAdmin() && isValidId(pilotId);
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(pilotId)
+        && isValidPilotPartner(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(pilotId)
+        && isValidPilotPartner(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isAdmin() && isValidId(pilotId);
+    }
+
+    // --- 14. Confirmed Pilot Stocks (Hotels & Transport Anti-Double-Booking) ---
+    match /pilot_stocks/{stockId} {
+      allow get: if isValidId(stockId)
+        && (
+          existing().status == 'active'
+          || (isSignedIn() && (existing().providerOwnerId == request.auth.uid || isAdmin()))
+        );
+
+      allow list: if existing().status == 'active'
+        || (isSignedIn() && existing().providerOwnerId == request.auth.uid)
+        || isBootstrappedAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(stockId)
+        && isValidPilotStock(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(stockId)
+        && isValidPilotStock(incoming())
+        && incoming().pilotId == existing().pilotId
+        && incoming().serviceId == existing().serviceId
+        && incoming().providerId == existing().providerId
+        && incoming().providerOwnerId == existing().providerOwnerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().providerOwnerId != 'manual_concierge'
+            && existing().providerOwnerId == request.auth.uid
+            && incoming().updatedBy == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'totalUnits', 'bookedUnits', 'startDate', 'endDate', 'expiresAt',
+              'status', 'updatedBy', 'updatedAt'
+            ])
+          )
+          || (
+            incoming().diff(existing()).affectedKeys().hasOnly(['bookedUnits', 'lastReservationId', 'updatedAt'])
+            && 'lastReservationId' in incoming()
+            && isValidId(incoming().lastReservationId)
+            && existsAfter(/databases/$(database)/documents/reservations/$(incoming().lastReservationId))
+            && getAfter(/databases/$(database)/documents/reservations/$(incoming().lastReservationId)).data.clientId == request.auth.uid
+            && getAfter(/databases/$(database)/documents/reservations/$(incoming().lastReservationId)).data.allocatedStockId == stockId
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(stockId);
     }
   }
 }

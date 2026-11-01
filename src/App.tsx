@@ -37,10 +37,14 @@ import type {
   JourneyItemDoc,
   LocaleCode,
   NotificationDoc,
+  PartnerActivationLevel,
   PartnerCommissionStatus,
   PartnerProfileDoc,
   PartnerReferralDoc,
+  PilotPartnerDoc,
+  PilotStockDoc,
   ProviderProfileDoc,
+  ReservationDispatchChannel,
   ReservationDoc,
   ServiceCategory,
   SystemSettingDoc,
@@ -63,6 +67,19 @@ const REFERRAL_STORAGE_KEY = 'amaro_referral_attribution';
 function makeSafeId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${rand}`;
+}
+
+function formatFirestoreIso(raw: unknown): string {
+  if (!raw) return '';
+  if (typeof raw === 'string') return raw;
+  if (typeof (raw as any)?.toDate === 'function') {
+    try {
+      return (raw as any).toDate().toISOString();
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function getFolderStorageKey(uid: string): string {
@@ -188,6 +205,7 @@ function AmaroPlatform() {
 
   // Public & Shared Data
   const [publishedServices, setPublishedServices] = useState<CatalogueItem[]>([]);
+  const [publicActiveStocks, setPublicActiveStocks] = useState<PilotStockDoc[]>([]);
   const [approvedStories, setApprovedStories] = useState<CulturalStoryDoc[]>([]);
   const [countrySetting, setCountrySetting] = useState<SystemSettingDoc | null>(null);
   const [activeReferralCode, setActiveReferralCode] = useState<string | null>(() => {
@@ -246,6 +264,8 @@ function AmaroPlatform() {
   const [allStories, setAllStories] = useState<CulturalStoryDoc[]>([]);
   const [allPartners, setAllPartners] = useState<PartnerProfileDoc[]>([]);
   const [allReferrals, setAllReferrals] = useState<PartnerReferralDoc[]>([]);
+  const [adminPilotPartners, setAdminPilotPartners] = useState<PilotPartnerDoc[]>([]);
+  const [adminPilotStocks, setAdminPilotStocks] = useState<PilotStockDoc[]>([]);
   const [auditLogs, setAuditLogs] = useState<
     Array<{
       id: string;
@@ -357,6 +377,8 @@ function AmaroPlatform() {
         setAllStories([]);
         setAllPartners([]);
         setAllReferrals([]);
+        setAdminPilotPartners([]);
+        setAdminPilotStocks([]);
         setAuditLogs([]);
         return;
       }
@@ -443,10 +465,32 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.GET, 'system_settings/BJ')
     );
 
+    const qActiveStocks = query(
+      collection(db, 'pilot_stocks'),
+      where('status', '==', 'active')
+    );
+    const unsubStocks = onSnapshot(
+      qActiveStocks,
+      (snap) => {
+        setPublicActiveStocks(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              updatedAtIso: formatFirestoreIso(raw.updatedAt),
+            } as PilotStockDoc;
+          })
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_stocks')
+    );
+
     return () => {
       unsubServices();
       unsubStories();
       unsubSettings();
+      unsubStocks();
     };
   }, []);
 
@@ -753,7 +797,11 @@ function AmaroPlatform() {
 
   // Bootstrapped Admin global listeners (Cost-Optimized Zero-Lookup Rules)
   useEffect(() => {
-    if (!isBootstrappedAdmin) return;
+    if (!isBootstrappedAdmin) {
+      setAdminPilotPartners([]);
+      setAdminPilotStocks([]);
+      return;
+    }
 
     const u0 = onSnapshot(
       collection(db, 'services'),
@@ -861,6 +909,40 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(admin)')
     );
 
+    const u8 = onSnapshot(
+      collection(db, 'pilot_partners'),
+      (snap) => {
+        setAdminPilotPartners(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              updatedAtIso: formatFirestoreIso(raw.updatedAt),
+            } as PilotPartnerDoc;
+          })
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_partners(admin)')
+    );
+
+    const u9 = onSnapshot(
+      collection(db, 'pilot_stocks'),
+      (snap) => {
+        setAdminPilotStocks(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              updatedAtIso: formatFirestoreIso(raw.updatedAt),
+            } as PilotStockDoc;
+          })
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_stocks(admin)')
+    );
+
     return () => {
       u0();
       u1();
@@ -870,6 +952,8 @@ function AmaroPlatform() {
       u5();
       u6();
       u7();
+      u8();
+      u9();
     };
   }, [isBootstrappedAdmin]);
 
@@ -883,9 +967,12 @@ function AmaroPlatform() {
     }
     const mergedPublished = publishedServices.map((s) => {
       const staticMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === s.id);
-      return staticMatch?.siteEditorial
-        ? { ...s, siteEditorial: staticMatch.siteEditorial }
-        : s;
+      if (!staticMatch) return s;
+      return {
+        ...staticMatch,
+        ...s,
+        siteEditorial: staticMatch.siteEditorial,
+      };
     });
     const remainingDirectory = BENIN_PUBLIC_DIRECTORY.filter(
       (b) => !overriddenIds.has(b.id)
@@ -1335,7 +1422,8 @@ function AmaroPlatform() {
     item: CatalogueItem,
     date: string,
     startTime: string,
-    participants: number
+    participants: number,
+    stockId?: string
   ) => {
     if (!authUser?.uid) return;
     const folderId = await ensureActiveFolderId();
@@ -1354,6 +1442,7 @@ function AmaroPlatform() {
           scheduledDate: date,
           scheduledTime: startTime,
           participants: Math.max(1, Math.min(100, Math.round(participants))),
+          ...(stockId ? { stockId } : {}),
           ...(codeToSend ? { referralCode: codeToSend } : {}),
         }),
       });
@@ -1382,11 +1471,21 @@ function AmaroPlatform() {
         });
       }
 
-      showToast(
-        data?.warnings?.length
-          ? `Demande enregistrée (vigilance trajet : ${data.warnings[0]})`
-          : 'Demande vérifiée côté serveur et enregistrée (statut : En attente de disponibilité).'
-      );
+      if (data?.activationMode === 'level_c_instant') {
+        showToast(
+          'Réservation instantanée confirmée sur stock partenaire pilote conventionné !'
+        );
+      } else if (data?.fallbackReason) {
+        showToast(
+          `Demande transmise en validation prestataire (${data.fallbackReason})`
+        );
+      } else {
+        showToast(
+          data?.warnings?.length
+            ? `Demande enregistrée (vigilance trajet : ${data.warnings[0]})`
+            : 'Demande vérifiée côté serveur et enregistrée (statut : En attente de disponibilité).'
+        );
+      }
       setActiveTab('journey');
     } catch {
       showToast('Impossible de contacter le serveur de réservation sécurisé.');
@@ -2079,6 +2178,340 @@ function AmaroPlatform() {
     }
   };
 
+  // Pilot Partners Conventioning, Confirmed Stocks & Honest Dispatch Handlers
+  const handleSavePilotPartner = async (
+    draft: Omit<PilotPartnerDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
+  ) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const cleanId = draft.id
+      ? draft.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
+      : makeSafeId('pilot');
+    const ref = doc(db, 'pilot_partners', cleanId);
+
+    const safePayload = {
+      businessName: draft.businessName.trim().slice(0, 155),
+      category: draft.category,
+      cityId: draft.cityId,
+      coveredZones: draft.coveredZones.slice(0, 235),
+      businessAddress: draft.businessAddress.slice(0, 235),
+      businessPhone: draft.businessPhone.slice(0, 58),
+      businessEmail: draft.businessEmail.slice(0, 195),
+      officialWebsite: draft.officialWebsite.slice(0, 290),
+      contactNameAndRole: draft.contactNameAndRole.slice(0, 175),
+      infoSource: draft.infoSource.slice(0, 235),
+      verifiedDate: draft.verifiedDate.slice(0, 28),
+      conventionStatus: draft.conventionStatus,
+      contactStatus: draft.contactStatus.slice(0, 115),
+      negotiationStatus: draft.negotiationStatus.slice(0, 195),
+      documentsReceived: draft.documentsReceived.slice(0, 490),
+      conventionSigned: Boolean(draft.conventionSigned),
+      conventionSignedRef: draft.conventionSignedRef.slice(0, 155),
+      registeredServiceId: draft.registeredServiceId
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 120),
+      tariffsConfirmed: Boolean(draft.tariffsConfirmed),
+      availabilitiesConfirmed: Boolean(draft.availabilitiesConfirmed),
+      allowedBookingMode: draft.allowedBookingMode,
+      dispatchChannel: draft.dispatchChannel,
+      nextAction: draft.nextAction.slice(0, 295),
+      internalNotes: draft.internalNotes.slice(0, 1950),
+      updatedBy: authUser.uid,
+    };
+
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, {
+          ...safePayload,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          ...safePayload,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await writeAuditLog(
+        'UPSERT_PILOT_PARTNER',
+        cleanId,
+        `${safePayload.businessName} (${safePayload.cityId} · ${safePayload.conventionStatus})`
+      );
+      showToast(`Fiche partenaire pilote « ${safePayload.businessName} » enregistrée.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `pilot_partners/${cleanId}`);
+    }
+  };
+
+  const handleDeletePilotPartner = async (pilotId: string) => {
+    if (!authUser?.uid || !isAdmin) return;
+    try {
+      await deleteDoc(doc(db, 'pilot_partners', pilotId));
+      await writeAuditLog('DELETE_PILOT_PARTNER', pilotId, 'Suppression fiche prospection pilote');
+      showToast('Fiche prospection pilote retirée.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `pilot_partners/${pilotId}`);
+    }
+  };
+
+  const handleSyncPilotOfferActivation = async (params: {
+    pilot: PilotPartnerDoc;
+    activationLevel: PartnerActivationLevel;
+    priceAmount: number;
+    currency: CurrencyCode;
+    capacity: number;
+    cancellationPolicy: string;
+  }) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const rawServiceId =
+      params.pilot.registeredServiceId.trim() ||
+      `srv-pilot-${params.pilot.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 90)}`;
+    const cleanServiceId = rawServiceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+
+    const staticDirMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === cleanServiceId);
+    const existingCatalogueMatch = allCatalogueServices.find((s) => s.id === cleanServiceId);
+    const fallbackImgKey =
+      params.pilot.category === 'transport' ? 'cotonou_road' : 'cotonou_coast';
+    const chosenImgKey =
+      existingCatalogueMatch?.imageKey || staticDirMatch?.imageKey || fallbackImgKey;
+    const imgMeta =
+      EDITORIAL_IMAGES[chosenImgKey] || EDITORIAL_IMAGES.cotonou_coast;
+
+    const isActivatedPartner = params.activationLevel !== 'directory_only';
+    const nextDataOrigin: DataOriginType = isActivatedPartner
+      ? 'verified_partner'
+      : 'public_directory';
+    const nextVerificationStatus: VerificationLevel = isActivatedPartner
+      ? 'verified'
+      : 'partially_verified';
+    const safePrice = Math.max(0, Number(params.priceAmount) || 0);
+    const priceKnown = safePrice > 0;
+
+    const svcRef = doc(db, 'services', cleanServiceId);
+    try {
+      const snap = await getDoc(svcRef);
+      if (snap.exists()) {
+        await updateDoc(svcRef, {
+          title: (existingCatalogueMatch?.title || staticDirMatch?.title || params.pilot.businessName).slice(0, 155),
+          category: params.pilot.category,
+          cityId: params.pilot.cityId,
+          address: (params.pilot.businessAddress || staticDirMatch?.address || '').slice(0, 230),
+          description: (
+            existingCatalogueMatch?.description ||
+            staticDirMatch?.description ||
+            `Prestation ${params.pilot.category === 'accommodation' ? 'd’hébergement' : 'de transport'} opérée par ${params.pilot.businessName}.`
+          ).slice(0, 1900),
+          priceAmount: safePrice,
+          priceKnown,
+          currency: params.currency,
+          durationMinutes:
+            existingCatalogueMatch?.durationMinutes ??
+            staticDirMatch?.durationMinutes ??
+            (params.pilot.category === 'accommodation' ? 720 : 480),
+          capacity: Math.max(1, Math.min(1000, Math.round(params.capacity || 2))),
+          dataOrigin: nextDataOrigin,
+          verificationStatus: nextVerificationStatus,
+          activationLevel: params.activationLevel,
+          pilotConventionSigned: Boolean(params.pilot.conventionSigned),
+          cancellationPolicy: params.cancellationPolicy.slice(0, 490),
+          status: 'published',
+          imageKey: chosenImgKey,
+          imageLicense: imgMeta.license.slice(0, 195),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const cleanProvId = (
+          staticDirMatch?.providerId ||
+          `prov-pilot-${params.pilot.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`
+        ).slice(0, 120);
+        await setDoc(svcRef, {
+          providerId: cleanProvId,
+          ownerId: 'manual_concierge',
+          title: (staticDirMatch?.title || params.pilot.businessName).slice(0, 155),
+          category: params.pilot.category,
+          countryCode: 'BJ',
+          cityId: params.pilot.cityId,
+          address: (params.pilot.businessAddress || staticDirMatch?.address || '').slice(0, 230),
+          description: (
+            staticDirMatch?.description ||
+            `Prestation ${params.pilot.category === 'accommodation' ? 'd’hébergement' : 'de transport'} opérée par ${params.pilot.businessName}.`
+          ).slice(0, 1900),
+          priceAmount: safePrice,
+          priceKnown,
+          currency: params.currency,
+          durationMinutes:
+            staticDirMatch?.durationMinutes ??
+            (params.pilot.category === 'accommodation' ? 720 : 480),
+          capacity: Math.max(1, Math.min(1000, Math.round(params.capacity || 2))),
+          dataOrigin: nextDataOrigin,
+          verificationStatus: nextVerificationStatus,
+          ...(staticDirMatch?.sourceName
+            ? { sourceName: staticDirMatch.sourceName.slice(0, 235) }
+            : {}),
+          ...(staticDirMatch?.neighborhood
+            ? { neighborhood: staticDirMatch.neighborhood.slice(0, 135) }
+            : {}),
+          ...(staticDirMatch?.standing ? { standing: staticDirMatch.standing } : {}),
+          activationLevel: params.activationLevel,
+          pilotConventionSigned: Boolean(params.pilot.conventionSigned),
+          cancellationPolicy: params.cancellationPolicy.slice(0, 490),
+          status: 'published',
+          imageKey: chosenImgKey,
+          imageLicense: imgMeta.license.slice(0, 195),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      // Sync registeredServiceId and allowedBookingMode back onto pilot_partners CRM record
+      const canSetLevelCOnPilot =
+        params.activationLevel === 'level_c_instant' &&
+        params.pilot.conventionSigned &&
+        params.pilot.tariffsConfirmed &&
+        params.pilot.availabilitiesConfirmed &&
+        params.pilot.conventionStatus === 'pilot_activated';
+
+      const mappedMode: PilotPartnerDoc['allowedBookingMode'] =
+        params.activationLevel === 'directory_only'
+          ? 'none'
+          : params.activationLevel === 'level_c_instant'
+          ? canSetLevelCOnPilot
+            ? 'level_c_instant'
+            : 'level_b_validation'
+          : params.activationLevel;
+
+      await updateDoc(doc(db, 'pilot_partners', params.pilot.id), {
+        registeredServiceId: cleanServiceId,
+        allowedBookingMode: mappedMode,
+        updatedBy: authUser.uid,
+        updatedAt: serverTimestamp(),
+      });
+
+      await writeAuditLog(
+        'SYNC_PILOT_OFFER_LEVEL',
+        cleanServiceId,
+        `${params.pilot.businessName} -> ${params.activationLevel} (conventionSigned=${Boolean(params.pilot.conventionSigned)})`
+      );
+      showToast(`Offre publique ${cleanServiceId} synchronisée (${params.activationLevel}).`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `services/${cleanServiceId}`);
+    }
+  };
+
+  const handleSavePilotStock = async (
+    draft: Omit<PilotStockDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
+  ) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const cleanId = draft.id
+      ? draft.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
+      : makeSafeId('stk');
+    const ref = doc(db, 'pilot_stocks', cleanId);
+
+    const totalUnits = Math.max(1, Math.min(500, Math.round(draft.totalUnits)));
+    const bookedUnits = Math.max(0, Math.min(totalUnits, Math.round(draft.bookedUnits)));
+
+    const mutableFields = {
+      category: draft.category,
+      cityId: draft.cityId,
+      unitCode: draft.unitCode.trim().slice(0, 75),
+      unitLabel: draft.unitLabel.trim().slice(0, 155),
+      capacity: Math.max(1, Math.min(100, Math.round(draft.capacity))),
+      baggageCapacity: Math.max(0, Math.min(50, Math.round(draft.baggageCapacity))),
+      withDriver: Boolean(draft.withDriver),
+      pickupAndCoverageZone: draft.pickupAndCoverageZone.slice(0, 235),
+      startDate: draft.startDate.slice(0, 20),
+      endDate: draft.endDate.slice(0, 20),
+      totalUnits,
+      bookedUnits,
+      contractualPrice: Math.max(1, Number(draft.contractualPrice)),
+      currency: draft.currency,
+      cancellationRules: draft.cancellationRules.trim().slice(0, 490),
+      instantBookingAgreed: Boolean(draft.instantBookingAgreed),
+      settlementMode: draft.settlementMode,
+      confirmationSource: draft.confirmationSource.trim().slice(0, 235),
+      expiresAt: draft.expiresAt.slice(0, 30),
+      status: draft.status,
+      updatedBy: authUser.uid,
+    };
+
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, {
+          ...mutableFields,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          pilotId: draft.pilotId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120),
+          serviceId: draft.serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120),
+          providerId: draft.providerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120),
+          providerOwnerId:
+            draft.providerOwnerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) ||
+            'manual_concierge',
+          ...mutableFields,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await writeAuditLog(
+        'UPSERT_PILOT_STOCK',
+        cleanId,
+        `${mutableFields.unitLabel} (${totalUnits - bookedUnits}/${totalUnits} dispo · ${mutableFields.contractualPrice} ${mutableFields.currency})`
+      );
+      showToast(`Stock confirmé « ${mutableFields.unitLabel} » enregistré.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `pilot_stocks/${cleanId}`);
+    }
+  };
+
+  const handleDeletePilotStock = async (stockId: string) => {
+    if (!authUser?.uid || !isAdmin) return;
+    try {
+      await deleteDoc(doc(db, 'pilot_stocks', stockId));
+      await writeAuditLog('DELETE_PILOT_STOCK', stockId, 'Suppression stock pilote');
+      showToast('Stock pilote supprimé.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `pilot_stocks/${stockId}`);
+    }
+  };
+
+  const handleDispatchReservationAction = async (params: {
+    reservationId: string;
+    action:
+      | 'admin_mark_dispatched'
+      | 'admin_mark_send_failed'
+      | 'admin_record_followup'
+      | 'admin_mark_expired';
+    dispatchChannel?: ReservationDispatchChannel;
+    alternativeProposal?: string;
+  }) => {
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(params.reservationId)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: params.action,
+            ...(params.dispatchChannel ? { dispatchChannel: params.dispatchChannel } : {}),
+            ...(params.alternativeProposal
+              ? { alternativeProposal: params.alternativeProposal }
+              : {}),
+          }),
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data?.error || 'Action de suivi refusée par le serveur.');
+        return;
+      }
+      showToast('Suivi de transmission prestataire enregistré.');
+    } catch {
+      showToast('Erreur de communication avec le serveur de réservation.');
+    }
+  };
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
@@ -2115,6 +2548,7 @@ function AmaroPlatform() {
             onChangeCurrency={setCurrency}
             rateInfo={rateInfo}
             catalogue={combinedCatalogue}
+            pilotStocks={publicActiveStocks}
             culturalStories={approvedStories}
             countrySetting={countrySetting}
             isSignedIn={Boolean(authUser)}
@@ -2219,6 +2653,14 @@ function AmaroPlatform() {
             onAdminModerateStory={handleAdminModerateStory}
             onAdminSaveSettings={handleAdminSaveSettings}
             onAdminSettleReservation={handleAdminSettleReservation}
+            pilotPartners={adminPilotPartners}
+            pilotStocks={adminPilotStocks}
+            onSavePilotPartner={handleSavePilotPartner}
+            onDeletePilotPartner={handleDeletePilotPartner}
+            onSyncPilotOfferActivation={handleSyncPilotOfferActivation}
+            onSavePilotStock={handleSavePilotStock}
+            onDeletePilotStock={handleDeletePilotStock}
+            onDispatchReservationAction={handleDispatchReservationAction}
             providerIdentityByRes={providerIdentityByRes}
             adminIdentityByRes={adminIdentityByRes}
             onNotify={showToast}

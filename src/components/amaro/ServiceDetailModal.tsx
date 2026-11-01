@@ -1,6 +1,14 @@
 import { X, MapPin, CalendarPlus, ShieldCheck, Info, Languages, CheckCircle2 } from 'lucide-react';
-import type { CatalogueItem, CurrencyCode, LocaleCode, StandingLevel } from '../../types/amaro';
+import type {
+  CatalogueItem,
+  CurrencyCode,
+  LocaleCode,
+  PartnerActivationLevel,
+  PilotStockDoc,
+  StandingLevel,
+} from '../../types/amaro';
 import { EDITORIAL_IMAGES } from '../../data/amaroRegistry';
+import { ACTIVATION_LEVEL_LABELS } from '../../data/pilotConventioningData';
 import { TRANSLATIONS } from '../../i18n/translations';
 
 const STANDING_LABELS: Record<StandingLevel, string> = {
@@ -18,6 +26,7 @@ interface ServiceDetailModalProps {
   locale: LocaleCode;
   displayCurrency: CurrencyCode;
   formattedPrice: string;
+  activeStocks?: PilotStockDoc[];
   onClose: () => void;
   onAddToJourney: (item: CatalogueItem) => void;
   onRequestBooking: (item: CatalogueItem) => void;
@@ -27,6 +36,7 @@ export function ServiceDetailModal({
   item,
   locale,
   formattedPrice,
+  activeStocks = [],
   onClose,
   onAddToJourney,
   onRequestBooking,
@@ -38,6 +48,14 @@ export function ServiceDetailModal({
   const verificationText = item.verificationStatus
     ? t.verification[item.verificationStatus]
     : t.origins[item.dataOrigin];
+  const effectiveActivationKey: PartnerActivationLevel =
+    item.activationLevel ||
+    (item.dataOrigin === 'verified_partner' ? 'level_b_validation' : 'directory_only');
+  const activationMeta = ACTIVATION_LEVEL_LABELS[effectiveActivationKey];
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const validItemStocks = activeStocks.filter(
+    (s) => s.serviceId === item.id && s.status === 'active' && s.expiresAt.slice(0, 10) >= todayIso
+  );
 
   return (
     <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
@@ -243,23 +261,49 @@ export function ServiceDetailModal({
             </div>
           )}
 
-          {/* Honest Origin & Source Disclaimer */}
+          {/* Confirmed Pilot Stock & Cancellation Policy (Sections 7, 8 & 10) */}
+          {(validItemStocks.length > 0 || item.cancellationPolicy) && (
+            <div className="p-3.5 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 rounded-xl space-y-2 text-xs text-slate-700 dark:text-slate-300">
+              {validItemStocks.length > 0 && (
+                <div className="space-y-1">
+                  <strong className="text-emerald-950 dark:text-emerald-200 block">
+                    Unités &amp; stocks confirmés par le partenaire pilote :
+                  </strong>
+                  {validItemStocks.map((st) => {
+                    const rem = Math.max(0, st.totalUnits - st.bookedUnits);
+                    return (
+                      <p key={st.id} className="font-mono tabular-nums text-[11px]">
+                        {st.unitLabel} ({st.unitCode}) ·{' '}
+                        <strong>
+                          {rem}/{st.totalUnits} dispo
+                        </strong>{' '}
+                        · {st.contractualPrice.toLocaleString('fr-FR')} {st.currency} · Valide{' '}
+                        {st.startDate} → {st.endDate}
+                      </p>
+                    );
+                  })}
+                </div>
+              )}
+              {item.cancellationPolicy && (
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  <strong>Conditions d’annulation :</strong> {item.cancellationPolicy}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Honest Origin, Conventioning & Activation Level Disclaimer */}
           <div className="p-3.5 bg-slate-100 dark:bg-slate-800/70 rounded-xl flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-300">
-            {item.dataOrigin === 'verified_partner' ? (
+            {item.dataOrigin === 'verified_partner' && item.pilotConventionSigned ? (
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             ) : (
               <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
             )}
             <div className="space-y-0.5">
-              <p>
-                {item.dataOrigin === 'public_directory'
-                  ? 'Fiche d’annuaire touristique documenté : cet établissement existe réellement au Bénin mais n’a pas encore activé d’extranet partenaire direct. Toute demande est traitée en vérification manuelle par la conciergerie AMARO.VOYAGE sans débiter aucun paiement automatique.'
-                  : item.dataOrigin === 'verified_partner'
-                  ? 'Prestataire partenaire vérifié disposant d’un compte actif sur AMARO.VOYAGE.'
-                  : item.dataOrigin === 'demo_test'
-                  ? 'Fiche de démonstration technique clairement séparée des établissements réels.'
-                  : 'Offre soumise par un prestataire en attente de validation administrative.'}
+              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                {activationMeta.shortLabel}
               </p>
+              <p>{activationMeta.publicNotice}</p>
               {item.sourceName && (
                 <p className="text-[11px] text-slate-500">
                   Source référencée : {item.sourceName}
@@ -288,16 +332,20 @@ export function ServiceDetailModal({
               <CalendarPlus className="w-4 h-4" />
               <span>Ajouter à mon voyage</span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onRequestBooking(item);
-              }}
-              className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 rounded-xl"
-            >
-              Demander disponibilité
-            </button>
+            {effectiveActivationKey !== 'level_a_verified' && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onRequestBooking(item);
+                }}
+                className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+              >
+                {effectiveActivationKey === 'level_c_instant' && validItemStocks.length > 0
+                  ? 'Réserver sur stock confirmé'
+                  : 'Demander disponibilité'}
+              </button>
+            )}
           </div>
         </div>
       </div>

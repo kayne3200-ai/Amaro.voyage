@@ -10,6 +10,7 @@ import {
 import {
   OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   type ScheduleSlot,
+  type ServerPilotStockRecord,
   type ServerServiceRecord,
   type ServerSystemSetting,
 } from '../src/server/domainEngine';
@@ -32,7 +33,13 @@ import {
   redactSecrets,
   type TokenVerifierFn,
 } from '../src/server/securityMiddleware';
-import type { IdentityAccessLogDoc, ReservationStatus } from '../src/types/amaro';
+import type {
+  IdentityAccessLogDoc,
+  PaymentStatus,
+  ReservationDispatchChannel,
+  ReservationDispatchStatus,
+  ReservationStatus,
+} from '../src/types/amaro';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,13 +53,14 @@ class InMemoryTestStore implements AmaroServerStore {
   readonly admins = new Set<string>(['delegated-admin-uid']);
   readonly folders = new Map<string, ServerFolderRecord>();
   readonly services = new Map<string, ServerServiceRecord>();
+  readonly pilotStocks = new Map<string, ServerPilotStockRecord>();
   readonly settings = new Map<string, ServerSystemSetting>();
   readonly itemsByFolder = new Map<string, ScheduleSlot[]>();
   readonly reservations = new Map<
     string,
     AtomicReservationPayload & {
       status: ReservationStatus;
-      paymentStatus: 'unpaid' | 'initiated' | 'succeeded' | 'failed' | 'refunded';
+      paymentStatus: PaymentStatus;
       alternativeProposal?: string;
       updatedAtIso: string;
     }
@@ -75,6 +83,7 @@ class InMemoryTestStore implements AmaroServerStore {
   reset() {
     this.folders.clear();
     this.services.clear();
+    this.pilotStocks.clear();
     this.settings.clear();
     this.itemsByFolder.clear();
     this.reservations.clear();
@@ -201,6 +210,18 @@ class InMemoryTestStore implements AmaroServerStore {
     return this.services.get(serviceId) || null;
   }
 
+  async listActivePilotStocksForService(
+    serviceId: string
+  ): Promise<ServerPilotStockRecord[]> {
+    const out: ServerPilotStockRecord[] = [];
+    for (const stk of this.pilotStocks.values()) {
+      if (stk.serviceId === serviceId && stk.status === 'active') {
+        out.push({ ...stk });
+      }
+    }
+    return out;
+  }
+
   async getSystemSetting(countryCode: string): Promise<ServerSystemSetting> {
     return (
       this.settings.get(countryCode) || {
@@ -246,6 +267,13 @@ class InMemoryTestStore implements AmaroServerStore {
       status: r.status,
       paymentStatus: r.paymentStatus,
       alternativeProposal: r.alternativeProposal,
+      activationMode: r.activationMode,
+      allocatedStockId: r.allocatedStockId,
+      allocatedUnits: r.allocatedUnits,
+      dispatchChannel: r.dispatchChannel,
+      dispatchStatus: r.dispatchStatus,
+      responseDeadlineAt: r.responseDeadlineAt,
+      followUpCount: r.followUpCount,
       updatedAtIso: r.updatedAtIso,
     };
   }
@@ -253,15 +281,34 @@ class InMemoryTestStore implements AmaroServerStore {
   async transitionReservation(params: {
     reservationId: string;
     status: ReservationStatus;
-    paymentStatus: 'unpaid' | 'initiated' | 'succeeded' | 'failed' | 'refunded';
+    paymentStatus: PaymentStatus;
     scheduledDate: string;
     scheduledTime: string;
     alternativeProposal: string;
+    dispatchChannel?: ReservationDispatchChannel;
+    dispatchStatus?: ReservationDispatchStatus;
+    responseDeadlineAt?: string;
+    followUpCount?: number;
+    releaseStock?: {
+      stockId: string;
+      units: number;
+    } | null;
   }): Promise<void> {
     const existing = this.reservations.get(params.reservationId);
     if (!existing) {
       throw new ConflictError('Réservation introuvable.');
     }
+
+    if (params.releaseStock?.stockId && params.releaseStock.units > 0) {
+      const stk = this.pilotStocks.get(params.releaseStock.stockId);
+      if (stk) {
+        this.pilotStocks.set(stk.id, {
+          ...stk,
+          bookedUnits: Math.max(0, stk.bookedUnits - params.releaseStock.units),
+        });
+      }
+    }
+
     this.reservations.set(params.reservationId, {
       ...existing,
       status: params.status,
@@ -269,6 +316,13 @@ class InMemoryTestStore implements AmaroServerStore {
       scheduledDate: params.scheduledDate,
       scheduledTime: params.scheduledTime,
       alternativeProposal: params.alternativeProposal,
+      ...(params.dispatchChannel ? { dispatchChannel: params.dispatchChannel } : {}),
+      ...(params.dispatchStatus ? { dispatchStatus: params.dispatchStatus } : {}),
+      ...(params.responseDeadlineAt ? { responseDeadlineAt: params.responseDeadlineAt } : {}),
+      ...(typeof params.followUpCount === 'number'
+        ? { followUpCount: params.followUpCount }
+        : {}),
+      ...(params.releaseStock ? { allocatedUnits: 0 } : {}),
       updatedAtIso: new Date().toISOString(),
     });
   }
@@ -402,9 +456,28 @@ class InMemoryTestStore implements AmaroServerStore {
         );
       }
 
+      if (payload.allocatedStockId && (payload.allocatedUnits || 0) > 0) {
+        const stk = this.pilotStocks.get(payload.allocatedStockId);
+        if (!stk || stk.status !== 'active') {
+          throw new ConflictError(
+            'Le stock partenaire pilote n’est plus actif.'
+          );
+        }
+        const nextBooked = stk.bookedUnits + (payload.allocatedUnits || 1);
+        if (nextBooked > stk.totalUnits) {
+          throw new ConflictError(
+            'Stock partenaire pilote épuisé au moment de la validation.'
+          );
+        }
+        this.pilotStocks.set(stk.id, {
+          ...stk,
+          bookedUnits: nextBooked,
+        });
+      }
+
       this.reservations.set(payload.reservationId, {
         ...payload,
-        status: 'pending_provider',
+        status: payload.initialStatus || 'pending_provider',
         paymentStatus: 'unpaid',
         updatedAtIso: new Date().toISOString(),
       });
@@ -1818,6 +1891,420 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(conciergeQuoteBody.priceKnown, true);
     assert.equal(conciergeQuoteBody.breakdown.providerPrice, 35_000);
   });
+
+  it('16. Partenaires pilotes — Niveau A bloque la réservation en ligne (409) et une offre Niveau C sans convention signée ou avec stock expiré replie honnêtement vers Niveau B (pending_provider)', async () => {
+    store.reset();
+
+    // Seed Level A (consultable & planifiable only)
+    store.services.set('srv-pilot-ouidah-level-a', {
+      id: 'srv-pilot-ouidah-level-a',
+      providerId: 'prov-ouidah-pilot-1',
+      ownerId: 'manual_concierge',
+      title: 'Maison d’Hôtes Patrimoine Ouidah (Niveau A)',
+      category: 'accommodation',
+      countryCode: 'BJ',
+      cityId: 'ouidah',
+      priceAmount: 35_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 720,
+      capacity: 2,
+      status: 'published',
+      dataOrigin: 'verified_partner',
+      activationLevel: 'level_a_verified',
+      pilotConventionSigned: false,
+    });
+
+    const levelARes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-pilot-ouidah-level-a',
+        scheduledDate: '2026-12-12',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(levelARes.status, 409);
+    const levelABody: any = await levelARes.json();
+    assert.match(levelABody.error, /Catalogue vérifié|Niveau A|planifiable/i);
+
+    // Seed Level C offer WITHOUT signed convention -> MUST fall back honestly to Level B (pending_provider), NEVER fake instant confirmation
+    store.services.set('srv-pilot-abomey-unsigned-c', {
+      id: 'srv-pilot-abomey-unsigned-c',
+      providerId: 'prov-abomey-pilot-1',
+      ownerId: 'manual_concierge',
+      title: 'Résidence Royale Abomey (Niveau C sans convention signée)',
+      category: 'accommodation',
+      countryCode: 'BJ',
+      cityId: 'abomey',
+      priceAmount: 28_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 720,
+      capacity: 2,
+      status: 'published',
+      dataOrigin: 'verified_partner',
+      activationLevel: 'level_c_instant',
+      pilotConventionSigned: false,
+      cancellationPolicy: 'Annulation sans frais jusqu’à 48h avant arrivée.',
+    });
+
+    const unsignedCRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-pilot-abomey-unsigned-c',
+        scheduledDate: '2026-12-14',
+        scheduledTime: '14:00',
+        participants: 1,
+      }),
+    });
+    assert.equal(unsignedCRes.status, 201);
+    const unsignedCBody: any = await unsignedCRes.json();
+    assert.equal(unsignedCBody.status, 'pending_provider');
+    assert.equal(unsignedCBody.activationMode, 'level_b_validation');
+    assert.match(unsignedCBody.fallbackReason, /convention partenaire non marquée signée/i);
+
+    // Seed Level C offer WITH signed convention, but stock expired -> MUST also fall back honestly to Level B
+    store.services.set('srv-pilot-popo-expired-stock', {
+      id: 'srv-pilot-popo-expired-stock',
+      providerId: 'prov-popo-pilot-1',
+      ownerId: 'manual_concierge',
+      title: 'Écolodge Plage Grand-Popo',
+      category: 'accommodation',
+      countryCode: 'BJ',
+      cityId: 'grand-popo',
+      priceAmount: 40_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 720,
+      capacity: 2,
+      status: 'published',
+      dataOrigin: 'verified_partner',
+      activationLevel: 'level_c_instant',
+      pilotConventionSigned: true,
+      cancellationPolicy: 'Annulation gratuite J-2.',
+    });
+    store.pilotStocks.set('stk-popo-expired', {
+      id: 'stk-popo-expired',
+      pilotId: 'pilot-popo-1',
+      serviceId: 'srv-pilot-popo-expired-stock',
+      providerId: 'prov-popo-pilot-1',
+      providerOwnerId: 'manual_concierge',
+      category: 'accommodation',
+      cityId: 'grand-popo',
+      unitCode: 'BUNGALOW-MER',
+      unitLabel: 'Bungalow Vue Océan',
+      capacity: 2,
+      baggageCapacity: 4,
+      withDriver: false,
+      pickupAndCoverageZone: 'Grand-Popo Plage',
+      startDate: '2026-12-01',
+      endDate: '2026-12-31',
+      totalUnits: 2,
+      bookedUnits: 0,
+      contractualPrice: 38_000,
+      currency: 'XOF',
+      cancellationRules: 'Annulation gratuite J-2.',
+      instantBookingAgreed: true,
+      settlementMode: 'pay_on_arrival_agreed',
+      confirmationSource: 'E-mail commercial signé du 15/10/2026',
+      expiresAt: '2020-01-01T00:00:00.000Z', // Expired in the past
+      status: 'active',
+    });
+
+    const expiredStockRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-pilot-popo-expired-stock',
+        scheduledDate: '2026-12-16',
+        scheduledTime: '14:00',
+        participants: 1,
+        stockId: 'stk-popo-expired',
+      }),
+    });
+    assert.equal(expiredStockRes.status, 201);
+    const expiredStockBody: any = await expiredStockRes.json();
+    assert.equal(expiredStockBody.status, 'pending_provider');
+    assert.equal(expiredStockBody.activationMode, 'level_b_validation');
+    assert.match(expiredStockBody.fallbackReason, /expiré/i);
+  });
+
+  it('17. Partenaires pilotes — Niveau C confirme immédiatement sur stock valide, applique le tarif contractuel, bloque toute double réservation (409) et libère le stock après annulation', async () => {
+    store.reset();
+    store.folders.set('folder-traveler-2', {
+      id: 'folder-traveler-2',
+      ownerId: 'other-provider-uid',
+      status: 'planning',
+      countryCode: 'BJ',
+      currency: 'XOF',
+    });
+
+    store.services.set('srv-pilot-nati-safari-4x4', {
+      id: 'srv-pilot-nati-safari-4x4',
+      providerId: 'prov-nati-pilot-1',
+      ownerId: 'provider-owner-uid',
+      title: 'Pendjari Express — 4x4 Climatisé avec Chauffeur (Niveau C)',
+      category: 'transport',
+      countryCode: 'BJ',
+      cityId: 'natitingou',
+      priceAmount: 55_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 480,
+      capacity: 4,
+      status: 'published',
+      dataOrigin: 'verified_partner',
+      activationLevel: 'level_c_instant',
+      pilotConventionSigned: true,
+      cancellationPolicy: 'Annulation sans frais jusqu’à 24h avant départ.',
+    });
+
+    // Future expiration date so stock is genuinely active
+    const futureExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    store.pilotStocks.set('stk-nati-4x4-single', {
+      id: 'stk-nati-4x4-single',
+      pilotId: 'pilot-nati-1',
+      serviceId: 'srv-pilot-nati-safari-4x4',
+      providerId: 'prov-nati-pilot-1',
+      providerOwnerId: 'provider-owner-uid',
+      category: 'transport',
+      cityId: 'natitingou',
+      unitCode: '4X4-PRADO-01',
+      unitLabel: 'Toyota Prado 4x4 Climatisé + Chauffeur',
+      capacity: 4,
+      baggageCapacity: 4,
+      withDriver: true,
+      pickupAndCoverageZone: 'Natitingou · Parc de la Pendjari · Boukoumbé',
+      startDate: '2026-12-01',
+      endDate: '2026-12-31',
+      totalUnits: 1,
+      bookedUnits: 0,
+      contractualPrice: 48_000, // Contractual negotiated tariff (< 55,000 public)
+      currency: 'XOF',
+      cancellationRules: 'Annulation sans frais jusqu’à 24h avant départ.',
+      instantBookingAgreed: true,
+      settlementMode: 'pay_on_arrival_agreed',
+      confirmationSource: 'Convention pilote signée AMR-NATI-01',
+      expiresAt: futureExpiry,
+      status: 'active',
+    });
+
+    // 17a. First traveler books the single confirmed 4x4 -> Immediate Level C confirmation at contractual tariff (48,000 * 2 = 96,000)
+    const firstBookRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-pilot-nati-safari-4x4',
+        scheduledDate: '2026-12-20',
+        scheduledTime: '08:00',
+        participants: 2,
+        stockId: 'stk-nati-4x4-single',
+      }),
+    });
+    assert.equal(firstBookRes.status, 201);
+    const firstBody: any = await firstBookRes.json();
+    assert.equal(firstBody.status, 'confirmed');
+    assert.equal(firstBody.activationMode, 'level_c_instant');
+    assert.equal(firstBody.allocatedStockId, 'stk-nati-4x4-single');
+    assert.equal(firstBody.breakdown.providerPrice, 96_000);
+    assert.equal(store.pilotStocks.get('stk-nati-4x4-single')?.bookedUnits, 1);
+
+    // 17b. Second user attempts to book the same exhausted stock -> STRICT 409 Anti-Double-Booking block!
+    const doubleBookRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-2',
+        serviceId: 'srv-pilot-nati-safari-4x4',
+        scheduledDate: '2026-12-20',
+        scheduledTime: '08:00',
+        participants: 1,
+        stockId: 'stk-nati-4x4-single',
+      }),
+    });
+    assert.equal(doubleBookRes.status, 409);
+    const doubleBody: any = await doubleBookRes.json();
+    assert.match(doubleBody.error, /Indisponibilité confirmée|anti-double réservation|déjà réservés/i);
+
+    // 17c. First traveler cancels -> Stock is atomically released (bookedUnits returns to 0)
+    const cancelRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${firstBody.reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'client_cancel' }),
+      }
+    );
+    assert.equal(cancelRes.status, 200);
+    const cancelBody: any = await cancelRes.json();
+    assert.equal(cancelBody.status, 'cancelled');
+    assert.equal(cancelBody.stockReleased, true);
+    assert.equal(store.pilotStocks.get('stk-nati-4x4-single')?.bookedUnits, 0);
+
+    // 17d. Second user can now legitimately book the released 4x4!
+    const retryBookRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-2',
+        serviceId: 'srv-pilot-nati-safari-4x4',
+        scheduledDate: '2026-12-20',
+        scheduledTime: '08:00',
+        participants: 1,
+        stockId: 'stk-nati-4x4-single',
+      }),
+    });
+    assert.equal(retryBookRes.status, 201);
+    const retryBody: any = await retryBookRes.json();
+    assert.equal(retryBody.status, 'confirmed');
+    assert.equal(store.pilotStocks.get('stk-nati-4x4-single')?.bookedUnits, 1);
+  });
+
+  it('18. Suivi honnête des transmissions et relances Niveau B (prepared -> sent -> relance -> expired) protégé par RBAC Admin', async () => {
+    store.reset();
+
+    store.services.set('srv-pilot-cotonou-level-b', {
+      id: 'srv-pilot-cotonou-level-b',
+      providerId: 'prov-cotonou-pilot-b',
+      ownerId: 'manual_concierge',
+      title: 'Hôtel Pilote Haie Vive Cotonou (Niveau B)',
+      category: 'accommodation',
+      countryCode: 'BJ',
+      cityId: 'cotonou',
+      priceAmount: 42_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 720,
+      capacity: 2,
+      status: 'published',
+      dataOrigin: 'verified_partner',
+      activationLevel: 'level_b_validation',
+      pilotConventionSigned: true,
+    });
+
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-pilot-cotonou-level-b',
+        scheduledDate: '2026-12-22',
+        scheduledTime: '15:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created: any = await createRes.json();
+    assert.equal(created.activationMode, 'level_b_validation');
+    assert.equal(created.dispatchStatus, 'prepared');
+    assert.ok(created.responseDeadlineAt);
+
+    // Non-admin traveler CANNOT mark dispatch sent (403)
+    const forbiddenDispatch = await fetch(
+      `${baseUrl}/api/amaro/reservations/${created.reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'admin_mark_dispatched',
+          dispatchChannel: 'configured_email',
+        }),
+      }
+    );
+    assert.equal(forbiddenDispatch.status, 403);
+
+    // Admin marks request dispatched via configured_email -> dispatchStatus = 'sent'
+    const sentRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${created.reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'admin_mark_dispatched',
+          dispatchChannel: 'configured_email',
+        }),
+      }
+    );
+    assert.equal(sentRes.status, 200);
+    const sentBody: any = await sentRes.json();
+    assert.equal(sentBody.dispatchStatus, 'sent');
+    assert.equal(sentBody.dispatchChannel, 'configured_email');
+
+    // Admin records a manual follow-up -> followUpCount increments to 1
+    const followUpRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${created.reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'admin_record_followup' }),
+      }
+    );
+    assert.equal(followUpRes.status, 200);
+    const followUpBody: any = await followUpRes.json();
+    assert.equal(followUpBody.followUpCount, 1);
+
+    // Admin marks unanswered request as expired -> status = 'rejected' + dispatchStatus = 'expired'
+    const expireRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${created.reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'admin_mark_expired',
+          alternativeProposal:
+            'Délai 24h dépassé sans confirmation écrite ; nous vous proposons un établissement partenaire disponible sur Haie Vive.',
+        }),
+      }
+    );
+    assert.equal(expireRes.status, 200);
+    const expireBody: any = await expireRes.json();
+    assert.equal(expireBody.status, 'rejected');
+    assert.equal(expireBody.dispatchStatus, 'expired');
+  });
 });
+
 
 
