@@ -912,7 +912,7 @@ function AmaroPlatform() {
     if (activeFolder.status === 'active' || hasConfirmedBooking) {
       return 'Suivre mon voyage';
     }
-    return 'Ouvrir mon voyage';
+    return 'Continuer mon voyage';
   }, [activeFolder, authUser, clientReservations, folders.length]);
 
   const handleSmartJourneyCta = useCallback(() => {
@@ -1172,6 +1172,65 @@ function AmaroPlatform() {
     }
   };
 
+  const handleUpdateJourneyItem = async (
+    item: JourneyItemDoc,
+    nextDate: string,
+    nextStartTime: string,
+    nextNotes: string
+  ) => {
+    if (!selectedFolderId) return;
+    const otherItems = folderItems.filter((it) => it.id !== item.id);
+
+    const brainRes = await fetch('/api/amaro/brain/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: otherItems,
+        candidate: {
+          serviceId: item.serviceId,
+          providerId: item.providerId,
+          serviceTitle: item.serviceTitle,
+          category: item.category,
+          cityId: item.cityId,
+          date: nextDate,
+          startTime: nextStartTime,
+          durationMinutes: item.durationMinutes,
+        },
+      }),
+    });
+    const brainData = await brainRes.json();
+    setLastBrainDiagnostic(brainData);
+
+    if (!brainData.valid) {
+      showToast(
+        brainData.conflicts?.[0] ||
+          'Modification bloquée par Amaro Journey Brain (conflit horaire ou changement de ville).'
+      );
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'journey_folders', selectedFolderId, 'items', item.id), {
+        date: nextDate,
+        startTime: nextStartTime,
+        endTime: String(brainData.computedEndTime || item.endTime),
+        notes: nextNotes.slice(0, 580),
+        updatedAt: serverTimestamp(),
+      });
+      showToast(
+        brainData.warnings?.length
+          ? `Étape replanifiée avec vigilance : ${brainData.warnings[0]}`
+          : 'Étape replanifiée et budget recalculé automatiquement.'
+      );
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.UPDATE,
+        `journey_folders/${selectedFolderId}/items/${item.id}`
+      );
+    }
+  };
+
   const handleDeleteJourneyItem = async (itemId: string) => {
     if (!selectedFolderId) return;
     try {
@@ -1319,43 +1378,69 @@ function AmaroPlatform() {
     }
   };
 
-  // Client Reservation Transitions
+  // Client Reservation Transitions (Server-Controlled State Machine)
   const handleClientValidateReservation = async (res: ReservationDoc) => {
     try {
-      await updateDoc(doc(db, 'reservations', res.id), {
-        status: 'awaiting_payment',
-        updatedAt: serverTimestamp(),
-      });
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(res.id)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'client_accept_alternative' }),
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data?.error || 'Impossible de valider cette alternative.');
+        return;
+      }
       showToast('Alternative validée. Vous pouvez demander le règlement encadré.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reservations/${res.id}`);
+    } catch {
+      showToast('Erreur de liaison avec le serveur de réservation.');
     }
   };
 
   const handleClientInitiatePayment = async (res: ReservationDoc) => {
     try {
-      await updateDoc(doc(db, 'reservations', res.id), {
-        status: 'awaiting_payment',
-        paymentStatus: 'initiated',
-        updatedAt: serverTimestamp(),
-      });
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(res.id)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'client_initiate_payment' }),
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data?.error || 'Demande de règlement refusée.');
+        return;
+      }
       showToast(
         'Demande de règlement enregistrée. En attente de vérification financière Amaro.'
       );
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reservations/${res.id}`);
+    } catch {
+      showToast('Erreur de liaison avec le serveur de paiement.');
     }
   };
 
   const handleClientCancelReservation = async (res: ReservationDoc) => {
     try {
-      await updateDoc(doc(db, 'reservations', res.id), {
-        status: 'cancelled',
-        updatedAt: serverTimestamp(),
-      });
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(res.id)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'client_cancel' }),
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data?.error || 'Annulation refusée.');
+        return;
+      }
       showToast('Réservation annulée.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reservations/${res.id}`);
+    } catch {
+      showToast('Erreur lors de l’annulation.');
     }
   };
 
@@ -1368,6 +1453,21 @@ function AmaroPlatform() {
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `notifications/${notificationId}`);
     }
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    const unread = notifications.filter((n) => !n.read);
+    for (const n of unread) {
+      try {
+        await updateDoc(doc(db, 'notifications', n.id), {
+          read: true,
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // non-blocking per item
+      }
+    }
+    showToast('Toutes vos notifications ont été marquées comme lues.');
   };
 
   // Cultural Story Submission
@@ -2029,6 +2129,7 @@ function AmaroPlatform() {
             onUpdateFolderBudget={handleUpdateFolderBudget}
             onUpdateFolderStatus={handleUpdateFolderStatus}
             folderItems={folderItems}
+            onUpdateJourneyItem={handleUpdateJourneyItem}
             onDeleteJourneyItem={handleDeleteJourneyItem}
             journalEntries={journalEntries}
             onSaveJournalEntry={handleSaveJournalEntry}
@@ -2040,6 +2141,7 @@ function AmaroPlatform() {
             onRequestAlternativeItem={handleRequestReservation}
             notifications={notifications}
             onMarkNotificationRead={handleMarkNotificationRead}
+            onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
             lastBrainDiagnostic={lastBrainDiagnostic}
             identityByReservation={clientIdentityByRes}
             onNotify={showToast}

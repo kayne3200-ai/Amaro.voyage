@@ -313,8 +313,42 @@ export function AssistantRescueView({
           ))}
         </section>
 
-        {/* Practical Guidance: Lost Documents, Consular & Local Rules */}
+        {/* Practical Guidance: Operational Incidents, Lost Documents, Consular & Local Rules */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
+            <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+              Retard de vol / transport ou correspondance perturbée
+            </h3>
+            <ul className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside">
+              <li>
+                Ouvrez immédiatement votre <strong>Dossier de Voyage AMARO</strong> pour vérifier l’établissement ou le transporteur prévu ce jour.
+              </li>
+              <li>
+                Prévenez la réception de l’hôtel afin de maintenir votre chambre en arrivée tardive et décalez vos étapes du lendemain en un clic dans l’agenda.
+              </li>
+              <li>
+                À l’aéroport de Cotonou, privilégiez uniquement les navettes d’hôtels identifiées ou les applications VTC vérifiées (Gozem, Yango).
+              </li>
+            </ul>
+          </section>
+
+          <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
+            <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+              Annulation imprévue ou difficulté avec un prestataire
+            </h3>
+            <ul className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside">
+              <li>
+                Ne versez jamais de supplément en espèces non justifié en dehors du récapitulatif vérifié dans <strong>Suivre mes réservations</strong>.
+              </li>
+              <li>
+                En cas d’indisponibilité constatée sur place, consultez les <strong>alternatives réelles de même ville</strong> proposées automatiquement dans votre dossier.
+              </li>
+              <li>
+                Conservez votre numéro de réservation et votre reçu électronique AMARO pour toute demande de médiation ou de remboursement.
+              </li>
+            </ul>
+          </section>
+
           <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
             <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
               Procédure en cas de perte de passeport ou documents
@@ -324,10 +358,10 @@ export function AssistantRescueView({
                 Rendez-vous au commissariat de la <strong>Police Républicaine</strong> le plus proche pour établir une déclaration officielle de perte.
               </li>
               <li>
-                Présentez cette déclaration ainsi qu’une copie numérique de votre pièce d’identité auprès de votre <strong>ambassade ou consulat</strong> à Cotonou pour obtenir un laissez-passer ou passeport d’urgence.
+                Présentez cette déclaration auprès de votre <strong>ambassade ou consulat</strong> à Cotonou pour obtenir un laissez-passer ou titre d’urgence.
               </li>
               <li>
-                Conservez les références de vos réservations dans votre <strong>Dossier de Voyage Amaro</strong> hors-ligne.
+                Retrouvez vos références de séjour dans votre <strong>Dossier de Voyage AMARO</strong>.
               </li>
             </ol>
           </section>
@@ -349,6 +383,39 @@ export function AssistantRescueView({
             </ul>
           </section>
         </div>
+
+        <section className="p-5 bg-[#0B192C] text-white rounded-2xl flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1 max-w-2xl">
+            <p className="text-xs font-semibold text-teal-400">
+              Garantie Éthique AMARO : Orientation de sécurité 100 % gratuite
+            </p>
+            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
+              Les repères d’urgence et d’orientation <strong>Amaro Rescue</strong> restent accessibles gratuitement à tout voyageur, sans condition d’abonnement. Pour une replanification logistique complète par un conseiller dédié hors urgence vitale, vous pouvez également consulter l’offre optionnelle <strong>AMARO Assistance Personnalisée</strong>.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenJourney && (
+              <button
+                type="button"
+                onClick={onOpenJourney}
+                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+              >
+                Ouvrir mon Dossier de Voyage
+              </button>
+            )}
+            {onOpenExplorer && (
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenExplorer('cotonou', 'translation', 'trad-amaro-conciergerie-sejour')
+                }
+                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl"
+              >
+                Voir AMARO Assistance Personnalisée
+              </button>
+            )}
+          </div>
+        </section>
       </div>
     );
   }

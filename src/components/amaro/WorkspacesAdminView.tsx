@@ -271,11 +271,17 @@ export function WorkspacesAdminView({
   onNotify,
 }: WorkspacesAdminViewProps) {
   const t = TRANSLATIONS[locale];
-  const [subTab, setSubTab] = useState<SubWorkspace>('partners');
+  const [subTab, setSubTab] = useState<SubWorkspace>('profile');
   const [identityModalContext, setIdentityModalContext] = useState<{
     reservation: ReservationDoc;
     role: 'provider' | 'admin';
   } | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin && (subTab === 'admin' || subTab === 'github')) {
+      setSubTab('profile');
+    }
+  }, [isAdmin, subTab]);
 
   // 1. User Profile State
   const [displayName, setDisplayName] = useState<string>('');
@@ -560,10 +566,14 @@ export function WorkspacesAdminView({
       <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
         <div>
           <p className="text-xs font-medium text-teal-700 dark:text-teal-400">
-            Architecture Multi-Rôles · Amaro Partners · Gouvernance &amp; Sauvegarde GitHub
+            {isAdmin
+              ? 'Architecture Multi-Rôles · Gouvernance Administrateur & Sauvegarde GitHub'
+              : 'Espace Personnel · Profil RGPD, Prestataires & Programme Amaro Partners'}
           </p>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
-            Espaces Partenaires, Prestataires, Administration &amp; Sauvegarde
+            {isAdmin
+              ? 'Espaces Profil, Prestataires, Partenaires & Administration'
+              : 'Mon Profil, Espace Prestataire & Amaro Partners'}
           </h1>
         </div>
 
@@ -577,34 +587,43 @@ export function WorkspacesAdminView({
         </button>
       </div>
 
-      {/* Sub-navigation Tabs */}
+      {/* Sub-navigation Tabs — Admin & GitHub strictly hidden from non-admin clients (Partie 25) */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-        {[
-          { id: 'partners' as SubWorkspace, label: 'Amaro Partners (Affiliés)', icon: Award },
-          { id: 'provider' as SubWorkspace, label: 'Espace Prestataire', icon: Building2 },
-          { id: 'profile' as SubWorkspace, label: 'Mon Profil & RGPD', icon: UserCheck },
-          { id: 'admin' as SubWorkspace, label: 'Administration & Catalogue', icon: ShieldCheck },
-          { id: 'github' as SubWorkspace, label: 'Sauvegarde GitHub & Spck', icon: GitBranch },
-          { id: 'matrix' as SubWorkspace, label: 'Matrice & Légal', icon: FileCheck2 },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const active = subTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setSubTab(tab.id)}
-              className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
-                active
-                  ? 'bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
+        {(
+          [
+            { id: 'profile' as SubWorkspace, label: 'Mon Profil & RGPD', icon: UserCheck, adminOnly: false },
+            { id: 'partners' as SubWorkspace, label: 'Amaro Partners (Affiliés)', icon: Award, adminOnly: false },
+            { id: 'provider' as SubWorkspace, label: 'Espace Prestataire', icon: Building2, adminOnly: false },
+            {
+              id: 'matrix' as SubWorkspace,
+              label: isAdmin ? 'Matrice & Légal' : 'Charte Légale & Confidentialité',
+              icon: FileCheck2,
+              adminOnly: false,
+            },
+            { id: 'admin' as SubWorkspace, label: 'Administration & Catalogue', icon: ShieldCheck, adminOnly: true },
+            { id: 'github' as SubWorkspace, label: 'Sauvegarde GitHub & Spck', icon: GitBranch, adminOnly: true },
+          ] as const
+        )
+          .filter((tab) => !tab.adminOnly || isAdmin)
+          .map((tab) => {
+            const Icon = tab.icon;
+            const active = subTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSubTab(tab.id)}
+                className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
+                  active
+                    ? 'bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950'
+                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
       </div>
 
       {/* =====================================================================
@@ -2012,56 +2031,58 @@ export function WorkspacesAdminView({
          ===================================================================== */}
       {subTab === 'matrix' && (
         <div className="space-y-8">
-          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4 overflow-x-auto">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Transparence Technique &amp; État Réel des Modules</span>
+          {isAdmin && (
+            <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4 overflow-x-auto">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Transparence Technique Administrateur &amp; État Réel des Modules</span>
+                </div>
+                <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                  Matrice Officielle de Validation AMARO.VOYAGE
+                </h2>
               </div>
-              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                Matrice Officielle de Validation AMARO.VOYAGE
-              </h2>
-            </div>
 
-            <table className="w-full text-left border-collapse text-xs min-w-[760px]">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
-                  <th className="py-2.5 pr-3 font-semibold">Module</th>
-                  <th className="py-2.5 pr-3 font-semibold">Fonction</th>
-                  <th className="py-2.5 pr-3 font-semibold">Base &amp; Sécurité</th>
-                  <th className="py-2.5 pr-3 font-semibold">Statut réel</th>
-                  <th className="py-2.5 font-semibold">Points restants / Connexions externes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {VALIDATION_MATRIX.map((row) => (
-                  <tr key={row.module}>
-                    <td className="py-3 pr-3 font-bold text-slate-900 dark:text-slate-100">
-                      {row.module}
-                    </td>
-                    <td className="py-3 pr-3 text-slate-600 dark:text-slate-300">
-                      {row.feature}
-                    </td>
-                    <td className="py-3 pr-3 text-slate-500">
-                      {row.database} · {row.security}
-                    </td>
-                    <td className="py-3 pr-3 font-semibold">
-                      <span
-                        className={
-                          row.status === 'Validé'
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-amber-700 dark:text-amber-400'
-                        }
-                      >
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="py-3 text-slate-500">{row.remainingIssues}</td>
+              <table className="w-full text-left border-collapse text-xs min-w-[760px]">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                    <th className="py-2.5 pr-3 font-semibold">Module</th>
+                    <th className="py-2.5 pr-3 font-semibold">Fonction</th>
+                    <th className="py-2.5 pr-3 font-semibold">Base &amp; Sécurité</th>
+                    <th className="py-2.5 pr-3 font-semibold">Statut réel</th>
+                    <th className="py-2.5 font-semibold">Points restants / Connexions externes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {VALIDATION_MATRIX.map((row) => (
+                    <tr key={row.module}>
+                      <td className="py-3 pr-3 font-bold text-slate-900 dark:text-slate-100">
+                        {row.module}
+                      </td>
+                      <td className="py-3 pr-3 text-slate-600 dark:text-slate-300">
+                        {row.feature}
+                      </td>
+                      <td className="py-3 pr-3 text-slate-500">
+                        {row.database} · {row.security}
+                      </td>
+                      <td className="py-3 pr-3 font-semibold">
+                        <span
+                          className={
+                            row.status === 'Validé'
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-amber-700 dark:text-amber-400'
+                          }
+                        >
+                          {row.status}
+                        </span>
+                      </td>
+                      <td className="py-3 text-slate-500">{row.remainingIssues}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
 
           <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">

@@ -50,7 +50,12 @@ class InMemoryTestStore implements AmaroServerStore {
   readonly itemsByFolder = new Map<string, ScheduleSlot[]>();
   readonly reservations = new Map<
     string,
-    AtomicReservationPayload & { status: ReservationStatus }
+    AtomicReservationPayload & {
+      status: ReservationStatus;
+      paymentStatus: 'unpaid' | 'initiated' | 'succeeded' | 'failed' | 'refunded';
+      alternativeProposal?: string;
+      updatedAtIso: string;
+    }
   >();
   readonly partnersByCode = new Map<string, ServerPartnerRecord>();
   readonly referrals = new Map<
@@ -231,8 +236,41 @@ class InMemoryTestStore implements AmaroServerStore {
       cityId: r.cityId,
       scheduledDate: r.scheduledDate,
       scheduledTime: r.scheduledTime,
+      participants: r.participants,
+      providerPrice: r.providerPrice,
+      amaroFee: r.amaroFee,
+      taxAmount: r.taxAmount,
+      totalAmount: r.totalAmount,
+      currency: r.currency,
+      pricingSnapshot: r.pricingSnapshot,
       status: r.status,
+      paymentStatus: r.paymentStatus,
+      alternativeProposal: r.alternativeProposal,
+      updatedAtIso: r.updatedAtIso,
     };
+  }
+
+  async transitionReservation(params: {
+    reservationId: string;
+    status: ReservationStatus;
+    paymentStatus: 'unpaid' | 'initiated' | 'succeeded' | 'failed' | 'refunded';
+    scheduledDate: string;
+    scheduledTime: string;
+    alternativeProposal: string;
+  }): Promise<void> {
+    const existing = this.reservations.get(params.reservationId);
+    if (!existing) {
+      throw new ConflictError('Réservation introuvable.');
+    }
+    this.reservations.set(params.reservationId, {
+      ...existing,
+      status: params.status,
+      paymentStatus: params.paymentStatus,
+      scheduledDate: params.scheduledDate,
+      scheduledTime: params.scheduledTime,
+      alternativeProposal: params.alternativeProposal,
+      updatedAtIso: new Date().toISOString(),
+    });
   }
 
   async getIdentityMetadata(
@@ -367,6 +405,8 @@ class InMemoryTestStore implements AmaroServerStore {
       this.reservations.set(payload.reservationId, {
         ...payload,
         status: 'pending_provider',
+        paymentStatus: 'unpaid',
+        updatedAtIso: new Date().toISOString(),
       });
 
       if (payload.referral) {
@@ -1435,5 +1475,349 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       simulateHumanFallback = false;
     }
   });
+
+  it('14. Journey Brain (Parties 8 & 9) : autorise jusqu’à 3 visites même ville, autorise trajet + hôtel le jour d’un changement de ville sans visite, et autorise un VTC urbain ponctuel (Yango/Gozem) en parallèle du loueur principal', async () => {
+    store.reset();
+
+    // 14a. Relocation day: transport in Cotonou + hotel check-in in Ouidah -> ALLOWED (valid=true), but adding a tourist site visit on that relocation day -> BLOCKED (valid=false)
+    const relocationOkRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'trans-avis-berline-cotonou',
+            providerId: 'dir-trans-avis-benin',
+            serviceTitle: 'Transfert Cotonou -> Ouidah',
+            category: 'transport',
+            cityId: 'cotonou',
+            date: '2026-12-01',
+            startTime: '09:00',
+            endTime: '11:00',
+            durationMinutes: 120,
+          },
+        ],
+        candidate: {
+          serviceId: 'acc-casa-del-papa-ouidah',
+          providerId: 'dir-acc-casa-del-papa-ouidah',
+          serviceTitle: 'Casa del Papa Ouidah',
+          category: 'accommodation',
+          cityId: 'ouidah',
+          date: '2026-12-01',
+          startTime: '14:00',
+          endTime: '22:00',
+          durationMinutes: 480,
+        },
+      }),
+    });
+    assert.equal(relocationOkRes.status, 200);
+    const relocationOkBody: any = await relocationOkRes.json();
+    assert.equal(relocationOkBody.valid, true);
+
+    const relocationSiteBlockedRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'trans-avis-berline-cotonou',
+            providerId: 'dir-trans-avis-benin',
+            serviceTitle: 'Transfert Cotonou -> Ouidah',
+            category: 'transport',
+            cityId: 'cotonou',
+            date: '2026-12-01',
+            startTime: '09:00',
+            endTime: '11:00',
+            durationMinutes: 120,
+          },
+          {
+            serviceId: 'acc-casa-del-papa-ouidah',
+            providerId: 'dir-acc-casa-del-papa-ouidah',
+            serviceTitle: 'Casa del Papa Ouidah',
+            category: 'accommodation',
+            cityId: 'ouidah',
+            date: '2026-12-01',
+            startTime: '14:00',
+            endTime: '15:00',
+            durationMinutes: 60,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-temple-des-pythons',
+          providerId: 'dir-site-ouidah-temple-des-pythons',
+          serviceTitle: 'Temple des Pythons',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-01',
+          startTime: '16:00',
+          endTime: '17:00',
+          durationMinutes: 60,
+        },
+      }),
+    });
+    const relocationSiteBlockedBody: any = await relocationSiteBlockedRes.json();
+    assert.equal(relocationSiteBlockedBody.valid, false);
+    assert.match(relocationSiteBlockedBody.conflicts.join(' '), /changement de ville/i);
+
+    // 14b. Up to 3 tourist visits in the SAME city on the same day -> 3rd allowed with warning, 4th blocked
+    const thirdSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'site-ouidah-temple-des-pythons',
+            serviceTitle: 'Temple des Pythons',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-02',
+            startTime: '09:00',
+            endTime: '10:30',
+            durationMinutes: 90,
+          },
+          {
+            serviceId: 'site-ouidah-foret-sacree-kpasse',
+            serviceTitle: 'Forêt Sacrée de Kpassè',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-02',
+            startTime: '11:00',
+            endTime: '12:30',
+            durationMinutes: 90,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-porte-du-non-retour',
+          serviceTitle: 'Porte du Non-Retour',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-02',
+          startTime: '15:30',
+          endTime: '17:00',
+          durationMinutes: 90,
+        },
+      }),
+    });
+    const thirdSameCityBody: any = await thirdSameCityRes.json();
+    assert.equal(thirdSameCityBody.valid, true);
+    assert.equal(thirdSameCityBody.warnings.length > 0, true);
+
+    const fourthSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'site-ouidah-temple-des-pythons',
+            serviceTitle: 'Temple des Pythons',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-02',
+            startTime: '08:00',
+            endTime: '09:00',
+            durationMinutes: 60,
+          },
+          {
+            serviceId: 'site-ouidah-foret-sacree-kpasse',
+            serviceTitle: 'Forêt Sacrée de Kpassè',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-02',
+            startTime: '10:00',
+            endTime: '11:00',
+            durationMinutes: 60,
+          },
+          {
+            serviceId: 'site-ouidah-porte-du-non-retour',
+            serviceTitle: 'Porte du Non-Retour',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-02',
+            startTime: '14:00',
+            endTime: '15:00',
+            durationMinutes: 60,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-fondation-zinsou-musee',
+          serviceTitle: 'Musée Fondation Zinsou',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-02',
+          startTime: '16:00',
+          endTime: '17:00',
+          durationMinutes: 60,
+        },
+      }),
+    });
+    const fourthSameCityBody: any = await fourthSameCityRes.json();
+    assert.equal(fourthSameCityBody.valid, false);
+
+    // 14c. Principal rental provider (Avis Bénin) + punctual urban VTC (Yango Bénin) -> ALLOWED (201)
+    const rentalRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-avis-berline-cotonou',
+        scheduledDate: '2026-12-04',
+        scheduledTime: '08:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(rentalRes.status, 201);
+
+    const punctualVtcRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-yango-vtc-cotonou',
+        scheduledDate: '2026-12-05',
+        scheduledTime: '19:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(punctualVtcRes.status, 201);
+  });
+
+  it('15. Transitions serveur contrôlées, verrouillage strict du Reçu Électronique avant paiement confirmé (409 -> 200) et offre optionnelle AMARO Assistance Personnalisée', async () => {
+    store.reset();
+
+    // Create a verified partner hotel reservation
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-10',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created: any = await createRes.json();
+    const reservationId = created.reservationId;
+
+    // 15a. Receipt MUST be blocked (409) while paymentStatus === 'unpaid'
+    const prematureReceipt1 = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/receipt`,
+      {
+        headers: { Authorization: 'Bearer valid-traveler-jwt' },
+      }
+    );
+    assert.equal(prematureReceipt1.status, 409);
+
+    // 15b. Traveler CANNOT self-confirm payment (403)
+    const illegalConfirm = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'admin_confirm_payment' }),
+      }
+    );
+    assert.equal(illegalConfirm.status, 403);
+
+    // 15c. Provider accepts -> Traveler initiates payment -> Receipt STILL blocked (409) until payment is confirmed
+    const acceptRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-provider-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'provider_accept' }),
+      }
+    );
+    assert.equal(acceptRes.status, 200);
+
+    const initPayRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'client_initiate_payment' }),
+      }
+    );
+    assert.equal(initPayRes.status, 200);
+
+    const prematureReceipt2 = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/receipt`,
+      {
+        headers: { Authorization: 'Bearer valid-traveler-jwt' },
+      }
+    );
+    assert.equal(prematureReceipt2.status, 409);
+
+    // 15d. Admin confirms real payment reception -> paymentStatus becomes 'succeeded' -> Official Receipt issued (200)
+    const adminConfirmRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'admin_confirm_payment' }),
+      }
+    );
+    assert.equal(adminConfirmRes.status, 200);
+
+    const receiptOkRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/receipt`,
+      {
+        headers: { Authorization: 'Bearer valid-traveler-jwt' },
+      }
+    );
+    assert.equal(receiptOkRes.status, 200);
+    const receiptBody: any = await receiptOkRes.json();
+    assert.match(receiptBody.receipt.receiptNumber, /^AMR-REC-/);
+    assert.equal(receiptBody.receipt.paymentStatus, 'succeeded');
+    assert.equal(receiptBody.receipt.totalAmount, 130_980);
+    assert.equal(typeof receiptBody.receipt.verificationCode, 'string');
+    assert.equal(receiptBody.receipt.verificationCode.length, 16);
+
+    // Unrelated third-party provider cannot access another client's receipt (403)
+    const forbiddenReceipt = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/receipt`,
+      {
+        headers: { Authorization: 'Bearer other-provider-jwt' },
+      }
+    );
+    assert.equal(forbiddenReceipt.status, 403);
+
+    // 15e. Optional AMARO Assistance Personnalisée offer quotes and books cleanly on server
+    const conciergeQuote = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'trad-amaro-preparation-complete',
+        participants: 1,
+      }),
+    });
+    assert.equal(conciergeQuote.status, 200);
+    const conciergeQuoteBody: any = await conciergeQuote.json();
+    assert.equal(conciergeQuoteBody.priceKnown, true);
+    assert.equal(conciergeQuoteBody.breakdown.providerPrice, 35_000);
+  });
 });
+
 

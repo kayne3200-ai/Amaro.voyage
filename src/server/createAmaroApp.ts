@@ -1010,6 +1010,318 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   );
 
   // ===========================================================================
+  // 3B. SERVER-CONTROLLED RESERVATION & PAYMENT TRANSITIONS + ELECTRONIC RECEIPT
+  //     (Parties 11, 16, 17, 26 — Never generate a receipt before verified payment)
+  // ===========================================================================
+  async function isVerifiedAdminCaller(
+    caller: NonNullable<AuthedRequest['caller']>
+  ): Promise<boolean> {
+    if (caller.emailVerified && caller.email === 'kayne3200@gmail.com') {
+      return true;
+    }
+    try {
+      return await store.isRegisteredAdmin(caller.uid, caller.rawIdToken);
+    } catch {
+      return false;
+    }
+  }
+
+  app.post(
+    '/api/amaro/reservations/:reservationId/transition',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      const action = String(req.body?.action || '').trim();
+
+      if (!reservationId || !store.getReservation || !store.transitionReservation) {
+        res.status(400).json({ error: 'Transition de réservation indisponible.' });
+        return;
+      }
+
+      try {
+        const existing = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!existing) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+
+        const isAdmin = await isVerifiedAdminCaller(caller);
+        const isClient = existing.clientId === caller.uid;
+        const isProvider =
+          existing.providerOwnerId !== 'manual_concierge' &&
+          existing.providerOwnerId === caller.uid;
+
+        if (!isAdmin && !isClient && !isProvider) {
+          res.status(403).json({
+            error: 'Vous n’êtes pas autorisé à modifier cette réservation.',
+          });
+          return;
+        }
+
+        let nextStatus = existing.status;
+        let nextPaymentStatus = existing.paymentStatus || 'unpaid';
+        let nextDate = existing.scheduledDate;
+        let nextTime = existing.scheduledTime;
+        let nextProposal = existing.alternativeProposal || '';
+        let notifRecipientId: string | null = null;
+        let notifKind: 'reservation' | 'payment' | 'alternative' = 'reservation';
+        let notifTitle = '';
+        let notifBody = '';
+
+        if (action === 'client_accept_alternative') {
+          if (!isClient) {
+            res.status(403).json({ error: 'Seul le voyageur titulaire peut accepter cette alternative.' });
+            return;
+          }
+          if (existing.status !== 'alternative_proposed' && existing.status !== 'accepted') {
+            res.status(409).json({
+              error: 'Cette réservation n’est pas en attente d’acceptation d’alternative.',
+            });
+            return;
+          }
+          nextStatus = 'awaiting_payment';
+          if (existing.providerOwnerId !== 'manual_concierge') {
+            notifRecipientId = existing.providerOwnerId;
+            notifKind = 'reservation';
+            notifTitle = `Alternative validée : ${existing.serviceTitle}`;
+            notifBody = `Le voyageur a accepté la proposition du ${nextDate} à ${nextTime}.`;
+          }
+        } else if (action === 'client_initiate_payment') {
+          if (!isClient) {
+            res.status(403).json({ error: 'Seul le voyageur titulaire peut initier le règlement.' });
+            return;
+          }
+          if (
+            existing.status !== 'accepted' &&
+            existing.status !== 'awaiting_payment' &&
+            existing.status !== 'alternative_proposed'
+          ) {
+            res.status(409).json({
+              error:
+                'La disponibilité doit d’abord être confirmée par le prestataire ou la conciergerie avant d’initier le paiement.',
+            });
+            return;
+          }
+          if (nextPaymentStatus === 'succeeded') {
+            res.status(409).json({ error: 'Cette réservation est déjà réglée et confirmée.' });
+            return;
+          }
+          nextStatus = 'awaiting_payment';
+          nextPaymentStatus = 'initiated';
+          notifRecipientId = caller.uid;
+          notifKind = 'payment';
+          notifTitle = `Demande de règlement enregistrée : ${existing.serviceTitle}`;
+          notifBody =
+            'Statut : Paiement en attente de vérification serveur AMARO. Aucun reçu définitif n’est émis tant que l’encaissement n’est pas vérifié.';
+        } else if (action === 'client_cancel') {
+          if (!isClient && !isAdmin) {
+            res.status(403).json({ error: 'Annulation réservée au voyageur titulaire ou à l’administration.' });
+            return;
+          }
+          if (existing.status === 'refunded') {
+            res.status(409).json({ error: 'Une prestation déjà remboursée ne peut plus être annulée directement.' });
+            return;
+          }
+          nextStatus = 'cancelled';
+        } else if (
+          action === 'provider_accept' ||
+          action === 'provider_reject' ||
+          action === 'provider_propose_alternative'
+        ) {
+          if (!isProvider && !isAdmin) {
+            res.status(403).json({ error: 'Action réservée au prestataire concerné ou à la conciergerie AMARO.' });
+            return;
+          }
+          const proposedNote = String(req.body?.alternativeProposal || '').trim().slice(0, 780);
+          const reqDate = String(req.body?.scheduledDate || existing.scheduledDate).trim();
+          const reqTime = String(req.body?.scheduledTime || existing.scheduledTime).trim();
+          if (isValidIsoDate(reqDate)) nextDate = reqDate;
+          if (isValidTimeHhMm(reqTime)) nextTime = reqTime;
+          nextProposal = proposedNote;
+
+          if (action === 'provider_accept') {
+            nextStatus = 'accepted';
+            notifKind = 'reservation';
+            notifTitle = `Disponibilité confirmée : ${existing.serviceTitle}`;
+            notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement encadré AMARO.`;
+          } else if (action === 'provider_propose_alternative') {
+            nextStatus = 'alternative_proposed';
+            notifKind = 'alternative';
+            notifTitle = `Alternative proposée : ${existing.serviceTitle}`;
+            notifBody = `Nouvelle proposition prestataire (${nextDate} à ${nextTime}) : ${nextProposal || 'Veuillez consulter votre suivi de réservation.'}`;
+          } else {
+            nextStatus = 'rejected';
+            notifKind = 'reservation';
+            notifTitle = `Indisponibilité signalée : ${existing.serviceTitle}`;
+            notifBody = nextProposal || 'Le créneau demandé n’est pas disponible. Vous pouvez choisir une alternative dans le catalogue.';
+          }
+          notifRecipientId = existing.clientId;
+        } else if (
+          action === 'admin_confirm_payment' ||
+          action === 'admin_refund'
+        ) {
+          if (!isAdmin) {
+            res.status(403).json({
+              error: 'La validation définitive d’encaissement ou de remboursement est strictement réservée à l’administration côté serveur.',
+            });
+            return;
+          }
+          if (action === 'admin_confirm_payment') {
+            nextStatus = 'confirmed';
+            nextPaymentStatus = 'succeeded';
+            notifRecipientId = existing.clientId;
+            notifKind = 'payment';
+            notifTitle = `Paiement confirmé & Reçu disponible : ${existing.serviceTitle}`;
+            notifBody = `Votre paiement de ${Number(existing.totalAmount || 0).toLocaleString('fr-FR')} ${existing.currency || 'XOF'} est confirmé. Votre reçu électronique officiel AMARO est disponible dans votre Dossier de voyage.`;
+          } else {
+            nextStatus = 'refunded';
+            nextPaymentStatus = 'refunded';
+            notifRecipientId = existing.clientId;
+            notifKind = 'payment';
+            notifTitle = `Remboursement enregistré : ${existing.serviceTitle}`;
+            notifBody = 'Le remboursement de cette réservation a été validé par l’administration AMARO.';
+          }
+        } else {
+          res.status(400).json({ error: 'Action de transition non reconnue.' });
+          return;
+        }
+
+        const notifId = notifRecipientId
+          ? `notif-tr-${crypto
+              .createHash('sha256')
+              .update(`${reservationId}|${action}|${Date.now()}`)
+              .digest('hex')
+              .slice(0, 18)}`
+          : null;
+
+        await store.transitionReservation(
+          {
+            reservationId,
+            status: nextStatus,
+            paymentStatus: nextPaymentStatus,
+            scheduledDate: nextDate,
+            scheduledTime: nextTime,
+            alternativeProposal: nextProposal,
+            notification:
+              notifRecipientId && notifId
+                ? {
+                    id: notifId,
+                    recipientId: notifRecipientId,
+                    senderId: caller.uid,
+                    kind: notifKind,
+                    title: notifTitle,
+                    body: notifBody,
+                  }
+                : null,
+          },
+          caller.rawIdToken
+        );
+
+        res.json({
+          ok: true,
+          reservationId,
+          status: nextStatus,
+          paymentStatus: nextPaymentStatus,
+          scheduledDate: nextDate,
+          scheduledTime: nextTime,
+          receiptEligible: nextPaymentStatus === 'succeeded',
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: redactSecrets(err) || 'Échec lors de la mise à jour de la réservation.',
+        });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/reservations/:reservationId/receipt',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      if (!reservationId || !store.getReservation) {
+        res.status(400).json({ error: 'Identifiant de réservation manquant.' });
+        return;
+      }
+
+      try {
+        const reservation = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!reservation) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+
+        const isAdmin = await isVerifiedAdminCaller(caller);
+        const isClient = reservation.clientId === caller.uid;
+        const isProvider =
+          reservation.providerOwnerId !== 'manual_concierge' &&
+          reservation.providerOwnerId === caller.uid;
+
+        if (!isAdmin && !isClient && !isProvider) {
+          res.status(403).json({
+            error: 'Accès non autorisé à ce reçu électronique.',
+          });
+          return;
+        }
+
+        // Partie 17 STRICT RULE: Never generate a payment receipt before a genuinely confirmed payment!
+        if (reservation.paymentStatus !== 'succeeded') {
+          res.status(409).json({
+            error:
+              'Aucun reçu de paiement ne peut être émis tant que le paiement n’est pas réellement confirmé côté serveur.',
+            paymentStatus: reservation.paymentStatus || 'unpaid',
+          });
+          return;
+        }
+
+        const digest = crypto
+          .createHash('sha256')
+          .update(
+            `AMARO-RECEIPT|${reservation.id}|${reservation.clientId}|${reservation.totalAmount || 0}|${reservation.currency || 'XOF'}`
+          )
+          .digest('hex')
+          .toUpperCase();
+
+        const receiptNumber = `AMR-REC-${reservation.scheduledDate.replace(/-/g, '')}-${digest.slice(0, 8)}`;
+
+        res.json({
+          ok: true,
+          receipt: {
+            receiptNumber,
+            verificationCode: digest.slice(0, 16),
+            reservationId: reservation.id,
+            folderId: reservation.folderId,
+            serviceId: reservation.serviceId,
+            serviceTitle: reservation.serviceTitle,
+            category: reservation.category,
+            cityId: reservation.cityId,
+            providerId: reservation.providerId,
+            scheduledDate: reservation.scheduledDate,
+            scheduledTime: reservation.scheduledTime,
+            participants: reservation.participants ?? 1,
+            providerPrice: reservation.providerPrice ?? 0,
+            amaroFee: reservation.amaroFee ?? 0,
+            taxAmount: reservation.taxAmount ?? 0,
+            totalAmount: reservation.totalAmount ?? 0,
+            currency: reservation.currency || 'XOF',
+            status: reservation.status,
+            paymentStatus: reservation.paymentStatus,
+            issuedAt: reservation.updatedAtIso || new Date().toISOString(),
+            conditionsSummary:
+              'Document électronique officiel AMARO attestant la confirmation d’encaissement associé à ce dossier de voyage. Conditions d’annulation ou de report selon le règlement prestataire et le statut de la réservation.',
+          },
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: redactSecrets(err) || 'Impossible de générer le reçu électronique.',
+        });
+      }
+    }
+  );
+
+  // ===========================================================================
   // 4. AMARO CONVERSATIONAL ASSISTANT — NATURAL DIALOGUE + REAL CATALOGUE + ZERO TECHNICAL ERRORS
   // ===========================================================================
   app.post('/api/amaro/assistant', async (req: Request, res: Response) => {

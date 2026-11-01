@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BookOpen, Compass, MapPin, Sparkles, Utensils, Calendar, ShieldCheck, ArrowRight } from 'lucide-react';
+import { BookOpen, Compass, MapPin, Sparkles, Utensils, Calendar, ShieldCheck, ArrowRight, FileCheck2 } from 'lucide-react';
 import {
   BENIN_12_DEPARTMENTS,
   BENIN_GENERAL_PROFILE,
@@ -13,7 +13,8 @@ interface BeninExploreSectionProps {
   smartJourneyCtaLabel: string;
 }
 
-type EncyclopediaTab = 'portrait' | 'departments' | 'culture' | 'circuits';
+type EncyclopediaTab = 'portrait' | 'formalities' | 'departments' | 'culture' | 'circuits';
+type NationalityProfile = 'ecowas' | 'africa_other' | 'international' | 'diaspora';
 
 export function BeninExploreSection({
   onSelectCityFilter,
@@ -21,6 +22,8 @@ export function BeninExploreSection({
   smartJourneyCtaLabel,
 }: BeninExploreSectionProps) {
   const [subTab, setSubTab] = useState<EncyclopediaTab>('portrait');
+  const [nationalityProfile, setNationalityProfile] =
+    useState<NationalityProfile>('international');
   const [failedImg, setFailedImg] = useState<Record<string, boolean>>({});
 
   const beninCities = COUNTRIES_REGISTRY[0].cities;
@@ -68,8 +71,22 @@ export function BeninExploreSection({
           </h2>
           <p className="text-sm text-slate-300 leading-relaxed max-w-3xl">
             Préparez librement votre itinéraire à travers les <strong>12 départements</strong> et{' '}
-            <strong>22 destinations référencées</strong> : histoire des royaumes, cités lacustres, parcs nationaux UNESCO, langues parlées, monnaie officielle (Franc CFA — XOF), saisons climatiques et savoir-vivre local.
+            <strong>22 destinations référencées</strong> : patrimoine vivant, logistique sereine et temps de respiration personnelle, dans le respect absolu de la liberté et de la sensibilité de chaque voyageur.
           </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs text-slate-300">
+            <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800">
+              <strong className="text-teal-300 block">1. Rencontre culturelle</strong>
+              Patrimoines royaux, mémoires, arts et traditions vivantes du Bénin.
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800">
+              <strong className="text-teal-300 block">2. Sérénité matérielle</strong>
+              Hébergements, mobilité cohérente, budget maîtrisé et sécurité.
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800">
+              <strong className="text-teal-300 block">3. Rythme &amp; liberté</strong>
+              Équilibre entre découvertes, repos et sens personnel du voyage.
+            </div>
+          </div>
         </div>
         <div className="lg:col-span-4 flex flex-col sm:flex-row lg:flex-col gap-3 lg:items-end">
           <button
@@ -90,6 +107,7 @@ export function BeninExploreSection({
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {[
           { id: 'portrait' as EncyclopediaTab, label: 'Portrait, Climat & Monnaie', icon: BookOpen },
+          { id: 'formalities' as EncyclopediaTab, label: 'Formalités, e-Visa & Santé', icon: FileCheck2 },
           { id: 'departments' as EncyclopediaTab, label: '12 Départements & 22 Villes', icon: MapPin },
           { id: 'culture' as EncyclopediaTab, label: 'Gastronomie, Fêtes & Savoir-Vivre', icon: Utensils },
           { id: 'circuits' as EncyclopediaTab, label: 'Parcours Thématiques & Galerie', icon: Compass },
@@ -477,6 +495,170 @@ export function BeninExploreSection({
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: ENTRY CONDITIONS, E-VISA & PRACTICAL FORMALITIES BY NATIONALITY */}
+      {subTab === 'formalities' && (
+        <div className="space-y-6">
+          <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+                Conditions d’Entrée en République du Bénin · Repères Pratiques par Profil
+              </p>
+              <h3 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                Sélectionnez votre profil de nationalité pour préparer votre arrivée
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {[
+                {
+                  id: 'ecowas' as NationalityProfile,
+                  label: 'Ressortissant CEDEAO / UEMOA',
+                  sub: 'Afrique de l’Ouest',
+                },
+                {
+                  id: 'africa_other' as NationalityProfile,
+                  label: 'Ressortissant Africain (hors CEDEAO)',
+                  sub: 'Union Africaine',
+                },
+                {
+                  id: 'international' as NationalityProfile,
+                  label: 'Europe, Amériques, Asie & Monde',
+                  sub: 'Portail officiel e-Visa',
+                },
+                {
+                  id: 'diaspora' as NationalityProfile,
+                  label: 'Béninois, Diaspora & Afro-descendants',
+                  sub: 'Passeport / Dispositions dédiées',
+                },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setNationalityProfile(opt.id)}
+                  className={`min-h-[52px] p-3 text-left rounded-xl border transition-colors ${
+                    nationalityProfile === opt.id
+                      ? 'bg-[#0B192C] text-white border-[#0B192C] dark:bg-teal-600 dark:border-teal-500'
+                      : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
+                  }`}
+                >
+                  <strong className="block text-xs font-bold">{opt.label}</strong>
+                  <span className="block text-[11px] opacity-80">{opt.sub}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="p-5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+              {nationalityProfile === 'ecowas' && (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-slate-100">
+                    Circulation dans l’espace CEDEAO / UEMOA :
+                  </p>
+                  <ul className="list-disc list-inside space-y-1.5">
+                    <li>
+                      Exemption de visa de court séjour selon les accords communautaires en vigueur pour les ressortissants des États membres.
+                    </li>
+                    <li>
+                      Présentation obligatoire d’une pièce d’identité biométrique CEDEAO reconnue ou d’un passeport en cours de validité.
+                    </li>
+                    <li>
+                      Carnet international de vaccination (fièvre jaune) recommandé et fréquemment contrôlé aux postes frontaliers aériens et terrestres.
+                    </li>
+                  </ul>
+                </>
+              )}
+
+              {nationalityProfile === 'africa_other' && (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-slate-100">
+                    Voyageurs citoyens d’États africains hors CEDEAO :
+                  </p>
+                  <ul className="list-disc list-inside space-y-1.5">
+                    <li>
+                      La République du Bénin applique une politique d’ouverture panafricaine permettant l’exemption de visa de court séjour (généralement jusqu’à 90 jours selon accords bilatéraux en vigueur) pour de nombreux ressortissants africains munis d’un passeport valide.
+                    </li>
+                    <li>
+                      Pour tout séjour prolongé ou vérification propre à votre pays d’émission, consultez systématiquement la plateforme officielle <strong>evisa.bj</strong> avant l’embarquement.
+                    </li>
+                  </ul>
+                </>
+              )}
+
+              {nationalityProfile === 'international' && (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-slate-100">
+                    Voyageurs internationaux (Europe, Amériques, Asie, Océanie) :
+                  </p>
+                  <ul className="list-disc list-inside space-y-1.5">
+                    <li>
+                      Demande de visa électronique officiel en ligne sur le portail gouvernemental unique :{' '}
+                      <a
+                        href="https://evisa.bj"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono font-bold text-teal-700 dark:text-teal-400 underline"
+                      >
+                        https://evisa.bj
+                      </a>{' '}
+                      (formules court séjour 30 jours entrée simple/multiple ou 90 jours selon barème officiel de la DEI Bénin).
+                    </li>
+                    <li>
+                      Passeport en cours de validité couvrant toute la durée du séjour et justificatif d’hébergement ou d’itinéraire conseillé à l’arrivée à l’Aéroport International Cardinal Bernardin Gantin de Cotonou.
+                    </li>
+                    <li>
+                      Vaccination contre la fièvre jaune exigée à l’entrée internationale et prophylaxie antipaludique conseillée sur avis médical.
+                    </li>
+                  </ul>
+                </>
+              )}
+
+              {nationalityProfile === 'diaspora' && (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-slate-100">
+                    Citoyens béninois, binationaux &amp; afro-descendants :
+                  </p>
+                  <ul className="list-disc list-inside space-y-1.5">
+                    <li>
+                      Les titulaires d’un passeport béninois ou d’une carte consulaire / pièce nationale valide entrent sans visa.
+                    </li>
+                    <li>
+                      Les binationaux voyageant avec un passeport étranger sans document béninois valide doivent vérifier les modalités sur <strong>evisa.bj</strong> ou auprès de leur consulat du Bénin.
+                    </li>
+                    <li>
+                      Pour les démarches officielles liées à la reconnaissance de nationalité des afro-descendants, seules les plateformes gouvernementales de la République du Bénin font foi.
+                    </li>
+                  </ul>
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <strong className="text-slate-900 dark:text-slate-100 block">
+                  Fuseau horaire &amp; Climat
+                </strong>
+                <p className="text-slate-600 dark:text-slate-400">
+                  Heure locale : <span className="font-mono">Africa/Porto-Novo (UTC+1)</span> toute l’année (aucun changement d’heure saisonnier).
+                </p>
+              </div>
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <strong className="text-slate-900 dark:text-slate-100 block">
+                  Monnaie &amp; Moyens de paiement
+                </strong>
+                <p className="text-slate-600 dark:text-slate-400">
+                  Franc CFA (<span className="font-mono">XOF</span>, parité fixe 1 EUR = 655,957 XOF). Espèces et Mobile Money très répandus ; cartes bancaires acceptées dans les grands hôtels.
+                </p>
+              </div>
+              <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 space-y-1 text-amber-900 dark:text-amber-200">
+                <strong className="block">Clause de prudence réglementaire</strong>
+                <p>
+                  Les formalités administratives et sanitaires pouvant évoluer par décret, vérifiez toujours votre situation personnelle auprès de <strong>evisa.bj</strong> et des autorités consulaires officielles avant le départ.
+                </p>
+              </div>
             </div>
           </div>
         </div>

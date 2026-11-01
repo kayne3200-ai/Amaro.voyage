@@ -358,6 +358,39 @@ function resolveTransportProviderId(slot: {
   return '';
 }
 
+const PUNCTUAL_URBAN_TRANSPORT_PROVIDERS = new Set<string>([
+  'dir-trans-gozem-benin',
+  'dir-trans-yango-benin',
+  'dir-trans-benin-taxis-vtc',
+  'dir-trans-zemidjan-urbain',
+]);
+
+function isPunctualUrbanOrDeliveryTransport(slot: {
+  providerId?: string;
+  serviceId?: string;
+  serviceTitle?: string;
+}): boolean {
+  const providerId = resolveTransportProviderId(slot).toLowerCase();
+  if (PUNCTUAL_URBAN_TRANSPORT_PROVIDERS.has(providerId)) return true;
+  const svcId = String(slot.serviceId || '').toLowerCase();
+  if (
+    svcId.startsWith('trans-gozem') ||
+    svcId.startsWith('trans-yango') ||
+    svcId.includes('ponctuel') ||
+    svcId.includes('livraison') ||
+    svcId.includes('zemidjan')
+  ) {
+    return true;
+  }
+  const title = String(slot.serviceTitle || '').toLowerCase();
+  return (
+    title.includes('course ponctuelle') ||
+    title.includes('livraison') ||
+    title.includes('vtc urbain') ||
+    title.includes('moto-taxi')
+  );
+}
+
 export function evaluateJourneyBrain(
   existingItems: ScheduleSlot[],
   candidate: {
@@ -388,19 +421,25 @@ export function evaluateJourneyBrain(
   const candidateDuration = Math.max(15, Number(candidate.durationMinutes || 90));
   const candidateEnd = candidateStart + candidateDuration;
 
-  // Transport Exclusivity Rule across the entire itinerary:
-  // Multiple vehicles from the SAME transport provider are allowed; mixing distinct transport providers is blocked.
-  if (candidate.category === 'transport') {
+  // Partie 8 — Transport Principal Exclusivity Rule across the itinerary:
+  // Multiple vehicles from the SAME principal transport provider are allowed;
+  // punctual urban rides, independent taxis and deliveries are treated separately without conflict;
+  // mixing distinct principal rental/intercity transport providers is blocked.
+  if (
+    candidate.category === 'transport' &&
+    !isPunctualUrbanOrDeliveryTransport(candidate)
+  ) {
     const candidateProviderId = resolveTransportProviderId(candidate);
     if (candidateProviderId) {
       const conflictingTransport = existingItems.find((it) => {
         if (it.category !== 'transport') return false;
+        if (isPunctualUrbanOrDeliveryTransport(it)) return false;
         const existingProviderId = resolveTransportProviderId(it);
         return Boolean(existingProviderId && existingProviderId !== candidateProviderId);
       });
       if (conflictingTransport) {
         conflicts.push(
-          `Règle Transport Amaro : Un même itinéraire peut mobiliser plusieurs véhicules d’un même prestataire, mais ne peut pas mélanger plusieurs prestataires de transport distincts (« ${conflictingTransport.serviceTitle} » est déjà retenu).`
+          `Règle Transport Amaro : Un même itinéraire conserve un seul prestataire de transport principal (plusieurs véhicules chez le même loueur sont possibles), mais ne peut pas mélanger plusieurs prestataires de transport distincts (« ${conflictingTransport.serviceTitle} » est déjà retenu).`
         );
       }
     }
@@ -412,20 +451,44 @@ export function evaluateJourneyBrain(
   citiesOnDay.add(String(candidate.cityId));
   const involvesCityChange = citiesOnDay.size > 1;
 
+  const allDaySiteCities = new Set<string>(
+    sameDayItems
+      .filter((it) => it.category === 'site')
+      .map((it) => String(it.cityId))
+  );
+  if (candidate.category === 'site') {
+    allDaySiteCities.add(String(candidate.cityId));
+  }
+
   const existingSiteVisits = sameDayItems.filter((it) => it.category === 'site').length;
   const totalSiteVisits =
     existingSiteVisits + (candidate.category === 'site' ? 1 : 0);
 
-  if (involvesCityChange && totalSiteVisits > 1) {
+  // Partie 9 — Tourist Site & City-Change Coherence Rules:
+  // 1) Strictly forbid tourist site visits in two different cities on the same day.
+  // 2) Organize city changes on a day distinct from tourist visits (transfers & hotel installations are NOT tourist visits).
+  // 3) Allow 2 or 3 tourist visits in the SAME city on the same day if hours & travel buffers permit.
+  if (allDaySiteCities.size > 1) {
     conflicts.push(
-      'Règle Journey Brain : Maximum 1 visite de site touristique autorisée lors d’une journée impliquant un changement de ville.'
+      'Règle Journey Brain : Les visites touristiques dans deux villes différentes le même jour (changement de ville) sont interdites afin de préserver un rythme réaliste.'
     );
-  } else if (!involvesCityChange && totalSiteVisits > 2) {
+  } else if (involvesCityChange && totalSiteVisits > 0) {
     conflicts.push(
-      'Règle Journey Brain : Maximum 2 visites de sites touristiques autorisées sur une même journée dans la même ville.'
+      'Règle Journey Brain : Le changement de ville doit être organisé sur une journée dédiée au transfert et à l’installation, distincte des visites de sites touristiques.'
+    );
+  } else if (!involvesCityChange && totalSiteVisits > 3) {
+    conflicts.push(
+      'Règle Journey Brain : Maximum 3 visites de sites touristiques autorisées sur une même journée dans la même ville.'
+    );
+  } else if (!involvesCityChange && totalSiteVisits === 3) {
+    warnings.push(
+      'Rythme soutenu (3 visites touristiques dans la même ville sur la journée) : vérifiez les horaires d’ouverture et ménagez un temps de pause.'
     );
   }
 
+  // Partie 7 — Accommodation Coherence:
+  // Multiple rooms/units in the SAME establishment are allowed, and changing city/stage is allowed,
+  // while booking two incompatible establishments on the same date in the same city triggers a conflict.
   if (candidate.category === 'accommodation') {
     const otherLodging = sameDayItems.find(
       (it) =>

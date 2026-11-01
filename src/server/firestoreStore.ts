@@ -49,7 +49,17 @@ export interface ServerReservationRecord {
   cityId: string;
   scheduledDate: string;
   scheduledTime: string;
+  participants?: number;
+  providerPrice?: number;
+  amaroFee?: number;
+  taxAmount?: number;
+  totalAmount?: number;
+  currency?: CurrencyCode;
+  pricingSnapshot?: string;
   status: ReservationStatus;
+  paymentStatus?: PaymentStatus;
+  alternativeProposal?: string;
+  updatedAtIso?: string;
 }
 
 export interface ServerIdentityMetadataRecord {
@@ -141,6 +151,25 @@ export interface AmaroServerStore {
   getJourneyFolder(folderId: string, rawIdToken: string): Promise<ServerFolderRecord | null>;
   getPartnerByCode?(referralCode: string, rawIdToken?: string): Promise<ServerPartnerRecord | null>;
   getReservation?(reservationId: string, rawIdToken: string): Promise<ServerReservationRecord | null>;
+  transitionReservation?(
+    params: {
+      reservationId: string;
+      status: ReservationStatus;
+      paymentStatus: PaymentStatus;
+      scheduledDate: string;
+      scheduledTime: string;
+      alternativeProposal: string;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        kind: 'reservation' | 'payment' | 'alternative';
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void>;
   getIdentityMetadata?(
     reservationId: string,
     rawIdToken: string
@@ -986,6 +1015,10 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       }
     }
     if (!raw) return null;
+    const updatedAtIso =
+      typeof raw.updatedAt?.toDate === 'function'
+        ? raw.updatedAt.toDate().toISOString()
+        : String(raw.updatedAt || '');
     return {
       id: reservationId,
       clientId: String(raw.clientId || ''),
@@ -998,8 +1031,132 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       cityId: String(raw.cityId || 'cotonou'),
       scheduledDate: String(raw.scheduledDate || ''),
       scheduledTime: String(raw.scheduledTime || '09:00'),
+      participants: Number(raw.participants ?? 1),
+      providerPrice: Number(raw.providerPrice ?? 0),
+      amaroFee: Number(raw.amaroFee ?? 0),
+      taxAmount: Number(raw.taxAmount ?? 0),
+      totalAmount: Number(raw.totalAmount ?? 0),
+      currency: (raw.currency || 'XOF') as CurrencyCode,
+      pricingSnapshot: String(raw.pricingSnapshot || ''),
       status: (raw.status || 'pending_provider') as ReservationStatus,
+      paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
+      alternativeProposal: String(raw.alternativeProposal || ''),
+      updatedAtIso,
     };
+  }
+
+  async transitionReservation(
+    params: {
+      reservationId: string;
+      status: ReservationStatus;
+      paymentStatus: PaymentStatus;
+      scheduledDate: string;
+      scheduledTime: string;
+      alternativeProposal: string;
+      notification?: {
+        id: string;
+        recipientId: string;
+        senderId: string;
+        kind: 'reservation' | 'payment' | 'alternative';
+        title: string;
+        body: string;
+      } | null;
+    },
+    rawIdToken: string
+  ): Promise<void> {
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const resRef = db.collection('reservations').doc(params.reservationId);
+      batch.update(resRef, {
+        status: params.status,
+        paymentStatus: params.paymentStatus,
+        scheduledDate: params.scheduledDate,
+        scheduledTime: params.scheduledTime,
+        alternativeProposal: params.alternativeProposal.slice(0, 780),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      if (params.notification) {
+        const notifRef = db.collection('notifications').doc(params.notification.id);
+        batch.set(notifRef, {
+          recipientId: params.notification.recipientId,
+          senderId: params.notification.senderId,
+          kind: params.notification.kind,
+          title: params.notification.title.slice(0, 155),
+          body: params.notification.body.slice(0, 780),
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      return;
+    }
+
+    const resDocName = `${this.dbResourcePath}/reservations/${params.reservationId}`;
+    const writes: any[] = [
+      {
+        update: {
+          name: resDocName,
+          fields: {
+            status: encodeString(params.status),
+            paymentStatus: encodeString(params.paymentStatus),
+            scheduledDate: encodeString(params.scheduledDate),
+            scheduledTime: encodeString(params.scheduledTime),
+            alternativeProposal: encodeString(params.alternativeProposal.slice(0, 780)),
+          },
+        },
+        updateMask: {
+          fieldPaths: [
+            'status',
+            'paymentStatus',
+            'scheduledDate',
+            'scheduledTime',
+            'alternativeProposal',
+          ],
+        },
+        currentDocument: { exists: true },
+        updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+      },
+    ];
+
+    if (params.notification) {
+      const notifDocName = `${this.dbResourcePath}/notifications/${params.notification.id}`;
+      writes.push({
+        update: {
+          name: notifDocName,
+          fields: {
+            recipientId: encodeString(params.notification.recipientId),
+            senderId: encodeString(params.notification.senderId),
+            kind: encodeString(params.notification.kind),
+            title: encodeString(params.notification.title.slice(0, 155)),
+            body: encodeString(params.notification.body.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      });
+    }
+
+    const commitRes = await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ writes }),
+      }
+    );
+
+    if (!commitRes.ok) {
+      throw new Error(`Transition réservation refusée (${commitRes.status}).`);
+    }
   }
 
   async getIdentityMetadata(

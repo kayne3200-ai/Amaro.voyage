@@ -7,7 +7,10 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Edit3,
+  FileText,
   FolderPlus,
+  Lock,
   MapPin,
   Plus,
   Printer,
@@ -30,10 +33,35 @@ import type {
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
+import { authorizedFetch } from '../../lib/apiClient';
 import {
   IDENTITY_STATUS_META,
   IdentityVerificationModal,
 } from './IdentityVerificationModal';
+
+interface ElectronicReceiptData {
+  receiptNumber: string;
+  verificationCode: string;
+  reservationId: string;
+  folderId: string;
+  serviceId: string;
+  serviceTitle: string;
+  category: string;
+  cityId: string;
+  providerId: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  participants: number;
+  providerPrice: number;
+  amaroFee: number;
+  taxAmount: number;
+  totalAmount: number;
+  currency: CurrencyCode;
+  status: string;
+  paymentStatus: string;
+  issuedAt: string;
+  conditionsSummary: string;
+}
 
 interface RateInfo {
   rates: Record<'EUR' | 'XOF' | 'USD', number>;
@@ -82,6 +110,12 @@ interface JourneyHubViewProps {
     status: JourneyFolderDoc['status']
   ) => Promise<void>;
   folderItems: JourneyItemDoc[];
+  onUpdateJourneyItem?: (
+    item: JourneyItemDoc,
+    nextDate: string,
+    nextStartTime: string,
+    nextNotes: string
+  ) => Promise<void>;
   onDeleteJourneyItem: (itemId: string) => Promise<void>;
   journalEntries: JournalEntryDoc[];
   onSaveJournalEntry: (
@@ -110,6 +144,7 @@ interface JourneyHubViewProps {
   ) => Promise<void>;
   notifications: NotificationDoc[];
   onMarkNotificationRead: (notificationId: string) => Promise<void>;
+  onMarkAllNotificationsRead?: () => Promise<void>;
   lastBrainDiagnostic: BrainDiagnostic | null;
   identityByReservation?: Record<string, IdentityVerificationDoc>;
   onNotify?: (msg: string) => void;
@@ -182,6 +217,7 @@ export function JourneyHubView({
   onUpdateFolderBudget,
   onUpdateFolderStatus,
   folderItems,
+  onUpdateJourneyItem,
   onDeleteJourneyItem,
   journalEntries,
   onSaveJournalEntry,
@@ -193,6 +229,7 @@ export function JourneyHubView({
   onRequestAlternativeItem,
   notifications,
   onMarkNotificationRead,
+  onMarkAllNotificationsRead,
   lastBrainDiagnostic,
   identityByReservation = {},
   onNotify,
@@ -222,6 +259,16 @@ export function JourneyHubView({
   const [editNotes, setEditNotes] = useState<string>('');
   const [busyReservationId, setBusyReservationId] = useState<string | null>(null);
   const [identityModalRes, setIdentityModalRes] = useState<ReservationDoc | null>(null);
+  const [notifFilter, setNotifFilter] = useState<'all' | 'unread'>('all');
+  const [activeReceipt, setActiveReceipt] = useState<ElectronicReceiptData | null>(null);
+  const [loadingReceiptId, setLoadingReceiptId] = useState<string | null>(null);
+
+  // Flexible Itinerary Step Rescheduling (Partie 20)
+  const [editingStepId, setEditingStepId] = useState<string | null>(null);
+  const [stepEditDate, setStepEditDate] = useState<string>('');
+  const [stepEditTime, setStepEditTime] = useState<string>('');
+  const [stepEditNotes, setStepEditNotes] = useState<string>('');
+  const [savingStepEdit, setSavingStepEdit] = useState<boolean>(false);
 
   // Electronic Logbook (Carnet de Voyage Électronique) local draft states
   const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
@@ -360,6 +407,7 @@ export function JourneyHubView({
         0
       );
 
+    const remainingToPay = accepted + confirmed;
     const cumulativeProjected = estimated + proposed + accepted + confirmed + paid;
     const cap = activeFolder?.totalBudget || 0;
     const overrun = cap > 0 && cumulativeProjected > cap ? cumulativeProjected - cap : 0;
@@ -372,11 +420,43 @@ export function JourneyHubView({
       confirmed,
       paid,
       refunded,
+      remainingToPay,
       cumulativeProjected,
       cap,
       overrun,
     };
   }, [activeFolder, clientReservations, displayCurrency, folderItems, rateInfo?.rates]);
+
+  const handleOpenElectronicReceipt = async (res: ReservationDoc) => {
+    if (res.paymentStatus !== 'succeeded') {
+      if (onNotify) {
+        onNotify(
+          'Aucun reçu électronique ne peut être émis tant que le paiement n’est pas réellement confirmé.'
+        );
+      }
+      return;
+    }
+    setLoadingReceiptId(res.id);
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(res.id)}/receipt`
+      );
+      const data = await resp.json();
+      if (!resp.ok || !data?.receipt) {
+        if (onNotify) {
+          onNotify(data?.error || 'Reçu électronique indisponible.');
+        }
+        return;
+      }
+      setActiveReceipt(data.receipt as ElectronicReceiptData);
+    } catch {
+      if (onNotify) {
+        onNotify('Impossible de récupérer le reçu électronique vérifié.');
+      }
+    } finally {
+      setLoadingReceiptId(null);
+    }
+  };
 
   // Electronic Logbook unified view: links folderItems + standalone custom journalEntries
   const logbookSummary = useMemo(() => {
@@ -575,6 +655,71 @@ export function JourneyHubView({
         </div>
       </div>
 
+      {/* Partie 3: Unified Dossier de Voyage Synthesis Strip */}
+      {activeFolder && (
+        <section className="no-print p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs tabular-nums">
+          <div>
+            <span className="text-slate-500 block">Dates &amp; Fuseau</span>
+            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
+              {activeFolder.startDate} → {activeFolder.endDate}
+            </strong>
+            <span className="text-[11px] text-teal-700 dark:text-teal-400">
+              Africa/Porto-Novo (UTC+1)
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Voyageurs</span>
+            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
+              {activeFolder.travelersCount} personne(s)
+            </strong>
+            <span className="text-[11px] text-slate-400 capitalize">
+              Base : {activeFolder.primaryCityId}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Hébergements prévus</span>
+            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
+              {
+                folderItems.filter((i) => i.category === 'accommodation').length
+              }{' '}
+              étape(s)
+            </strong>
+            <span className="text-[11px] text-slate-400">Multi-étapes suivi</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Transport principal</span>
+            <strong className="text-slate-900 dark:text-slate-100 block truncate">
+              {activeTransportProvider ? activeTransportProvider.title : 'Libre / Non défini'}
+            </strong>
+            <span className="text-[11px] text-slate-400">Courses VTC permises</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Réservations actives</span>
+            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
+              {
+                folderReservations.filter(
+                  (r) => !['cancelled', 'rejected'].includes(r.status)
+                ).length
+              }{' '}
+              active(s)
+            </strong>
+            <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
+              {
+                folderReservations.filter((r) => r.paymentStatus === 'succeeded').length
+              }{' '}
+              reçu(s) émis
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Reste à payer confirmé</span>
+            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
+              {formatMoney(budgetBreakdown.remainingToPay, budgetBreakdown.targetCur)}
+            </strong>
+            <span className="text-[11px] text-slate-400">Hors annulées / estimées</span>
+          </div>
+        </section>
+      )}
+
       {/* Sub-navigation between Itinerary/Budget, Electronic Logbook, and Reservations */}
       {activeFolder && (
         <div className="no-print flex items-center justify-between flex-wrap gap-3">
@@ -618,7 +763,7 @@ export function JourneyHubView({
             >
               <CheckCircle2 className="w-4 h-4" />
               <span>
-                3. Réservations &amp; Alternatives ({folderReservations.length})
+                3. Suivre mes réservations &amp; Notifications ({folderReservations.length})
               </span>
             </button>
           </div>
@@ -946,7 +1091,7 @@ export function JourneyHubView({
               </div>
             )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 tabular-nums">
               {[
                 {
                   label: '1. Estimées (agenda)',
@@ -954,7 +1099,7 @@ export function JourneyHubView({
                   sub: 'Non demandées',
                 },
                 {
-                  label: '2. Proposées',
+                  label: '2. En attente',
                   val: budgetBreakdown.proposed,
                   sub: 'Attente prestataire',
                 },
@@ -966,7 +1111,7 @@ export function JourneyHubView({
                 {
                   label: '4. Confirmées',
                   val: budgetBreakdown.confirmed,
-                  sub: 'Validées hors ligne',
+                  sub: 'Hors ligne',
                 },
                 {
                   label: '5. Payées',
@@ -977,6 +1122,11 @@ export function JourneyHubView({
                   label: '6. Remboursées',
                   val: budgetBreakdown.refunded,
                   sub: 'Restituées',
+                },
+                {
+                  label: '7. Reste à payer',
+                  val: budgetBreakdown.remainingToPay,
+                  sub: 'Accepté + confirmé dû',
                 },
               ].map((metric) => (
                 <div
@@ -1002,12 +1152,12 @@ export function JourneyHubView({
                   Agenda Chronologique Intelligent (Amaro Journey Brain)
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Règles actives : max 2 visites de sites/jour dans la même ville · max 1 visite si changement de ville · 1 seul prestataire transporteur par séjour (plusieurs véhicules chez ce même prestataire autorisés).
+                  Règles actives : aucune visite touristique sur 2 villes le même jour · journée dédiée aux changements de ville (transferts/installation autorisés) · jusqu’à 3 visites/jour dans la même ville · 1 prestataire transport principal + courses ponctuelles séparées.
                 </p>
               </div>
               {activeTransportProvider && (
                 <div className="px-3.5 py-2 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 rounded-xl text-xs text-teal-900 dark:text-teal-300">
-                  Transporteur référent du dossier : <strong>{activeTransportProvider.title}</strong>
+                  Transporteur principal du dossier : <strong>{activeTransportProvider.title}</strong>
                 </div>
               )}
             </div>
@@ -1036,57 +1186,151 @@ export function JourneyHubView({
                       <span className="text-slate-500 dark:text-slate-400">
                         Villes : <strong className="capitalize">{day.cities.join(' → ')}</strong> ·{' '}
                         {day.involvesCityChange
-                          ? 'Changement de ville détecté (plafond 1 visite)'
-                          : `Même ville (${day.siteVisitsCount}/2 visites)`}
+                          ? 'Journée de transfert / changement de ville'
+                          : `Même ville (${day.siteVisitsCount}/3 visites touristiques)`}
                       </span>
                     </div>
 
                     <div className="space-y-2.5">
-                      {day.items.map((it) => (
-                        <div
-                          key={it.id}
-                          className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 rounded-xl flex items-start justify-between gap-3"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
-                              <Clock className="w-3.5 h-3.5" />
-                              <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
-                                {it.startTime}–{it.endTime}
-                              </span>
-                              <span>·</span>
-                              <span>{t.categories[it.category]}</span>
-                              <span>·</span>
-                              <span className="capitalize flex items-center gap-0.5">
-                                <MapPin className="w-3 h-3" />
-                                {it.cityId}
-                              </span>
-                            </div>
-                            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                              {it.serviceTitle}
-                            </h3>
-                            {it.notes && (
-                              <p className="text-xs text-slate-600 dark:text-slate-400">
-                                Note : {it.notes}
-                              </p>
-                            )}
-                            <p className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                              {it.estimatedCost > 0
-                                ? `Coût estimé : ${formatMoney(it.estimatedCost, it.currency)}`
-                                : 'Tarif sur demande / à confirmer'}{' '}
-                              · Statut agenda : <strong>{it.stage}</strong>
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => void onDeleteJourneyItem(it.id)}
-                            aria-label="Retirer de l'agenda"
-                            className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center text-slate-400 hover:text-red-600 rounded-lg"
+                      {day.items.map((it) => {
+                        const isEditingStep = editingStepId === it.id;
+                        return (
+                          <div
+                            key={it.id}
+                            className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 rounded-xl space-y-3"
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
+                                  <Clock className="w-3.5 h-3.5" />
+                                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                                    {it.startTime}–{it.endTime}
+                                  </span>
+                                  <span>·</span>
+                                  <span>{t.categories[it.category]}</span>
+                                  <span>·</span>
+                                  <span className="capitalize flex items-center gap-0.5">
+                                    <MapPin className="w-3 h-3" />
+                                    {it.cityId}
+                                  </span>
+                                </div>
+                                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                                  {it.serviceTitle}
+                                </h3>
+                                {it.notes && (
+                                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                                    Note : {it.notes}
+                                  </p>
+                                )}
+                                <p className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                                  {it.estimatedCost > 0
+                                    ? `Coût estimé : ${formatMoney(it.estimatedCost, it.currency)}`
+                                    : 'Tarif sur demande / à confirmer'}{' '}
+                                  · Statut agenda : <strong>{it.stage}</strong>
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                {onUpdateJourneyItem && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isEditingStep) {
+                                        setEditingStepId(null);
+                                      } else {
+                                        setEditingStepId(it.id);
+                                        setStepEditDate(it.date);
+                                        setStepEditTime(it.startTime);
+                                        setStepEditNotes(it.notes || '');
+                                      }
+                                    }}
+                                    aria-label="Modifier la date ou l'horaire de l'étape"
+                                    className="min-h-[40px] px-2.5 inline-flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-[#0B192C] dark:hover:text-amber-400 rounded-lg"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    <span className="hidden sm:inline">
+                                      {isEditingStep ? 'Fermer' : 'Décaler'}
+                                    </span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => void onDeleteJourneyItem(it.id)}
+                                  aria-label="Retirer de l'agenda"
+                                  className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center text-slate-400 hover:text-red-600 rounded-lg"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {isEditingStep && onUpdateJourneyItem && (
+                              <form
+                                onSubmit={async (e) => {
+                                  e.preventDefault();
+                                  setSavingStepEdit(true);
+                                  try {
+                                    await onUpdateJourneyItem(
+                                      it,
+                                      stepEditDate,
+                                      stepEditTime,
+                                      stepEditNotes.trim()
+                                    );
+                                    setEditingStepId(null);
+                                  } finally {
+                                    setSavingStepEdit(false);
+                                  }
+                                }}
+                                className="pt-2 border-t border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end"
+                              >
+                                <div>
+                                  <label className="block text-[11px] font-medium mb-1">
+                                    Nouvelle date
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={stepEditDate}
+                                    onChange={(e) => setStepEditDate(e.target.value)}
+                                    required
+                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium mb-1">
+                                    Nouvel horaire
+                                  </label>
+                                  <input
+                                    type="time"
+                                    value={stepEditTime}
+                                    onChange={(e) => setStepEditTime(e.target.value)}
+                                    required
+                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium mb-1">
+                                    Option / note
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={stepEditNotes}
+                                    onChange={(e) => setStepEditNotes(e.target.value)}
+                                    maxLength={580}
+                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                  />
+                                </div>
+                                <button
+                                  type="submit"
+                                  disabled={savingStepEdit}
+                                  className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-lg"
+                                >
+                                  {savingStepEdit ? 'Vérification...' : 'Revalider l’étape'}
+                                </button>
+                              </form>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -1456,17 +1700,20 @@ export function JourneyHubView({
       )}
 
       {/* =====================================================================
-          SUB-TAB 3: RÉSERVATIONS, ALTERNATIVES EN CAS D'INDISPONIBILITÉ & NOTIFS
+          SUB-TAB 3: SUIVRE MES RÉSERVATIONS, REÇUS ÉLECTRONIQUES & MES NOTIFICATIONS
          ===================================================================== */}
       {activeFolder && subTab === 'reservations' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start no-print">
           <section className="lg:col-span-7 space-y-4">
             <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
+                Suivre mes réservations · Chronologie &amp; Reçus Électroniques Vérifiés
+              </p>
               <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                Demandes de Réservation du Dossier ({folderReservations.length})
+                Suivre mes réservations ({folderReservations.length})
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Machine à états contrôlée : montants recalculés côté serveur, aucune alternative imposée sans votre accord, et suggestion automatique d’établissements équivalents en cas d’indisponibilité.
+                Suivi étape par étape : aucun débit sans disponibilité validée, aucune alternative imposée sans votre accord, et reçu électronique délivré exclusivement après confirmation réelle d’encaissement.
               </p>
             </div>
 
@@ -1479,6 +1726,35 @@ export function JourneyHubView({
                 {folderReservations.map((res) => {
                   const busy = busyReservationId === res.id;
                   const onRequestPrice = isPriceOnRequestSnapshot(res.pricingSnapshot);
+                  const stepIdx =
+                    res.status === 'pending_provider'
+                      ? 1
+                      : res.status === 'alternative_proposed'
+                      ? 2
+                      : res.status === 'accepted' || res.status === 'awaiting_payment'
+                      ? res.paymentStatus === 'initiated' || res.paymentStatus === 'pending'
+                        ? 4
+                        : 3
+                      : res.status === 'confirmed' || res.paymentStatus === 'succeeded'
+                      ? 5
+                      : 0;
+
+                  const nextActorLabel =
+                    res.status === 'pending_provider'
+                      ? 'Prestataire / Conciergerie AMARO (vérification de disponibilité)'
+                      : res.status === 'alternative_proposed'
+                      ? 'Vous (accepter ou refuser la proposition alternative)'
+                      : (res.status === 'accepted' || res.status === 'awaiting_payment') &&
+                        res.paymentStatus === 'unpaid'
+                      ? 'Vous (demander le règlement encadré)'
+                      : res.paymentStatus === 'initiated' || res.paymentStatus === 'pending'
+                      ? 'Administration financière AMARO (vérification d’encaissement)'
+                      : res.paymentStatus === 'succeeded'
+                      ? 'Aucune action — Réservation et paiement confirmés'
+                      : res.status === 'rejected'
+                      ? 'Vous (choisir une alternative disponible si souhaité)'
+                      : 'Clôturée';
+
                   const suggestedAlternatives =
                     res.status === 'rejected'
                       ? catalogue
@@ -1498,10 +1774,11 @@ export function JourneyHubView({
                   return (
                     <article
                       key={res.id}
-                      className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3"
+                      className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3.5"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                         <span>
+                          Réf. <span className="font-mono">{res.id.slice(0, 14)}</span> ·{' '}
                           {res.scheduledDate} à {res.scheduledTime} · {res.participants} pers. ·{' '}
                           <strong className="capitalize">{res.cityId}</strong>
                         </span>
@@ -1516,7 +1793,38 @@ export function JourneyHubView({
                         {res.serviceTitle}
                       </h3>
 
-                      <div className="text-xs space-y-1 text-slate-700 dark:text-slate-300">
+                      {/* Visual Chronology Progress Bar (Partie 13) */}
+                      {stepIdx > 0 && (
+                        <div className="space-y-1.5">
+                          <div className="grid grid-cols-5 gap-1">
+                            {[
+                              '1. Demande',
+                              '2. Disponibilité',
+                              '3. Validation',
+                              '4. Paiement',
+                              '5. Confirmée',
+                            ].map((lbl, idx) => {
+                              const active = idx + 1 <= stepIdx;
+                              return (
+                                <div key={lbl} className="space-y-1">
+                                  <div
+                                    className={`h-1.5 rounded-full ${
+                                      active
+                                        ? 'bg-teal-600 dark:bg-teal-400'
+                                        : 'bg-slate-200 dark:bg-slate-800'
+                                    }`}
+                                  />
+                                  <span className="block text-[10px] text-slate-500 truncate">
+                                    {lbl}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 rounded-xl text-xs space-y-1 text-slate-700 dark:text-slate-300">
                         <p>
                           État réservation :{' '}
                           <strong>{RESERVATION_STATUS_LABELS[res.status]}</strong>
@@ -1525,18 +1833,28 @@ export function JourneyHubView({
                           État paiement :{' '}
                           <strong>{PAYMENT_STATUS_LABELS[res.paymentStatus]}</strong>
                         </p>
-                        <p className="font-mono tabular-nums">
+                        <p>
+                          Prochaine action :{' '}
+                          <strong className="text-teal-800 dark:text-teal-300">
+                            {nextActorLabel}
+                          </strong>
+                        </p>
+                        <p className="font-mono tabular-nums pt-0.5">
                           {onRequestPrice && res.totalAmount === 0 ? (
                             <strong>
-                              Tarif sur demande / devis à confirmer par la conciergerie AMARO
+                              Tarif sur demande / devis à confirmer par la conciergerie AMARO avant tout paiement
                             </strong>
                           ) : (
                             <>
-                              Total vérifié serveur :{' '}
-                              <strong>{formatMoney(res.totalAmount, res.currency)}</strong> (dont
-                              frais Amaro : {formatMoney(res.amaroFee, res.currency)})
+                              Prestataire : {formatMoney(res.providerPrice, res.currency)} · Frais
+                              Amaro : {formatMoney(res.amaroFee, res.currency)} · Taxes :{' '}
+                              {formatMoney(res.taxAmount, res.currency)} → Total :{' '}
+                              <strong>{formatMoney(res.totalAmount, res.currency)}</strong>
                             </>
                           )}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          Conditions : annulation libre tant que la prestation n’est pas confirmée ; après règlement, conditions d’annulation/remboursement selon le barème de l’établissement.
                         </p>
                       </div>
 
@@ -1545,6 +1863,40 @@ export function JourneyHubView({
                           Proposition / message prestataire : {res.alternativeProposal}
                         </div>
                       )}
+
+                      {/* Partie 16 & 17: Electronic Receipt (Strictly gated by paymentStatus === 'succeeded') */}
+                      <div className="p-3 bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                        {res.paymentStatus === 'succeeded' ? (
+                          <>
+                            <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold">
+                              <FileText className="w-4 h-4 shrink-0" />
+                              <span>
+                                Reçu électronique officiel AMARO disponible (paiement confirmé)
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={loadingReceiptId === res.id}
+                              onClick={() => void handleOpenElectronicReceipt(res)}
+                              className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>
+                                {loadingReceiptId === res.id
+                                  ? 'Vérification...'
+                                  : 'Afficher / Télécharger PDF'}
+                              </span>
+                            </button>
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                            <Lock className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              Reçu électronique : délivré uniquement après confirmation réelle du paiement (aucun reçu anticipé).
+                            </span>
+                          </div>
+                        )}
+                      </div>
 
                       {/* Contextual Identity Verification Status (Never blocks services that don't require ID) */}
                       {(() => {
@@ -1727,46 +2079,190 @@ export function JourneyHubView({
             )}
           </section>
 
-          {/* Centralized Notifications */}
+          {/* Partie 12: MES NOTIFICATIONS */}
           <section className="lg:col-span-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <Bell className="w-4 h-4 text-slate-500" />
-              <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                Notifications internes ({notifications.filter((n) => !n.read).length} non lues)
-              </h2>
+            <div className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-teal-600" />
+                  <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                    Mes notifications ({notifications.filter((n) => !n.read).length} non lues)
+                  </h2>
+                </div>
+
+                {onMarkAllNotificationsRead &&
+                  notifications.some((n) => !n.read) && (
+                    <button
+                      type="button"
+                      onClick={() => void onMarkAllNotificationsRead()}
+                      className="text-xs font-semibold text-teal-700 dark:text-teal-400 underline"
+                    >
+                      Tout marquer lu
+                    </button>
+                  )}
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setNotifFilter('all')}
+                  className={`min-h-[34px] px-3 py-1 rounded-lg font-semibold ${
+                    notifFilter === 'all'
+                      ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  Toutes ({notifications.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotifFilter('unread')}
+                  className={`min-h-[34px] px-3 py-1 rounded-lg font-semibold ${
+                    notifFilter === 'unread'
+                      ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  Non lues ({notifications.filter((n) => !n.read).length})
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Canal actif : Notifications applicatives temps réel · Canaux externes (e-mail, SMS, WhatsApp) : architecture prête, connecteurs tiers non activés.
+              </p>
+
+              {notifications.filter((n) => (notifFilter === 'unread' ? !n.read : true))
+                .length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">
+                  Aucune notification dans cette vue.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
+                  {notifications
+                    .filter((n) => (notifFilter === 'unread' ? !n.read : true))
+                    .slice(0, 20)
+                    .map((n) => (
+                      <div
+                        key={n.id}
+                        className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${
+                          n.read
+                            ? 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-500'
+                            : 'bg-amber-50/70 dark:bg-slate-950 border-amber-300 dark:border-amber-700 text-slate-900 dark:text-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <strong className="font-semibold">{n.title}</strong>
+                          {!n.read && (
+                            <button
+                              type="button"
+                              onClick={() => void onMarkNotificationRead(n.id)}
+                              className="text-[11px] font-semibold text-[#0B192C] dark:text-amber-400 underline shrink-0"
+                            >
+                              Marquer lu
+                            </button>
+                          )}
+                        </div>
+                        <p className="leading-relaxed">{n.body}</p>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* Printable Official Electronic Receipt Modal (Partie 17) */}
+      {activeReceipt && (
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5 print-souvenir-sheet">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+                  AMARO.VOYAGE · Reçu Électronique Officiel Vérifié
+                </p>
+                <h3 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                  {activeReceipt.receiptNumber}
+                </h3>
+                <p className="text-xs font-mono text-slate-500">
+                  Code de contrôle serveur : {activeReceipt.verificationCode}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveReceipt(null)}
+                className="no-print min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            {notifications.length === 0 ? (
-              <p className="text-xs text-slate-500">Aucune notification enregistrée.</p>
-            ) : (
-              <div className="space-y-2">
-                {notifications.slice(0, 10).map((n) => (
-                  <div
-                    key={n.id}
-                    className={`p-3.5 rounded-xl border text-xs space-y-1 ${
-                      n.read
-                        ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500'
-                        : 'bg-amber-50/70 dark:bg-slate-900 border-amber-300 dark:border-amber-700 text-slate-900 dark:text-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <strong className="font-semibold">{n.title}</strong>
-                      {!n.read && (
-                        <button
-                          type="button"
-                          onClick={() => void onMarkNotificationRead(n.id)}
-                          className="text-[11px] font-semibold text-[#0B192C] dark:text-amber-400 underline"
-                        >
-                          Marquer lu
-                        </button>
-                      )}
-                    </div>
-                    <p>{n.body}</p>
-                  </div>
-                ))}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <span className="text-slate-500 block">Prestation confirmée</span>
+                <strong className="text-slate-900 dark:text-slate-100 block">
+                  {activeReceipt.serviceTitle}
+                </strong>
+                <span className="capitalize text-slate-600 dark:text-slate-400 block">
+                  Localité : {activeReceipt.cityId} · {activeReceipt.participants} participant(s)
+                </span>
               </div>
-            )}
-          </section>
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1 font-mono">
+                <span className="font-sans text-slate-500 block">Créneau &amp; Dossier</span>
+                <strong className="text-slate-900 dark:text-slate-100 block">
+                  {activeReceipt.scheduledDate} à {activeReceipt.scheduledTime}
+                </strong>
+                <span className="text-slate-600 dark:text-slate-400 block">
+                  Réservation : {activeReceipt.reservationId}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2 text-xs font-mono tabular-nums">
+              <div className="flex justify-between">
+                <span className="font-sans text-slate-600 dark:text-slate-400">
+                  Montant prestataire
+                </span>
+                <span>{formatMoney(activeReceipt.providerPrice, activeReceipt.currency)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-sans text-slate-600 dark:text-slate-400">
+                  Frais de service AMARO
+                </span>
+                <span>{formatMoney(activeReceipt.amaroFee, activeReceipt.currency)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-sans text-slate-600 dark:text-slate-400">Taxes</span>
+                <span>{formatMoney(activeReceipt.taxAmount, activeReceipt.currency)}</span>
+              </div>
+              <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-800 text-sm font-bold text-emerald-700 dark:text-emerald-400">
+                <span className="font-sans">Total payé et confirmé</span>
+                <span>{formatMoney(activeReceipt.totalAmount, activeReceipt.currency)}</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              {activeReceipt.conditionsSummary} · Émis le {activeReceipt.issuedAt}.
+            </p>
+
+            <div className="no-print flex flex-wrap items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveReceipt(null)}
+                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400"
+              >
+                Fermer
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="min-h-[42px] inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimer / Enregistrer en PDF</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

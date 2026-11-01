@@ -166,6 +166,7 @@ export function ExplorerView({
   const [actionDate, setActionDate] = useState<string>('2026-11-15');
   const [actionTime, setActionTime] = useState<string>('10:00');
   const [actionParticipants, setActionParticipants] = useState<number>(2);
+  const [actionUnitChoice, setActionUnitChoice] = useState<string>('');
   const [actionNotes, setActionNotes] = useState<string>('');
   const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
 
@@ -226,7 +227,7 @@ export function ExplorerView({
       if (selectedCityId !== 'all' && item.cityId !== selectedCityId) return false;
 
       if (effectiveCategoryFilter === 'services_group') {
-        if (!['translation', 'wellness', 'restaurant', 'shopping'].includes(item.category)) {
+        if (!['translation', 'wellness', 'restaurant', 'shopping', 'guide'].includes(item.category)) {
           return false;
         }
       } else if (effectiveCategoryFilter !== 'all' && item.category !== effectiveCategoryFilter) {
@@ -315,12 +316,15 @@ export function ExplorerView({
     }
     setIsSubmittingAction(true);
     try {
+      const unitPrefix = actionUnitChoice.trim()
+        ? `[Option choisie : ${actionUnitChoice.trim()}] `
+        : '';
       if (selectedItemForAction.mode === 'folder') {
         await onAddServiceToJourney(
           selectedItemForAction.item,
           actionDate,
           actionTime,
-          actionNotes
+          `${unitPrefix}${actionNotes}`.trim()
         );
       } else {
         await onRequestReservation(
@@ -331,6 +335,7 @@ export function ExplorerView({
         );
       }
       setSelectedItemForAction(null);
+      setActionUnitChoice('');
       setActionNotes('');
     } finally {
       setIsSubmittingAction(false);
@@ -751,21 +756,35 @@ export function ExplorerView({
               </div>
             )}
 
-            {/* Results Counter */}
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+            {/* Results Counter + Optional AMARO Assistance Personnalisée Quick Filter */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
               <span>
                 <strong>{filteredItems.length}</strong> fiche
                 {filteredItems.length > 1 ? 's' : ''} correspondant à votre sélection
               </span>
-              {selectedCityId !== 'all' && (
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setSelectedCityId('all')}
-                  className="font-semibold text-teal-700 dark:text-teal-400 underline"
+                  onClick={() => {
+                    setSpace('services');
+                    setSelectedCategory('translation');
+                    setSelectedCityId('all');
+                    setSearchQuery('AMARO Assistance Personnalisée');
+                  }}
+                  className="font-semibold text-[#0B192C] dark:text-amber-400 hover:underline"
                 >
-                  Réinitialiser la ville ({selectedCityId})
+                  Découvrir AMARO Assistance Personnalisée (accompagnement humain optionnel) →
                 </button>
-              )}
+                {selectedCityId !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCityId('all')}
+                    className="font-semibold text-teal-700 dark:text-teal-400 underline"
+                  >
+                    Réinitialiser la ville ({selectedCityId})
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Service Cards Grid */}
@@ -1147,10 +1166,58 @@ export function ExplorerView({
                 </div>
               </div>
 
+              {/* Partie 6: Granular Unit / Room / Vehicle / Language Choice */}
+              {(() => {
+                const it = selectedItemForAction.item;
+                const unitOptions: string[] =
+                  it.category === 'accommodation'
+                    ? it.roomTypes && it.roomTypes.length > 0
+                      ? it.roomTypes
+                      : [
+                          'Chambre Standard Climatisée',
+                          'Chambre Supérieure / Familiale',
+                          'Suite ou Appartement Équipé',
+                        ]
+                    : it.category === 'transport'
+                    ? [
+                        'Véhicule avec chauffeur dédié',
+                        'Location autonome (selon conditions agence)',
+                        'Transfert ponctuel / interurbain',
+                      ]
+                    : it.languagesSpoken && it.languagesSpoken.length > 0
+                    ? it.languagesSpoken.map((l) => `Accompagnement en ${l}`)
+                    : [];
+
+                if (unitOptions.length === 0) return null;
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      {it.category === 'accommodation'
+                        ? 'Type de chambre / unité souhaité'
+                        : it.category === 'transport'
+                        ? 'Formule véhicule / chauffeur souhaitée'
+                        : 'Langue / modalité souhaitée'}
+                    </label>
+                    <select
+                      value={actionUnitChoice}
+                      onChange={(e) => setActionUnitChoice(e.target.value)}
+                      className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      <option value="">Sélectionner une option précise (recommandé)</option>
+                      {unitOptions.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+
               {selectedItemForAction.mode === 'booking' ? (
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Nombre de personnes
+                    Nombre de personnes / unités
                   </label>
                   <input
                     type="number"
@@ -1164,7 +1231,7 @@ export function ExplorerView({
                     className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Statut initial : « En attente de disponibilité ». Aucun débit automatique n’est effectué.
+                    Statut initial : « En attente de disponibilité ». Aucun débit automatique n’est effectué sans confirmation préalable.
                   </p>
                   <p className="text-[11px] text-teal-800 dark:text-teal-300 mt-1">
                     {selectedItemForAction.item.category === 'accommodation' ||
