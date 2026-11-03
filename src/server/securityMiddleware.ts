@@ -16,6 +16,7 @@ export type TokenVerifierFn = (rawIdToken: string) => Promise<{
   email: string;
   emailVerified: boolean;
   aud: string;
+  signInProvider?: string;
 }>;
 
 let cachedAdminApp: AdminApp | null = null;
@@ -115,6 +116,7 @@ export function createFirebaseAdminTokenVerifier(expectedProjectId: string): Tok
       email: String(decoded.email || '').toLowerCase(),
       emailVerified: Boolean(decoded.email_verified),
       aud: String(decoded.aud || ''),
+      signInProvider: String(decoded.firebase?.sign_in_provider || ''),
     };
   };
 }
@@ -157,7 +159,10 @@ export function createRequireAuth(verifyToken: TokenVerifierFn) {
 
     try {
       const verified = await verifyToken(rawIdToken);
-      if (!verified.uid || !verified.emailVerified) {
+      const isPasswordClient =
+        verified.signInProvider === 'password' &&
+        verified.email !== BOOTSTRAPPED_ADMIN_EMAIL;
+      if (!verified.uid || (!verified.emailVerified && !isPasswordClient)) {
         res.status(403).json({
           error: 'Compte utilisateur non vérifié.',
         });

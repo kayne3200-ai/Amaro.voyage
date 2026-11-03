@@ -102,6 +102,7 @@ interface IdentityVerificationModalProps {
   reservation: ReservationDoc;
   viewerRole: 'traveler' | 'provider' | 'admin';
   initialMetadata?: IdentityVerificationDoc | null;
+  vaultKeyConfirmedByOwner?: boolean;
   onClose: () => void;
   onNotify: (msg: string) => void;
 }
@@ -182,6 +183,7 @@ export function IdentityVerificationModal({
   reservation,
   viewerRole,
   initialMetadata,
+  vaultKeyConfirmedByOwner = false,
   onClose,
   onNotify,
 }: IdentityVerificationModalProps) {
@@ -336,6 +338,10 @@ export function IdentityVerificationModal({
   const handleSubmitTravelerIdentity = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedbackErr('');
+    if (!vaultKeyConfirmedByOwner) {
+      setFeedbackErr("Fonction en test : n'envoyez pas de vraie pièce d'identité.");
+      return;
+    }
     if (!frontPreview) {
       setFeedbackErr(
         documentType === 'passport'
@@ -611,6 +617,20 @@ export function IdentityVerificationModal({
         {!applicableByDefault && currentStatus === 'not_requested' && viewerRole === 'traveler' && (
           <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 rounded-xl text-xs text-emerald-900 dark:text-emerald-200">
             <strong>Aucune pièce d’identité n’est exigée pour cette prestation.</strong> Votre réservation n’est aucunement bloquée. Vous ne transmettez un document que lorsqu’un hébergement, une location de véhicule ou une obligation légale le demande.
+          </div>
+        )}
+
+        {!vaultKeyConfirmedByOwner && (
+          <div className="p-4 bg-amber-100 dark:bg-amber-950/60 border-2 border-amber-400 dark:border-amber-700 rounded-xl text-xs font-semibold text-amber-950 dark:text-amber-200 flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-sm">
+                Fonction en test : n&apos;envoyez pas de vraie pièce d&apos;identité
+              </p>
+              <p className="font-normal mt-0.5">
+                L&apos;envoi de justificatifs réels est temporairement désactivé tant que le propriétaire n&apos;a pas confirmé la clé de chiffrement de production du coffre dans l&apos;administration.
+              </p>
+            </div>
           </div>
         )}
 
@@ -987,10 +1007,17 @@ export function IdentityVerificationModal({
 
                 <button
                   type="submit"
-                  disabled={submitting || !consentChecked || !frontPreview}
+                  disabled={
+                    submitting ||
+                    !consentChecked ||
+                    !frontPreview ||
+                    !vaultKeyConfirmedByOwner
+                  }
                   className="w-full min-h-[48px] px-5 py-3 text-xs sm:text-sm font-semibold text-white bg-teal-700 hover:bg-teal-800 disabled:opacity-50 rounded-xl transition-colors"
                 >
-                  {submitting
+                  {!vaultKeyConfirmedByOwner
+                    ? "Fonction en test — envoi désactivé jusqu'à confirmation propriétaire"
+                    : submitting
                     ? 'Chiffrement AES-256 et transmission sécurisée...'
                     : 'Transmettre mon justificatif chiffré'}
                 </button>

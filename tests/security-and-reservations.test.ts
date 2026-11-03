@@ -34,11 +34,17 @@ import {
   type TokenVerifierFn,
 } from '../src/server/securityMiddleware';
 import type {
+  AccountGovernanceDoc,
+  DossierFeeStatus,
+  FinancialArchiveDoc,
   IdentityAccessLogDoc,
+  JourneyFolderStatus,
+  NotificationDispatchDoc,
   PaymentStatus,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ReservationStatus,
+  ServiceCategory,
 } from '../src/types/amaro';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -73,6 +79,16 @@ class InMemoryTestStore implements AmaroServerStore {
   readonly identityMeta = new Map<string, ServerIdentityMetadataRecord>();
   readonly identityVaults = new Map<string, ServerIdentityVaultRecord>();
   readonly identityLogs = new Map<string, IdentityAccessLogDoc[]>();
+  readonly accountGovernance = new Map<string, AccountGovernanceDoc>();
+  readonly registeredProviders = new Map<string, Record<string, unknown>>();
+  readonly notificationDispatches: NotificationDispatchDoc[] = [];
+  readonly folderChangeHistory = new Map<
+    string,
+    Array<{ summary: string; deltaAmountXof: number }>
+  >();
+  readonly financialArchives = new Map<string, FinancialArchiveDoc>();
+  readonly deletedUsers = new Set<string>();
+  readonly usedDossierTxRefs = new Set<string>();
   private readonly inFlight = new Set<string>();
   artificialCommitDelayMs = 0;
 
@@ -92,6 +108,13 @@ class InMemoryTestStore implements AmaroServerStore {
     this.identityMeta.clear();
     this.identityVaults.clear();
     this.identityLogs.clear();
+    this.accountGovernance.clear();
+    this.registeredProviders.clear();
+    this.notificationDispatches.length = 0;
+    this.folderChangeHistory.clear();
+    this.financialArchives.clear();
+    this.deletedUsers.clear();
+    this.usedDossierTxRefs.clear();
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
 
@@ -181,22 +204,33 @@ class InMemoryTestStore implements AmaroServerStore {
     this.settings.set('BJ', {
       countryCode: 'BJ',
       commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 5,
       serviceFeeFlat: 1_000,
       taxPercent: 18,
       currency: 'XOF',
+      dossierFeeXof: 20_000,
+      maxPendingPaymentFolders: 1,
+      abandonmentRiskThreshold: 3,
+      vaultKeyConfirmedByOwner: true,
+      financialRetentionDuration: 'à renseigner par le propriétaire',
     });
 
     this.folders.set('folder-traveler-1', {
       id: 'folder-traveler-1',
       ownerId: 'traveler-uid-1',
-      status: 'planning',
+      status: 'requests_in_progress',
+      dossierFeeStatus: 'validated',
+      dossierFeeAmountXof: 20_000,
       countryCode: 'BJ',
       currency: 'XOF',
     });
     this.folders.set('folder-other-user', {
       id: 'folder-other-user',
       ownerId: 'traveler-uid-2',
-      status: 'planning',
+      status: 'requests_in_progress',
+      dossierFeeStatus: 'validated',
+      dossierFeeAmountXof: 20_000,
       countryCode: 'BJ',
       currency: 'XOF',
     });
@@ -207,7 +241,7 @@ class InMemoryTestStore implements AmaroServerStore {
   }
 
   async getService(serviceId: string): Promise<ServerServiceRecord | null> {
-    return this.services.get(serviceId) || null;
+    return this.services.get(serviceId) || OFFICIAL_PUBLIC_AND_DEMO_SERVICES[serviceId] || null;
   }
 
   async listActivePilotStocksForService(
@@ -512,6 +546,325 @@ class InMemoryTestStore implements AmaroServerStore {
     } finally {
       this.inFlight.delete(payload.reservationId);
     }
+  }
+
+  async registerProviderFromPromoteFlow(params: {
+    providerId: string;
+    ownerId: string;
+    companyName: string;
+    category: ServiceCategory;
+    cityId: string;
+    countryCode: string;
+    phone: string;
+    contactEmail: string;
+    description: string;
+    conventionVersion: string;
+    conventionAcceptedAt: string;
+  }): Promise<{ providerId: string; verificationStatus: 'pending' }> {
+    this.registeredProviders.set(params.providerId, {
+      ...params,
+      verificationStatus: 'pending',
+    });
+    return { providerId: params.providerId, verificationStatus: 'pending' };
+  }
+
+  async listAllPublishedServices(): Promise<ServerServiceRecord[]> {
+    const out: ServerServiceRecord[] = [];
+    for (const s of this.services.values()) {
+      if (s.status === 'published') out.push({ ...s });
+    }
+    return out;
+  }
+
+  async getAccountGovernance(userId: string): Promise<AccountGovernanceDoc | null> {
+    return this.accountGovernance.get(userId) || null;
+  }
+
+  async updateAccountGovernance(doc: AccountGovernanceDoc): Promise<void> {
+    this.accountGovernance.set(doc.userId, { ...doc });
+  }
+
+  async hasClientPriorReferredReservation(clientId: string): Promise<boolean> {
+    for (const r of this.reservations.values()) {
+      if (r.clientId === clientId && r.referral) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async declareDossierFee(params: {
+    folderId: string;
+    ownerId: string;
+    transactionRef: string;
+    payerName: string;
+    payerPhone: string;
+    declaredDate: string;
+    termsAcceptedVersion: string;
+    feeAmountXof: number;
+    maxPendingFolders: number;
+  }): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }> {
+    const folder = this.folders.get(params.folderId);
+    if (!folder || folder.ownerId !== params.ownerId) {
+      throw new ConflictError('Dossier introuvable ou non autorisé.');
+    }
+    const cleanRef = params.transactionRef.trim().toUpperCase();
+    if (this.usedDossierTxRefs.has(cleanRef)) {
+      throw new ConflictError(
+        'Cette référence de transaction Mobile Money a déjà été utilisée sur un autre dossier.'
+      );
+    }
+    let pendingCount = 0;
+    for (const f of this.folders.values()) {
+      if (
+        f.ownerId === params.ownerId &&
+        f.id !== params.folderId &&
+        (f.status === 'fees_in_verification' || f.dossierFeeStatus === 'declared')
+      ) {
+        pendingCount += 1;
+      }
+    }
+    if (pendingCount >= params.maxPendingFolders) {
+      throw new ConflictError(
+        `Vous avez déjà ${pendingCount} dossier(s) en attente de vérification de paiement.`
+      );
+    }
+    this.usedDossierTxRefs.add(cleanRef);
+    this.folders.set(params.folderId, {
+      ...folder,
+      status: 'fees_in_verification',
+      dossierFeeStatus: 'declared',
+      dossierFeeAmountXof: params.feeAmountXof,
+      dossierTxRef: cleanRef,
+      dossierPayerName: params.payerName,
+      dossierDeclaredAt: params.declaredDate,
+      termsAcceptedVersion: params.termsAcceptedVersion,
+    });
+    return { status: 'fees_in_verification', dossierFeeStatus: 'declared' };
+  }
+
+  async verifyDossierFee(params: {
+    folderId: string;
+    adminUid: string;
+    decision: 'approve' | 'reject';
+    reason: string;
+  }): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }> {
+    const folder = this.folders.get(params.folderId);
+    if (!folder) throw new ConflictError('Dossier introuvable.');
+    const nextStatus: JourneyFolderStatus =
+      params.decision === 'approve' ? 'requests_in_progress' : 'planning';
+    const nextFee: DossierFeeStatus =
+      params.decision === 'approve' ? 'validated' : 'pending';
+    this.folders.set(params.folderId, {
+      ...folder,
+      status: nextStatus,
+      dossierFeeStatus: nextFee,
+    });
+    return { status: nextStatus, dossierFeeStatus: nextFee };
+  }
+
+  async recordNotificationDispatches(dispatches: NotificationDispatchDoc[]): Promise<void> {
+    this.notificationDispatches.push(...dispatches);
+  }
+
+  async listFailedOrUnconfiguredNotifications(): Promise<NotificationDispatchDoc[]> {
+    return this.notificationDispatches.filter(
+      (d) => d.status === 'failed' || d.status === 'channel_unconfigured'
+    );
+  }
+
+  async evaluateDeadlinesAndExpirations(params: {
+    nowIso?: string;
+    folderId?: string;
+    actorUid: string;
+    abandonmentRiskThreshold: number;
+    balancePaymentHours: number;
+  }) {
+    const nowMs = params.nowIso ? Date.parse(params.nowIso) : Date.now();
+    let halfTimeRemindersSent = 0;
+    let expiredProviderRequests = 0;
+    const balanceRemindersSent = 0;
+    const expiredBalancesCancelled = 0;
+    let manualRefundsFlagged = 0;
+
+    const impactedFolders = new Set<string>();
+    for (const [id, r] of this.reservations.entries()) {
+      if (params.folderId && r.folderId !== params.folderId) continue;
+      if (r.status === 'pending_provider' && r.responseDeadlineAt) {
+        const deadlineMs = Date.parse(r.responseDeadlineAt);
+        if (Number.isFinite(deadlineMs) && nowMs >= deadlineMs) {
+          this.reservations.set(id, {
+            ...r,
+            status: 'rejected',
+            dispatchStatus: 'expired',
+            alternativeProposal: 'Expirée sans réponse dans le délai imparti.',
+            updatedAtIso: new Date(nowMs).toISOString(),
+          });
+          expiredProviderRequests += 1;
+          impactedFolders.add(r.folderId);
+        } else if (Number.isFinite(deadlineMs) && (r.followUpCount || 0) === 0) {
+          const halfMs = deadlineMs - 12 * 3_600_000;
+          if (nowMs >= halfMs) {
+            this.reservations.set(id, {
+              ...r,
+              followUpCount: 1,
+            });
+            halfTimeRemindersSent += 1;
+          }
+        }
+      }
+    }
+
+    for (const fid of impactedFolders) {
+      const folder = this.folders.get(fid);
+      if (!folder) continue;
+      const folderRes = Array.from(this.reservations.values()).filter(
+        (x) => x.folderId === fid
+      );
+      const allFailed =
+        folderRes.length > 0 &&
+        folderRes.every((x) => ['rejected', 'cancelled', 'refunded'].includes(x.status));
+      this.folders.set(fid, {
+        ...folder,
+        status: 'needs_rescheduling',
+        ...(allFailed && folder.dossierFeeStatus === 'validated'
+          ? {
+              manualRefundRequired: true,
+              manualRefundReason:
+                'Toutes les demandes du dossier ont expiré ou été refusées : remboursement manuel des 20 000 FCFA à traiter.',
+            }
+          : {}),
+      });
+      if (allFailed && folder.dossierFeeStatus === 'validated') {
+        manualRefundsFlagged += 1;
+      }
+    }
+
+    return {
+      halfTimeRemindersSent,
+      expiredProviderRequests,
+      balanceRemindersSent,
+      expiredBalancesCancelled,
+      manualRefundsFlagged,
+    };
+  }
+
+  async applyRecalculatedReplacement(params: {
+    folderId: string;
+    clientId: string;
+    replacedReservationId?: string;
+    newReservationPayload?: AtomicReservationPayload;
+    changeHistorySummary: string;
+    deltaAmountXof: number;
+  }): Promise<{ newReservationId?: string }> {
+    const list = this.folderChangeHistory.get(params.folderId) || [];
+    list.push({
+      summary: params.changeHistorySummary,
+      deltaAmountXof: params.deltaAmountXof,
+    });
+    this.folderChangeHistory.set(params.folderId, list);
+    return {};
+  }
+
+  async exportOperationalDataAdmin(): Promise<Record<string, unknown>> {
+    return {
+      exportScope: 'admin_operational',
+      exportedAt: new Date().toISOString(),
+      counts: {
+        folders: this.folders.size,
+        reservations: this.reservations.size,
+        pilotStocks: this.pilotStocks.size,
+        referrals: this.referrals.size,
+      },
+      folders: Array.from(this.folders.values()),
+      reservations: Array.from(this.reservations.values()),
+    };
+  }
+
+  async exportPersonalDataClient(
+    userId: string,
+    userEmail: string
+  ): Promise<Record<string, unknown>> {
+    return {
+      exportScope: 'client_personal_rgpd',
+      exportedAt: new Date().toISOString(),
+      userId,
+      email: userEmail,
+      folders: Array.from(this.folders.values()).filter((f) => f.ownerId === userId),
+      reservations: Array.from(this.reservations.values()).filter(
+        (r) => r.clientId === userId
+      ),
+    };
+  }
+
+  async deleteClientAccountCompliant(params: {
+    userId: string;
+    retentionPolicyLabel: string;
+  }) {
+    let deletedIdentityVaultCount = 0;
+    for (const [resId, vault] of this.identityVaults.entries()) {
+      if (vault.clientId === params.userId) {
+        this.identityVaults.delete(resId);
+        deletedIdentityVaultCount += 1;
+      }
+    }
+    for (const [resId, meta] of this.identityMeta.entries()) {
+      if (meta.clientId === params.userId) {
+        this.identityMeta.delete(resId);
+      }
+    }
+
+    let retainedFinancialRecordsCount = 0;
+    for (const [fid, f] of this.folders.entries()) {
+      if (f.ownerId === params.userId) {
+        if (f.dossierFeeStatus === 'validated' || f.dossierFeeStatus === 'declared') {
+          const archId = `fin-folder-${fid}`;
+          this.financialArchives.set(archId, {
+            id: archId,
+            reservationOrFolderRef: fid,
+            recordKind: 'dossier_fee',
+            transactionRef: f.dossierTxRef || fid,
+            amount: f.dossierFeeAmountXof ?? 20_000,
+            currency: f.currency,
+            recordedDate: f.dossierDeclaredAt || new Date().toISOString().slice(0, 10),
+            retentionPolicyLabel: params.retentionPolicyLabel,
+            anonymizedAtIso: new Date().toISOString(),
+          });
+          retainedFinancialRecordsCount += 1;
+        }
+        this.folders.delete(fid);
+        this.itemsByFolder.delete(fid);
+      }
+    }
+
+    for (const [rid, r] of this.reservations.entries()) {
+      if (r.clientId === params.userId) {
+        if (r.paymentStatus === 'succeeded' || r.paymentStatus === 'initiated') {
+          const archId = `fin-res-${rid}`;
+          this.financialArchives.set(archId, {
+            id: archId,
+            reservationOrFolderRef: rid,
+            recordKind: 'reservation_payment',
+            transactionRef: rid,
+            amount: r.totalAmount,
+            currency: r.currency,
+            recordedDate: r.scheduledDate,
+            retentionPolicyLabel: params.retentionPolicyLabel,
+            anonymizedAtIso: new Date().toISOString(),
+          });
+          retainedFinancialRecordsCount += 1;
+        }
+        this.reservations.delete(rid);
+      }
+    }
+
+    this.deletedUsers.add(params.userId);
+    return {
+      deletedPersonalData: true,
+      deletedIdentityVaultCount,
+      retainedFinancialRecordsCount,
+      retentionPolicyLabel: params.retentionPolicyLabel,
+    };
   }
 }
 
@@ -1160,8 +1513,29 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(storedRef.clientPaid, false);
     assert.equal(storedRef.providerSettled, false);
     assert.equal(storedRef.commissionRatePercent, 6);
-    // 6% of providerPrice (100,000 XOF) = 6,000 XOF
-    assert.equal(storedRef.commissionAmount, 6_000);
+    // Bloc 5.2: 6% calculated strictly on AMARO's retained margin (amaroFee = 11,000 XOF) = 660 XOF
+    assert.equal(storedRef.commissionAmount, 660);
+
+    // 10c. Second reservation by the SAME client with referralCode -> NO second commission (first referred transaction only!)
+    const secondRefRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-11-26',
+        scheduledTime: '14:00',
+        participants: 2,
+        referralCode: 'BENIN-CREATOR-1',
+      }),
+    });
+    assert.equal(secondRefRes.status, 201);
+    const secondRefBody: any = await secondRefRes.json();
+    assert.equal(secondRefBody.referralAttached, false);
+    assert.equal(store.referrals.size, 1);
   });
 
   it('11. Vérification d’identité voyageur : rejette absence de consentement, rejette faux fichiers/SVG/scripts, impose recto+verso CNI, chiffre en AES-256-GCM et bloque la transmission externe sur le répertoire public', async () => {
@@ -1622,18 +1996,74 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
           category: 'site',
           cityId: 'ouidah',
           date: '2026-12-01',
-          startTime: '16:00',
-          endTime: '17:00',
+          startTime: '15:30',
+          endTime: '16:30',
           durationMinutes: 60,
         },
       }),
     });
-    const relocationSiteBlockedBody: any = await relocationSiteBlockedRes.json();
-    assert.equal(relocationSiteBlockedBody.valid, false);
-    assert.match(relocationSiteBlockedBody.conflicts.join(' '), /changement de ville/i);
+    const firstRelocationVisitBody: any = await relocationSiteBlockedRes.json();
+    assert.equal(firstRelocationVisitBody.valid, true);
 
-    // 14b. Up to 3 tourist visits in the SAME city on the same day -> 3rd allowed with warning, 4th blocked
-    const thirdSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+    // 2nd tourist visit on a city-change day -> blocked (maxVisitsCityChangeDay = 1 per Bloc 5.1)
+    const secondRelocationVisitRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'trp-cotonou-benin-tours-sa',
+            providerId: 'dir-trp-cotonou-benin-tours-sa',
+            serviceTitle: 'Bénin Tours SA',
+            category: 'transport',
+            cityId: 'cotonou',
+            date: '2026-12-01',
+            startTime: '08:00',
+            endTime: '11:00',
+            durationMinutes: 180,
+          },
+          {
+            serviceId: 'acc-ouidah-casa-del-papa',
+            providerId: 'dir-acc-ouidah-casa-del-papa',
+            serviceTitle: 'Casa del Papa Resort & SPA',
+            category: 'accommodation',
+            cityId: 'ouidah',
+            date: '2026-12-01',
+            startTime: '14:00',
+            endTime: '15:00',
+            durationMinutes: 60,
+          },
+          {
+            serviceId: 'site-ouidah-temple-des-pythons',
+            providerId: 'dir-site-ouidah-temple-des-pythons',
+            serviceTitle: 'Temple des Pythons',
+            category: 'site',
+            cityId: 'ouidah',
+            date: '2026-12-01',
+            startTime: '15:30',
+            endTime: '16:30',
+            durationMinutes: 60,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-foret-sacree-kpasse',
+          providerId: 'dir-site-ouidah-foret-sacree-kpasse',
+          serviceTitle: 'Forêt Sacrée de Kpassè',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-01',
+          startTime: '17:00',
+          endTime: '18:00',
+          durationMinutes: 60,
+        },
+      }),
+    });
+    const secondRelocationVisitBody: any = await secondRelocationVisitRes.json();
+    assert.equal(secondRelocationVisitBody.valid, false);
+    assert.match(secondRelocationVisitBody.conflicts.join(' '), /changement de ville/i);
+
+    // 14b. Bloc 5.1: Up to 2 tourist visits in the SAME city on the same day -> 2nd allowed, 3rd blocked for realistic pacing
+    const secondSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1648,34 +2078,23 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
             endTime: '10:30',
             durationMinutes: 90,
           },
-          {
-            serviceId: 'site-ouidah-foret-sacree-kpasse',
-            serviceTitle: 'Forêt Sacrée de Kpassè',
-            category: 'site',
-            cityId: 'ouidah',
-            date: '2026-12-02',
-            startTime: '11:00',
-            endTime: '12:30',
-            durationMinutes: 90,
-          },
         ],
         candidate: {
-          serviceId: 'site-ouidah-porte-du-non-retour',
-          serviceTitle: 'Porte du Non-Retour',
+          serviceId: 'site-ouidah-foret-sacree-kpasse',
+          serviceTitle: 'Forêt Sacrée de Kpassè',
           category: 'site',
           cityId: 'ouidah',
           date: '2026-12-02',
-          startTime: '15:30',
-          endTime: '17:00',
+          startTime: '14:30',
+          endTime: '16:00',
           durationMinutes: 90,
         },
       }),
     });
-    const thirdSameCityBody: any = await thirdSameCityRes.json();
-    assert.equal(thirdSameCityBody.valid, true);
-    assert.equal(thirdSameCityBody.warnings.length > 0, true);
+    const secondSameCityBody: any = await secondSameCityRes.json();
+    assert.equal(secondSameCityBody.valid, true);
 
-    const fourthSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+    const thirdSameCityRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1700,20 +2119,10 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
             endTime: '11:00',
             durationMinutes: 60,
           },
-          {
-            serviceId: 'site-ouidah-porte-du-non-retour',
-            serviceTitle: 'Porte du Non-Retour',
-            category: 'site',
-            cityId: 'ouidah',
-            date: '2026-12-02',
-            startTime: '14:00',
-            endTime: '15:00',
-            durationMinutes: 60,
-          },
         ],
         candidate: {
-          serviceId: 'site-ouidah-fondation-zinsou-musee',
-          serviceTitle: 'Musée Fondation Zinsou',
+          serviceId: 'site-ouidah-porte-du-non-retour',
+          serviceTitle: 'Porte du Non-Retour',
           category: 'site',
           cityId: 'ouidah',
           date: '2026-12-02',
@@ -1723,8 +2132,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
         },
       }),
     });
-    const fourthSameCityBody: any = await fourthSameCityRes.json();
-    assert.equal(fourthSameCityBody.valid, false);
+    const thirdSameCityBody: any = await thirdSameCityRes.json();
+    assert.equal(thirdSameCityBody.valid, false);
 
     // 14c. Principal rental provider (Avis Bénin) + punctual urban VTC (Yango Bénin) -> ALLOWED (201)
     const rentalRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -2049,7 +2458,9 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     store.folders.set('folder-traveler-2', {
       id: 'folder-traveler-2',
       ownerId: 'other-provider-uid',
-      status: 'planning',
+      status: 'requests_in_progress',
+      dossierFeeStatus: 'validated',
+      dossierFeeAmountXof: 20_000,
       countryCode: 'BJ',
       currency: 'XOF',
     });
@@ -2304,7 +2715,505 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(expireBody.status, 'rejected');
     assert.equal(expireBody.dispatchStatus, 'expired');
   });
+
+  it('19. Bloc 2 — Entrée gratuite (brouillon itinéraire sans compte) puis verrouillage strict par Frais de dossier déductibles 20 000 FCFA (402 -> déclaration Mobile Money + CGV -> anti-doublon -> validation Admin -> 201)', async () => {
+    store.reset();
+
+    // 19a. Unauthenticated visitor generates a real Benin itinerary draft for free with daily "Temps libre"
+    const draftRes = await fetch(`${baseUrl}/api/amaro/assistant/generate-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cityIds: ['cotonou', 'ouidah'],
+        daysCount: 3,
+        travelers: 2,
+        style: 'equilibre',
+        intention: 'Culture et repos',
+      }),
+    });
+    assert.equal(draftRes.status, 200);
+    const draftJson: any = await draftRes.json();
+    assert.equal(draftJson.ok, true);
+    assert.equal(draftJson.draftItinerary.daysCount, 3);
+    assert.equal(
+      [1, 2, 3].every((dayIdx) =>
+        draftJson.draftItinerary.steps.some(
+          (s: any) => s.dayIndex === dayIdx && s.isFreeTimeBlock === true
+        )
+      ),
+      true
+    );
+
+    // 19b. Folder without validated dossier fee MUST block real reservation submission (402)
+    store.folders.set('folder-unpaid-fee', {
+      id: 'folder-unpaid-fee',
+      ownerId: 'traveler-uid-1',
+      status: 'planning',
+      dossierFeeStatus: 'pending',
+      countryCode: 'BJ',
+      currency: 'XOF',
+    });
+    store.folders.set('folder-second-pending', {
+      id: 'folder-second-pending',
+      ownerId: 'traveler-uid-1',
+      status: 'planning',
+      dossierFeeStatus: 'pending',
+      countryCode: 'BJ',
+      currency: 'XOF',
+    });
+
+    const blockedBeforeFee = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-unpaid-fee',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-24',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(blockedBeforeFee.status, 402);
+
+    // 19c. Declaring dossier fee WITHOUT CGV acceptance -> 400
+    const noCgvFee = await fetch(
+      `${baseUrl}/api/amaro/folders/folder-unpaid-fee/declare-fee`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transactionRef: 'MOMO-BJ-998877',
+          payerName: 'Koffi Voyageur',
+          payerPhone: '+22901000000',
+          termsAccepted: false,
+        }),
+      }
+    );
+    assert.equal(noCgvFee.status, 400);
+
+    // 19d. Valid declaration -> 200, folder moves to fees_in_verification
+    const validDeclare = await fetch(
+      `${baseUrl}/api/amaro/folders/folder-unpaid-fee/declare-fee`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transactionRef: 'MOMO-BJ-998877',
+          payerName: 'Koffi Voyageur',
+          payerPhone: '+22901000000',
+          termsAccepted: true,
+        }),
+      }
+    );
+    assert.equal(validDeclare.status, 200);
+    const declareBody: any = await validDeclare.json();
+    assert.equal(declareBody.status, 'fees_in_verification');
+    assert.equal(declareBody.dossierFeeStatus, 'declared');
+    assert.equal(declareBody.deductibleAmountXof, 20_000);
+
+    // 19e. Max 1 folder in fees_in_verification per client -> 409, and duplicate txRef -> 409
+    const secondPendingRes = await fetch(
+      `${baseUrl}/api/amaro/folders/folder-second-pending/declare-fee`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transactionRef: 'MOMO-BJ-112233',
+          payerName: 'Koffi Voyageur',
+          termsAccepted: true,
+        }),
+      }
+    );
+    assert.equal(secondPendingRes.status, 409);
+
+    // 19f. Admin approves the 20 000 FCFA dossier fee -> reservation now succeeds (201)
+    const adminVerifyFee = await fetch(
+      `${baseUrl}/api/amaro/admin/folders/folder-unpaid-fee/verify-fee`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          decision: 'approve',
+          reason: 'Paiement MTN MoMo vérifié sur relevé marchand.',
+        }),
+      }
+    );
+    assert.equal(adminVerifyFee.status, 200);
+
+    const unlockedRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-unpaid-fee',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-24',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(unlockedRes.status, 201);
+  });
+
+  it('20. Bloc 1 — Deux circuits distincts (Circuit A 5% répertoire vs Circuit B 10% partenaire) et « Promouvoir mes services » comme unique point d’entrée prestataire', async () => {
+    store.reset();
+
+    // 20a. Direct registration outside "promote_services" flow MUST be rejected (403)
+    const wrongEntryRes = await fetch(`${baseUrl}/api/amaro/providers/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sourceFlow: 'workspace_legacy_bypass',
+        conventionAccepted: true,
+        companyName: 'Résidence Test Cotonou',
+        category: 'accommodation',
+        cityId: 'cotonou',
+      }),
+    });
+    assert.equal(wrongEntryRes.status, 403);
+
+    // 20b. Registration via "promote_services" WITH convention acceptance -> 201, pending Admin validation, publiclyBookable=false
+    const okRegister = await fetch(`${baseUrl}/api/amaro/providers/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sourceFlow: 'promote_services',
+        conventionAccepted: true,
+        companyName: 'Résidence Océane Ouidah',
+        category: 'accommodation',
+        cityId: 'ouidah',
+        phone: '+22901970000',
+        description: 'Maison d’hôtes calme proche de la plage.',
+      }),
+    });
+    assert.equal(okRegister.status, 201);
+    const regBody: any = await okRegister.json();
+    assert.equal(regBody.verificationStatus, 'pending');
+    assert.equal(regBody.publiclyBookable, false);
+
+    // 20c. Circuit A (public_directory: 5% margin) vs Circuit B (verified_partner: 10% margin)
+    const quoteCircuitA = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'site-ouidah-temple-des-pythons', // public_directory, unitPrice=2,000 * 2 = 4,000 -> 5% + 1,000 = 1,200 XOF
+        participants: 2,
+      }),
+    });
+    const bodyA: any = await quoteCircuitA.json();
+    assert.equal(bodyA.breakdown.providerPrice, 4_000);
+    assert.equal(bodyA.breakdown.amaroFee, 1_200);
+
+    const quoteCircuitB = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'srv-published-hotel', // verified_partner, unitPrice=50,000 * 2 = 100,000 -> 10% + 1,000 = 11,000 XOF
+        participants: 2,
+      }),
+    });
+    const bodyB: any = await quoteCircuitB.json();
+    assert.equal(bodyB.breakdown.providerPrice, 100_000);
+    assert.equal(bodyB.breakdown.amaroFee, 11_000);
+  });
+
+  it('21. Bloc 7.2 — Coffre de pièces d’identité verrouillé en mode test (403) tant que la clé dédiée n’est pas confirmée par le propriétaire', async () => {
+    store.reset();
+    store.settings.set('BJ', {
+      ...store.settings.get('BJ')!,
+      vaultKeyConfirmedByOwner: false,
+    });
+
+    const VALID_PNG_DATA_URL =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-26',
+        scheduledTime: '14:00',
+        participants: 1,
+      }),
+    });
+    const { reservationId }: any = await createRes.json();
+
+    const blockedSubmit = await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId,
+        documentType: 'passport',
+        nationalityCountry: 'FR',
+        residenceCountry: 'FR',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(blockedSubmit.status, 403);
+    const blockedBody: any = await blockedSubmit.json();
+    assert.equal(blockedBody.vaultTestMode, true);
+    assert.equal(store.identityVaults.size, 0);
+  });
+
+  it('22. Lot 1 — Vue Admin des canaux non configurés, alternatives intelligentes, recalcul Avant/Après soumis à accord explicite client et évaluation protégée des délais (24 h)', async () => {
+    store.reset();
+
+    // 22a. Honest notification channel status in Admin
+    const notifIssuesRes = await fetch(`${baseUrl}/api/amaro/admin/notifications-issues`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(notifIssuesRes.status, 200);
+    const notifBody: any = await notifIssuesRes.json();
+    assert.equal(notifBody.channels.in_app.status, 'active');
+    assert.equal(notifBody.channels.email.status, 'channel_unconfigured');
+    assert.equal(notifBody.channels.sms.status, 'channel_unconfigured');
+    assert.equal(notifBody.channels.whatsapp.status, 'channel_unconfigured');
+
+    // 22b. Smart alternatives in Ouidah (site category) -> returns up to 3 conflict-free real listings
+    const altRes = await fetch(`${baseUrl}/api/amaro/alternatives`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        failedServiceId: 'site-ouidah-temple-des-pythons',
+        category: 'site',
+        cityId: 'ouidah',
+        scheduledDate: '2026-12-27',
+        scheduledTime: '10:00',
+        participants: 2,
+        currentUnitPriceXof: 5_000,
+      }),
+    });
+    assert.equal(altRes.status, 200);
+    const altBody: any = await altRes.json();
+    assert.equal(altBody.alternatives.length > 0 && altBody.alternatives.length <= 3, true);
+    assert.equal(
+      altBody.alternatives.every(
+        (a: any) => a.id !== 'site-ouidah-temple-des-pythons' && a.cityId === 'ouidah'
+      ),
+      true
+    );
+
+    // 22c. Create a reservation, then preview recalculation (confirmApply: false) -> NOTHING applied without explicit client approval
+    const createdRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'site-ouidah-temple-des-pythons',
+        scheduledDate: '2026-12-27',
+        scheduledTime: '10:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(createdRes.status, 201);
+
+    const previewRecalc = await fetch(
+      `${baseUrl}/api/amaro/folders/folder-traveler-1/recalculate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          confirmApply: false,
+          replacedServiceId: 'site-ouidah-temple-des-pythons',
+          replacementServiceId: altBody.alternatives[0].id,
+          scheduledDate: '2026-12-27',
+          scheduledTime: '14:00',
+          participants: 2,
+        }),
+      }
+    );
+    assert.equal(previewRecalc.status, 200);
+    const previewBody: any = await previewRecalc.json();
+    assert.equal(previewBody.applied, false);
+    assert.equal(previewBody.requiresClientConfirmation, true);
+    assert.equal(previewBody.dossierDeductionXof, 20_000);
+    assert.equal(store.folderChangeHistory.has('folder-traveler-1'), false);
+
+    // Explicit client confirmation (confirmApply: true) -> applies & records history
+    const confirmRecalc = await fetch(
+      `${baseUrl}/api/amaro/folders/folder-traveler-1/recalculate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          confirmApply: true,
+          replacedServiceId: 'site-ouidah-temple-des-pythons',
+          replacementServiceId: altBody.alternatives[0].id,
+          scheduledDate: '2026-12-27',
+          scheduledTime: '14:00',
+          participants: 2,
+        }),
+      }
+    );
+    assert.equal(confirmRecalc.status, 200);
+    const confirmBody: any = await confirmRecalc.json();
+    assert.equal(confirmBody.applied, true);
+    assert.equal(store.folderChangeHistory.get('folder-traveler-1')?.length, 1);
+
+    // 22d. Protected deadline evaluator: non-admin rejected (403); Admin expires overdue request -> marks folder 'needs_rescheduling' + flags manual refund
+    const unauthEval = await fetch(`${baseUrl}/api/amaro/admin/evaluate-deadlines`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(unauthEval.status, 403);
+
+    const futureIso = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    const adminEval = await fetch(`${baseUrl}/api/amaro/admin/evaluate-deadlines`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ nowIso: futureIso }),
+    });
+    assert.equal(adminEval.status, 200);
+    const evalBody: any = await adminEval.json();
+    assert.equal(evalBody.expiredProviderRequests, 1);
+    assert.equal(evalBody.manualRefundsFlagged, 1);
+    assert.equal(store.folders.get('folder-traveler-1')?.status, 'needs_rescheduling');
+    assert.equal(store.folders.get('folder-traveler-1')?.manualRefundRequired, true);
+  });
+
+  it('23. Précisions 2 & 3 — Séparation stricte Export Admin (7.3) vs Export Personnel Client (10.3) et Suppression de compte conforme (efface PII + coffre identité, conserve archives financières minimales)', async () => {
+    store.reset();
+
+    const VALID_PNG_DATA_URL =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    // Create a reservation + upload an identity document for traveler-uid-1
+    const resCreate = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-28',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    const { reservationId }: any = await resCreate.json();
+
+    await fetch(`${baseUrl}/api/amaro/identity/submit`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        reservationId,
+        documentType: 'passport',
+        nationalityCountry: 'FR',
+        residenceCountry: 'FR',
+        frontDataUrl: VALID_PNG_DATA_URL,
+        consentGiven: true,
+        authorizeProvider: true,
+      }),
+    });
+    assert.equal(store.identityVaults.has(reservationId), true);
+
+    // 23a. Précision 2: Traveler blocked (403) on Admin operational export (7.3), Admin allowed (200)
+    const travTryAdminExport = await fetch(`${baseUrl}/api/amaro/admin/export-operational`, {
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(travTryAdminExport.status, 403);
+
+    const adminOpExport = await fetch(`${baseUrl}/api/amaro/admin/export-operational`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(adminOpExport.status, 200);
+    const adminOpBody: any = await adminOpExport.json();
+    assert.equal(adminOpBody.exportScope, 'admin_operational');
+    assert.equal(adminOpBody.counts.folders, 2);
+
+    // 23b. Précision 2: Client personal RGPD export (10.3) returns ONLY traveler-uid-1's own records
+    const clientPersonalExport = await fetch(`${baseUrl}/api/amaro/account/export-personal`, {
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(clientPersonalExport.status, 200);
+    const personalBody: any = await clientPersonalExport.json();
+    assert.equal(personalBody.exportScope, 'client_personal_rgpd');
+    assert.equal(personalBody.userId, 'traveler-uid-1');
+    assert.equal(personalBody.folders.length, 1);
+    assert.equal(personalBody.folders[0].id, 'folder-traveler-1');
+
+    // 23c. Précision 3: Compliant account deletion wipes PII + identity vaults while retaining minimal financial archives
+    const deleteNoConfirm = await fetch(`${baseUrl}/api/amaro/account/delete`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ confirmDelete: false }),
+    });
+    assert.equal(deleteNoConfirm.status, 400);
+
+    const deleteOk = await fetch(`${baseUrl}/api/amaro/account/delete`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ confirmDelete: true }),
+    });
+    assert.equal(deleteOk.status, 200);
+    const deleteBody: any = await deleteOk.json();
+    assert.equal(deleteBody.deletedPersonalData, true);
+    assert.equal(deleteBody.deletedIdentityVaultCount, 1);
+    assert.equal(deleteBody.retainedFinancialRecordsCount, 1); // Validated 20 000 FCFA dossier fee retained minimally
+    assert.equal(deleteBody.retentionPolicyLabel, 'à renseigner par le propriétaire');
+    assert.match(deleteBody.legalDisclosure, /enregistrements financiers minimaux/i);
+    assert.equal(store.identityVaults.has(reservationId), false);
+    assert.equal(store.folders.has('folder-traveler-1'), false);
+    assert.equal(store.financialArchives.size, 1);
+  });
 });
-
-
-

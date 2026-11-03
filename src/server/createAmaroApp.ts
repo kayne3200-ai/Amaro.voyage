@@ -2,19 +2,26 @@ import crypto from 'crypto';
 import express, { type Express, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import type {
   AssistantChatHistoryItem,
+  AssistantDraftItinerary,
   CurrencyCode,
   IdentityDocumentType,
   IdentityVerificationStatus,
+  NotificationDispatchDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ServiceCategory,
 } from '../types/amaro';
 import {
+  DEFAULT_EMERGENCY_NUMBERS_BJ,
+  OWNER_PLACEHOLDER,
+} from '../data/amaroGovernanceDefaults';
+import {
   analyzeConversationAndCatalogue,
   buildConversationalSystemPrompt,
+  buildRealDraftItinerary,
   buildResilientHumanReply,
 } from './assistantKnowledge';
 import {
@@ -22,12 +29,16 @@ import {
   buildDeterministicItemId,
   buildDeterministicReservationId,
   computeAuthoritativeQuote,
+  computeScheduleAndDependenciesRevalidation,
   detectClientPriceTampering,
   evaluateJourneyBrain,
+  findSmartAlternatives,
   isValidIsoDate,
   isValidTimeHhMm,
+  OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   resolveEffectiveBookingMode,
   type ScheduleSlot,
+  type ServerServiceRecord,
 } from './domainEngine';
 import {
   CloudFirestoreServerStore,
@@ -648,6 +659,18 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         }
       }
 
+      if (
+        requestedDate &&
+        Array.isArray(service.blockedDates) &&
+        service.blockedDates.includes(requestedDate)
+      ) {
+        res.status(409).json({
+          error:
+            'Cette date a été marquée indisponible par le prestataire dans son calendrier.',
+        });
+        return;
+      }
+
       const quote = computeAuthoritativeQuote({
         unitPrice: effectiveUnitPrice,
         priceKnown: effectivePriceKnown,
@@ -655,6 +678,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         currency: service.currency,
         displayCurrency,
         setting,
+        dataOrigin: service.dataOrigin,
         rates: rateBundle.rates,
         rateSource: rateBundle.source,
         rateStatus: rateBundle.status,
@@ -665,7 +689,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         (req.body || {}) as Record<string, unknown>,
         quote.breakdown,
         setting,
-        effectivePriceKnown === false ? 0 : effectiveUnitPrice
+        effectivePriceKnown === false ? 0 : effectiveUnitPrice,
+        quote.effectiveMarginPercent
       );
       if (tamper.tampered) {
         res.status(400).json({ error: tamper.reason });
@@ -681,7 +706,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   // ===========================================================================
   // 2. AMARO JOURNEY BRAIN — COORDINATION & CONFLICT DETECTOR
   // ===========================================================================
-  app.post('/api/amaro/brain/validate', (req: Request, res: Response) => {
+  app.post('/api/amaro/brain/validate', async (req: Request, res: Response) => {
     const rl = publicApiLimiter.check(`brain:${getClientIp(req)}`);
     if (!rl.allowed) {
       res.setHeader('Retry-After', String(rl.retryAfterSec));
@@ -724,16 +749,36 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         durationMinutes: Math.max(15, Math.min(43_200, Number(it.durationMinutes || 90))),
       }));
 
-    const result = evaluateJourneyBrain(existingItems, {
-      serviceId: String(candidate.serviceId || '').slice(0, 128),
-      providerId: String(candidate.providerId || '').slice(0, 128),
-      serviceTitle: String(candidate.serviceTitle || '').slice(0, 160),
-      category: candidate.category as ServiceCategory,
-      cityId: String(candidate.cityId).trim().slice(0, 128),
-      date: String(candidate.date).trim(),
-      startTime: String(candidate.startTime).trim(),
-      durationMinutes: Math.max(15, Math.min(43_200, Number(candidate.durationMinutes || 90))),
-    });
+    let brainRules: {
+      maxVisitsCityChangeDay?: number;
+      maxVisitsSameCityDay?: number;
+      freeTimeBlocksPerDay?: number;
+    } = {};
+    try {
+      const setting = await store.getSystemSetting('BJ', extractBearerToken(req) || undefined);
+      brainRules = {
+        maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay,
+        maxVisitsSameCityDay: setting.maxVisitsSameCityDay,
+        freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay,
+      };
+    } catch {
+      // Defaults (1 visit city-change day, 2 visits same city) apply
+    }
+
+    const result = evaluateJourneyBrain(
+      existingItems,
+      {
+        serviceId: String(candidate.serviceId || '').slice(0, 128),
+        providerId: String(candidate.providerId || '').slice(0, 128),
+        serviceTitle: String(candidate.serviceTitle || '').slice(0, 160),
+        category: candidate.category as ServiceCategory,
+        cityId: String(candidate.cityId).trim().slice(0, 128),
+        date: String(candidate.date).trim(),
+        startTime: String(candidate.startTime).trim(),
+        durationMinutes: Math.max(15, Math.min(43_200, Number(candidate.durationMinutes || 90))),
+      },
+      brainRules
+    );
 
     res.json(result);
   });
@@ -790,7 +835,20 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
 
       try {
-        // 1. Verify Journey Folder exists, belongs to authenticated caller, and is active
+        // 0. Check at-risk / blocked account governance (Bloc 2)
+        if (store.getAccountGovernance) {
+          const gov = await store.getAccountGovernance(caller.uid, caller.rawIdToken);
+          if (gov?.blockedForRequests) {
+            res.status(403).json({
+              error:
+                gov.blockReason ||
+                'Votre compte est temporairement restreint pour l’envoi de nouvelles demandes suite à plusieurs dossiers abandonnés. Contactez l’équipe AMARO.',
+            });
+            return;
+          }
+        }
+
+        // 1. Verify Journey Folder exists, belongs to authenticated caller, and has validated dossier fee (Bloc 2)
         const folder = await store.getJourneyFolder(folderId, caller.rawIdToken);
         if (!folder) {
           res.status(404).json({ error: 'Dossier de Voyage introuvable.' });
@@ -802,9 +860,17 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           });
           return;
         }
-        if (folder.status === 'archived') {
+        if (folder.status === 'archived' || folder.status === 'abandoned' || folder.status === 'expired') {
           res.status(409).json({
-            error: 'Impossible de réserver sur un Dossier de Voyage archivé.',
+            error: 'Impossible de réserver sur un Dossier de Voyage archivé, expiré ou abandonné.',
+          });
+          return;
+        }
+        if ((folder.dossierFeeStatus || 'not_requested') !== 'validated') {
+          res.status(402).json({
+            error:
+              'Les frais de dossier déductibles (20 000 FCFA par défaut) doivent être déclarés et validés par l’administration AMARO avant l’envoi des demandes aux prestataires.',
+            dossierFeeStatus: folder.dossierFeeStatus || 'not_requested',
           });
           return;
         }
@@ -821,6 +887,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           });
           return;
         }
+        if (
+          Array.isArray(service.blockedDates) &&
+          service.blockedDates.includes(scheduledDate)
+        ) {
+          res.status(409).json({
+            error:
+              'Le prestataire a marqué cette date comme indisponible dans son calendrier.',
+          });
+          return;
+        }
         if (rawParticipants > service.capacity) {
           res.status(400).json({
             error: `Capacité maximale dépassée (${rawParticipants} demandé(s), maximum ${service.capacity}).`,
@@ -828,11 +904,13 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
-        // 2b. Evaluate 3-Level Booking Activation (Levels A / B / C) & Confirmed Stock Anti-Double-Booking
+        // 2b. Evaluate 3-Level Booking Activation & Circuit A vs Circuit B separation (Bloc 1)
+        const isCircuitBPartner = service.dataOrigin === 'verified_partner';
         const requestedStockId = String(req.body?.stockId || '').trim() || undefined;
-        const candidateStocks = store.listActivePilotStocksForService
-          ? await store.listActivePilotStocksForService(service.id, caller.rawIdToken)
-          : [];
+        const candidateStocks =
+          isCircuitBPartner && store.listActivePilotStocksForService
+            ? await store.listActivePilotStocksForService(service.id, caller.rawIdToken)
+            : [];
         const modeDecision = resolveEffectiveBookingMode({
           service,
           candidateStocks,
@@ -851,11 +929,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         }
 
         const effectiveUnitPrice =
-          modeDecision.effectiveMode === 'level_c_instant' && modeDecision.matchedStock
+          isCircuitBPartner &&
+          modeDecision.effectiveMode === 'level_c_instant' &&
+          modeDecision.matchedStock
             ? modeDecision.matchedStock.contractualPrice
             : service.priceAmount;
         const effectivePriceKnown =
-          modeDecision.effectiveMode === 'level_c_instant' && modeDecision.matchedStock
+          isCircuitBPartner &&
+          modeDecision.effectiveMode === 'level_c_instant' &&
+          modeDecision.matchedStock
             ? true
             : service.priceKnown;
 
@@ -865,7 +947,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         );
         const rateBundle = await getVerifiedCurrencyRates();
 
-        // 3. Server-side authoritative financial calculation & tamper rejection
+        // 3. Server-side authoritative financial calculation & differentiated margin (10% Circuit B / 5% Circuit A)
         const quote = computeAuthoritativeQuote({
           unitPrice: effectiveUnitPrice,
           priceKnown: effectivePriceKnown,
@@ -873,6 +955,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           currency: service.currency,
           displayCurrency: service.currency,
           setting,
+          dataOrigin: service.dataOrigin,
           rates: rateBundle.rates,
           rateSource: rateBundle.source,
           rateStatus: rateBundle.status,
@@ -882,14 +965,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           (req.body || {}) as Record<string, unknown>,
           quote.breakdown,
           setting,
-          effectivePriceKnown === false ? 0 : effectiveUnitPrice
+          effectivePriceKnown === false ? 0 : effectiveUnitPrice,
+          quote.effectiveMarginPercent
         );
         if (tamper.tampered) {
           res.status(400).json({ error: tamper.reason });
           return;
         }
 
-        // 3b. Optional AMARO PARTNERS referral validation & anti-self-referral check
+        // 3b. AMARO PARTNERS referral validation (5.2: 5% of AMARO retained revenue on FIRST referred transaction only, zero self-referral, zero recurring)
         let validatedReferral: {
           partnerId: string;
           partnerOwnerId: string;
@@ -898,6 +982,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           commissionAmount: number;
           attributionModel: 'first_touch' | 'last_touch';
         } | null = null;
+        let affiliateSkippedReason: string | null = null;
 
         if (rawReferralCode && /^[A-Z0-9_-]{3,40}$/.test(rawReferralCode) && store.getPartnerByCode) {
           const partner = await store.getPartnerByCode(rawReferralCode, caller.rawIdToken);
@@ -905,27 +990,37 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             if (partner.ownerId === caller.uid) {
               res.status(400).json({
                 error:
-                  'Auto-parrainage refusé (AMARO PARTNERS) : un partenaire ne peut pas percevoir de commission sur sa propre réservation.',
+                  'Auto-parrainage refusé (AMARO PARTNERS) : un affilié ne peut pas percevoir de commission sur sa propre réservation.',
               });
               return;
             }
-            const ratePct =
-              partner.customCommissionRate > 0
-                ? partner.customCommissionRate
-                : Number(setting.partnerCommissionPercent ?? 5);
-            const rawComm = (quote.breakdown.providerPrice * ratePct) / 100;
-            const commissionAmount =
-              service.currency === 'XOF'
-                ? Math.round(rawComm)
-                : Math.round(rawComm * 100) / 100;
-            validatedReferral = {
-              partnerId: partner.id,
-              partnerOwnerId: partner.ownerId,
-              referralCode: partner.referralCode,
-              commissionRatePercent: ratePct,
-              commissionAmount,
-              attributionModel: setting.attributionModel || 'last_touch',
-            };
+            const hasPriorReferredTx = store.hasClientPriorReferredReservation
+              ? await store.hasClientPriorReferredReservation(caller.uid, caller.rawIdToken)
+              : false;
+            if (hasPriorReferredTx) {
+              affiliateSkippedReason =
+                'Commission affiliation réservée uniquement à la première transaction finalisée du client référé (pas de commission récurrente).';
+            } else {
+              const ratePct =
+                partner.customCommissionRate > 0
+                  ? partner.customCommissionRate
+                  : Number(setting.partnerCommissionPercent ?? 5);
+              // 5.2: Commission calculated strictly on AMARO's retained organization revenue (amaroFee), NOT on providerPrice!
+              const affiliateBaseAmount = Math.max(0, quote.breakdown.amaroFee);
+              const rawComm = (affiliateBaseAmount * ratePct) / 100;
+              const commissionAmount =
+                service.currency === 'XOF'
+                  ? Math.round(rawComm)
+                  : Math.round(rawComm * 100) / 100;
+              validatedReferral = {
+                partnerId: partner.id,
+                partnerOwnerId: partner.ownerId,
+                referralCode: partner.referralCode,
+                commissionRatePercent: ratePct,
+                commissionAmount,
+                attributionModel: setting.attributionModel || 'last_touch',
+              };
+            }
           }
         }
 
@@ -951,7 +1046,6 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
-        // Filter out an envisaged draft of the exact same service/date/time so converting a planned step to a booking does not self-collide
         const slotsForBrain = scheduleSlots.filter(
           (s) =>
             !(
@@ -961,16 +1055,24 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             )
         );
 
-        const brain = evaluateJourneyBrain(slotsForBrain, {
-          serviceId: service.id,
-          providerId: service.providerId,
-          serviceTitle: service.title,
-          category: service.category,
-          cityId: service.cityId,
-          date: scheduledDate,
-          startTime: scheduledTime,
-          durationMinutes: service.durationMinutes,
-        });
+        const brain = evaluateJourneyBrain(
+          slotsForBrain,
+          {
+            serviceId: service.id,
+            providerId: service.providerId,
+            serviceTitle: service.title,
+            category: service.category,
+            cityId: service.cityId,
+            date: scheduledDate,
+            startTime: scheduledTime,
+            durationMinutes: service.durationMinutes,
+          },
+          {
+            maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay,
+            maxVisitsSameCityDay: setting.maxVisitsSameCityDay,
+            freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay,
+          }
+        );
 
         if (!brain.valid) {
           res.status(409).json({
@@ -984,7 +1086,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
-        // 5. Atomic creation with deterministic ID preventing concurrent double submissions
+        // 5. Atomic creation with strict Circuit A (manual coordination) vs Circuit B (partner portal) rules
         const priorTerminalAttempts = terminalReservations.filter(
           (r) =>
             r.folderId === folderId &&
@@ -1002,25 +1104,38 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           priorTerminalAttempts
         );
         const itemId = buildDeterministicItemId(reservationId);
-        const providerOwnerId = service.ownerId || 'manual_concierge';
+        // Circuit A (public_directory) NEVER dispatches automatically to an unverified owner; it goes to AMARO manual coordination queue
+        const providerOwnerId =
+          isCircuitBPartner && service.ownerId ? service.ownerId : 'manual_concierge';
+        const circuitType: 'circuit_a_directory' | 'circuit_b_partner' = isCircuitBPartner
+          ? 'circuit_b_partner'
+          : 'circuit_a_directory';
+        const coordinationStatus = isCircuitBPartner ? undefined : ('to_contact' as const);
         const notificationId =
           providerOwnerId !== 'manual_concierge'
             ? `notif-${reservationId.replace(/^res-/, '')}`
             : null;
 
+        const effectiveActivationMode = isCircuitBPartner
+          ? modeDecision.effectiveMode
+          : 'directory_concierge';
         const initialStatus =
-          modeDecision.effectiveMode === 'level_c_instant' ? 'confirmed' : 'pending_provider';
+          effectiveActivationMode === 'level_c_instant' ? 'confirmed' : 'pending_provider';
         const itemStage =
-          modeDecision.effectiveMode === 'level_c_instant' ? 'confirmed' : 'requested';
+          effectiveActivationMode === 'level_c_instant' ? 'confirmed' : 'requested';
         const dispatchChannel: ReservationDispatchChannel =
           providerOwnerId !== 'manual_concierge' ? 'amaro_portal' : 'manual_concierge';
         const dispatchStatus: ReservationDispatchStatus =
-          modeDecision.effectiveMode === 'level_c_instant'
+          effectiveActivationMode === 'level_c_instant'
             ? 'accepted'
             : providerOwnerId !== 'manual_concierge'
             ? 'sent'
             : 'prepared';
-        const responseDeadlineAt = new Date(Date.now() + 24 * 3600_000).toISOString();
+        const slaHours = Math.max(
+          1,
+          Number(service.providerResponseHours ?? setting.providerResponseHours ?? 24)
+        );
+        const responseDeadlineAt = new Date(Date.now() + slaHours * 3600_000).toISOString();
 
         const created = await store.createReservationAtomically(
           {
@@ -1048,13 +1163,22 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             pricingSnapshot: quote.pricingSnapshot,
             initialStatus,
             itemStage,
-            activationMode: modeDecision.effectiveMode,
-            allocatedStockId: modeDecision.matchedStock?.id || '',
-            allocatedUnits: modeDecision.matchedStock ? modeDecision.unitsNeeded : 0,
+            activationMode: effectiveActivationMode,
+            allocatedStockId:
+              effectiveActivationMode === 'level_c_instant'
+                ? modeDecision.matchedStock?.id || ''
+                : '',
+            allocatedUnits:
+              effectiveActivationMode === 'level_c_instant' && modeDecision.matchedStock
+                ? modeDecision.unitsNeeded
+                : 0,
             dispatchChannel,
             dispatchStatus,
             responseDeadlineAt,
             followUpCount: 0,
+            circuitType,
+            coordinationStatus,
+            localContributionXof: quote.localContributionAmount,
             referral: validatedReferral
               ? {
                   ...validatedReferral,
@@ -1065,21 +1189,95 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           caller.rawIdToken
         );
 
+        // Lot 1.1: Unified 4-channel notification layer with honest real statuses
+        if (store.recordNotificationDispatches) {
+          const nowIso = new Date().toISOString();
+          const targetRecipient =
+            providerOwnerId !== 'manual_concierge' ? providerOwnerId : 'admin_concierge_queue';
+          const emailConfigured = Boolean(process.env.SMTP_API_KEY?.trim());
+          const smsConfigured = Boolean(process.env.SMS_API_KEY?.trim());
+          const whatsappConfigured = Boolean(process.env.WHATSAPP_API_KEY?.trim());
+
+          const dispatches: NotificationDispatchDoc[] = [
+            {
+              id: `nd-app-${reservationId}`,
+              recipientId: targetRecipient,
+              reservationId,
+              folderId,
+              channel: 'in_app',
+              status: providerOwnerId !== 'manual_concierge' ? 'sent' : 'created',
+              title: `Demande ${circuitType === 'circuit_b_partner' ? 'Partenaire AMARO' : 'À coordonner (Circuit A)'} : ${service.title}`,
+              summary: `${scheduledDate} à ${scheduledTime} (${rawParticipants} pers.)`,
+              createdAtIso: nowIso,
+            },
+            {
+              id: `nd-mail-${reservationId}`,
+              recipientId: targetRecipient,
+              reservationId,
+              folderId,
+              channel: 'email',
+              status: emailConfigured ? 'created' : 'channel_unconfigured',
+              title: `Notification e-mail : ${service.title}`,
+              summary: emailConfigured
+                ? 'Prêt pour envoi SMTP'
+                : 'Canal e-mail non configuré (aucune clé SMTP fournie)',
+              createdAtIso: nowIso,
+            },
+            {
+              id: `nd-sms-${reservationId}`,
+              recipientId: targetRecipient,
+              reservationId,
+              folderId,
+              channel: 'sms',
+              status: smsConfigured ? 'created' : 'channel_unconfigured',
+              title: `Notification SMS : ${service.title}`,
+              summary: smsConfigured
+                ? 'Prêt pour envoi SMS'
+                : 'Canal SMS non configuré (aucune clé SMS fournie)',
+              createdAtIso: nowIso,
+            },
+            {
+              id: `nd-wa-${reservationId}`,
+              recipientId: targetRecipient,
+              reservationId,
+              folderId,
+              channel: 'whatsapp',
+              status: whatsappConfigured ? 'created' : 'channel_unconfigured',
+              title: `Notification WhatsApp : ${service.title}`,
+              summary: whatsappConfigured
+                ? 'Prêt pour envoi WhatsApp API'
+                : 'Canal WhatsApp API non configuré (aucune clé fournie)',
+              createdAtIso: nowIso,
+            },
+          ];
+          await store.recordNotificationDispatches(dispatches, caller.rawIdToken);
+        }
+
         res.status(201).json({
           ok: true,
           reservationId: created.reservationId,
           itemId: created.itemId,
           status: initialStatus,
           paymentStatus: 'unpaid',
-          activationMode: modeDecision.effectiveMode,
+          circuitType,
+          coordinationStatus: coordinationStatus || null,
+          effectiveMarginPercent: quote.effectiveMarginPercent,
+          activationMode: effectiveActivationMode,
           fallbackReason: modeDecision.fallbackReason || null,
-          allocatedStockId: modeDecision.matchedStock?.id || null,
-          allocatedUnits: modeDecision.matchedStock ? modeDecision.unitsNeeded : 0,
+          allocatedStockId:
+            effectiveActivationMode === 'level_c_instant'
+              ? modeDecision.matchedStock?.id || null
+              : null,
+          allocatedUnits:
+            effectiveActivationMode === 'level_c_instant' && modeDecision.matchedStock
+              ? modeDecision.unitsNeeded
+              : 0,
           dispatchChannel,
           dispatchStatus,
           responseDeadlineAt,
           priceKnown: quote.priceKnown,
           referralAttached: Boolean(validatedReferral),
+          affiliateSkippedReason,
           breakdown: quote.breakdown,
           pricingSnapshot: quote.pricingSnapshot,
           involvesCityChange: brain.involvesCityChange,
@@ -1161,6 +1359,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         let notifTitle = '';
         let notifBody = '';
 
+        let nextCoordinationStatus:
+          | 'to_contact'
+          | 'contacted'
+          | 'confirmed'
+          | 'unavailable'
+          | 'quote_received'
+          | undefined = undefined;
+        let nextCoordinationContactedAt: string | undefined = undefined;
+        let nextCoordinationOutcome: string | undefined = undefined;
+
         if (action === 'client_accept_alternative') {
           if (!isClient) {
             res.status(403).json({ error: 'Seul le voyageur titulaire peut accepter cette alternative.' });
@@ -1238,7 +1446,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             nextDispatchStatus = 'accepted';
             notifKind = 'reservation';
             notifTitle = `Disponibilité confirmée : ${existing.serviceTitle}`;
-            notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement encadré AMARO.`;
+            notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement du solde sous 48 h.`;
           } else if (action === 'provider_propose_alternative') {
             nextStatus = 'alternative_proposed';
             nextDispatchStatus = 'response_received';
@@ -1253,6 +1461,64 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             notifBody = nextProposal || 'Le créneau demandé n’est pas disponible. Vous pouvez choisir une alternative dans le catalogue.';
           }
           notifRecipientId = existing.clientId;
+        } else if (action === 'admin_confirm_contacted') {
+          // Bloc 1 Circuit A: NEVER display "contacté" unless the administrator explicitly clicks "j'ai contacté l'établissement"
+          if (!isAdmin) {
+            res.status(403).json({
+              error: 'Seul l’administrateur peut confirmer avoir réellement contacté l’établissement recensé.',
+            });
+            return;
+          }
+          nextCoordinationStatus = 'contacted';
+          nextCoordinationContactedAt = new Date().toISOString();
+          nextDispatchChannel = 'manual_concierge';
+          nextDispatchStatus = 'sent';
+          nextResponseDeadlineAt = new Date(Date.now() + 24 * 3600_000).toISOString();
+          nextCoordinationOutcome = String(req.body?.note || 'Établissement contacté manuellement par l’équipe AMARO.').slice(0, 480);
+        } else if (action === 'admin_record_coordination_result') {
+          if (!isAdmin) {
+            res.status(403).json({
+              error: 'Seul l’administrateur peut enregistrer le retour d’un établissement recensé (Circuit A).',
+            });
+            return;
+          }
+          const outcomeKind = String(req.body?.outcomeKind || '').trim();
+          const outcomeNote = String(req.body?.note || '').trim().slice(0, 480);
+          const reqDate = String(req.body?.scheduledDate || existing.scheduledDate).trim();
+          const reqTime = String(req.body?.scheduledTime || existing.scheduledTime).trim();
+          if (isValidIsoDate(reqDate)) nextDate = reqDate;
+          if (isValidTimeHhMm(reqTime)) nextTime = reqTime;
+
+          if (outcomeKind === 'confirmed_available') {
+            nextCoordinationStatus = 'confirmed';
+            nextStatus = 'accepted';
+            nextDispatchStatus = 'accepted';
+            nextCoordinationOutcome = outcomeNote || 'Disponibilité et tarif confirmés par l’établissement auprès d’AMARO.';
+            notifRecipientId = existing.clientId;
+            notifKind = 'reservation';
+            notifTitle = `Disponibilité vérifiée par AMARO : ${existing.serviceTitle}`;
+            notifBody = nextCoordinationOutcome;
+          } else if (outcomeKind === 'alternative_proposed' || outcomeKind === 'quote_received') {
+            nextCoordinationStatus = 'quote_received';
+            nextStatus = 'alternative_proposed';
+            nextDispatchStatus = 'response_received';
+            nextProposal = outcomeNote || 'Devis ou créneau alternatif reçu par l’équipe AMARO.';
+            nextCoordinationOutcome = nextProposal;
+            notifRecipientId = existing.clientId;
+            notifKind = 'alternative';
+            notifTitle = `Retour de coordination AMARO : ${existing.serviceTitle}`;
+            notifBody = nextProposal;
+          } else {
+            nextCoordinationStatus = 'unavailable';
+            nextStatus = 'rejected';
+            nextDispatchStatus = 'rejected';
+            nextProposal = outcomeNote || 'Établissement indisponible ou injoignable. Sélectionnez une alternative réelle du catalogue.';
+            nextCoordinationOutcome = nextProposal;
+            notifRecipientId = existing.clientId;
+            notifKind = 'reservation';
+            notifTitle = `Indisponibilité signalée après vérification : ${existing.serviceTitle}`;
+            notifBody = nextProposal;
+          }
         } else if (
           action === 'admin_mark_dispatched' ||
           action === 'admin_mark_send_failed' ||
@@ -1289,10 +1555,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             nextDispatchStatus = 'expired';
             nextProposal =
               String(req.body?.alternativeProposal || '').trim().slice(0, 780) ||
-              'Délai de réponse prestataire expiré sans confirmation. Aucune réservation fictive n’a été validée ; veuillez sélectionner une alternative.';
+              'Expirée sans réponse dans le délai imparti. Aucune réservation fictive n’a été validée ; veuillez sélectionner une alternative.';
             notifRecipientId = existing.clientId;
             notifKind = 'reservation';
-            notifTitle = `Délai de réponse expiré : ${existing.serviceTitle}`;
+            notifTitle = `Expirée sans réponse : ${existing.serviceTitle}`;
             notifBody = nextProposal;
           }
         } else if (
@@ -1332,6 +1598,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           becomesTerminal &&
           Boolean(existing.allocatedStockId) &&
           Number(existing.allocatedUnits || 0) > 0;
+        const cancelAffiliateReferral =
+          nextStatus === 'cancelled' || nextStatus === 'refunded' || nextStatus === 'rejected';
 
         const notifId = notifRecipientId
           ? `notif-tr-${crypto
@@ -1353,6 +1621,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             dispatchStatus: nextDispatchStatus,
             responseDeadlineAt: nextResponseDeadlineAt,
             followUpCount: nextFollowUpCount,
+            coordinationStatus: nextCoordinationStatus,
+            coordinationContactedAt: nextCoordinationContactedAt,
+            coordinationOutcome: nextCoordinationOutcome,
+            cancelAffiliateReferral,
             releaseStock: shouldReleaseStock
               ? {
                   stockId: existing.allocatedStockId!,
@@ -1379,10 +1651,14 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           reservationId,
           status: nextStatus,
           paymentStatus: nextPaymentStatus,
+          coordinationStatus: nextCoordinationStatus ?? existing.coordinationStatus ?? null,
+          coordinationContactedAt:
+            nextCoordinationContactedAt ?? existing.coordinationContactedAt ?? null,
           dispatchChannel: nextDispatchChannel ?? existing.dispatchChannel ?? null,
           dispatchStatus: nextDispatchStatus ?? existing.dispatchStatus ?? null,
           followUpCount: nextFollowUpCount ?? existing.followUpCount ?? 0,
           stockReleased: shouldReleaseStock,
+          affiliateCancelled: cancelAffiliateReferral,
           scheduledDate: nextDate,
           scheduledTime: nextTime,
           receiptEligible: nextPaymentStatus === 'succeeded',
@@ -1482,9 +1758,881 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   );
 
   // ===========================================================================
-  // 4. AMARO CONVERSATIONAL ASSISTANT — NATURAL DIALOGUE + REAL CATALOGUE + ZERO TECHNICAL ERRORS
+  // 3C. GOVERNANCE, DOSSIER FEE, AUTONOMOUS ALTERNATIVES, RECALCULATION & EXPORTS
+  //     (Blocs 1, 2, 3, 7, 10 + Lot 1 + Précisions 1, 2, 3)
   // ===========================================================================
+  app.post(
+    '/api/amaro/providers/register',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const sourceFlow = String(req.body?.sourceFlow || '').trim();
+      const conventionAccepted = req.body?.conventionAccepted === true;
+      const companyName = String(req.body?.companyName || '').trim();
+      const category = String(req.body?.category || '').trim() as ServiceCategory;
+      const cityId = String(req.body?.cityId || '').trim();
+      const phone = String(req.body?.phone || '').trim();
+      const contactEmail = String(req.body?.contactEmail || caller.email || '').trim();
+      const description = String(req.body?.description || '').trim();
+
+      // Bloc 1: "Promouvoir mes services" is the ONLY authorized provider registration entry point
+      if (sourceFlow !== 'promote_services') {
+        res.status(403).json({
+          error:
+            'Inscription refusée : « Promouvoir mes services » est le seul point d’entrée autorisé pour inscrire un prestataire sur AMARO.VOYAGE.',
+          redirectView: 'promote_services',
+        });
+        return;
+      }
+      if (!conventionAccepted) {
+        res.status(400).json({
+          error:
+            'Vous devez lire et accepter la convention prestataire AMARO avant de créer votre compte prestataire.',
+        });
+        return;
+      }
+      if (companyName.length < 2 || !VALID_CATEGORIES.has(category) || !cityId) {
+        res.status(400).json({
+          error: 'Veuillez renseigner le nom commercial, la catégorie et la ville principale.',
+        });
+        return;
+      }
+
+      try {
+        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const nowIso = new Date().toISOString();
+        const providerId = `prv-${caller.uid.slice(0, 24)}`;
+        if (store.registerProviderFromPromoteFlow) {
+          await store.registerProviderFromPromoteFlow(
+            {
+              providerId,
+              ownerId: caller.uid,
+              companyName,
+              category,
+              cityId,
+              countryCode: 'BJ',
+              phone,
+              contactEmail,
+              description,
+              conventionVersion: setting.conventionVersion || '1.0',
+              conventionAcceptedAt: nowIso,
+            },
+            caller.rawIdToken
+          );
+        }
+        res.status(201).json({
+          ok: true,
+          providerId,
+          verificationStatus: 'pending',
+          conventionVersion: setting.conventionVersion || '1.0',
+          conventionAcceptedAt: nowIso,
+          publiclyBookable: false,
+          notice:
+            'Votre demande est enregistrée avec le statut « En attente de validation ». Vos offres ne seront visibles et réservables qu’après vérification par l’administration AMARO.',
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Inscription prestataire impossible.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/folders/:folderId/declare-fee',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const folderId = String(req.params.folderId || '').trim();
+      const transactionRef = String(
+        req.body?.transactionRef || req.body?.transactionReference || ''
+      ).trim();
+      const payerName = String(
+        req.body?.payerName || req.caller?.email || ''
+      ).trim();
+      const payerPhone = String(req.body?.payerPhone || '').trim();
+      const declaredDate =
+        String(req.body?.declaredDate || '').trim() || new Date().toISOString().slice(0, 10);
+      const termsAccepted =
+        req.body?.termsAccepted === true || req.body?.acceptedCgv === true;
+
+      if (!folderId || !store.declareDossierFee) {
+        res.status(400).json({ error: 'Déclaration des frais de dossier indisponible.' });
+        return;
+      }
+      if (!termsAccepted) {
+        res.status(400).json({
+          error:
+            'L’acceptation explicite des conditions générales et de la politique d’annulation est obligatoire avant le règlement des frais de dossier.',
+        });
+        return;
+      }
+      if (transactionRef.length < 3 || payerName.length < 2) {
+        res.status(400).json({
+          error:
+            'Veuillez indiquer la référence Mobile Money et le nom du titulaire ayant effectué le paiement.',
+        });
+        return;
+      }
+
+      try {
+        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const result = await store.declareDossierFee(
+          {
+            folderId,
+            ownerId: caller.uid,
+            transactionRef,
+            payerName,
+            payerPhone,
+            declaredDate,
+            termsAcceptedVersion: setting.termsVersion || '1.0',
+            feeAmountXof: setting.dossierFeeXof ?? 20_000,
+            maxPendingFolders: setting.maxPendingPaymentFolders ?? 1,
+          },
+          caller.rawIdToken
+        );
+        res.json({
+          ok: true,
+          folderId,
+          ...result,
+          verificationHours: setting.dossierVerificationHours ?? 24,
+          deductibleAmountXof: setting.dossierFeeXof ?? 20_000,
+        });
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de déclaration des frais.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/folders/:folderId/verify-fee',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const folderId = String(req.params.folderId || '').trim();
+      const decision = req.body?.decision === 'approve' ? 'approve' : 'reject';
+      const reason = String(req.body?.reason || '').trim();
+
+      if (!folderId || !store.verifyDossierFee) {
+        res.status(400).json({ error: 'Vérification des frais indisponible.' });
+        return;
+      }
+
+      try {
+        const result = await store.verifyDossierFee(
+          {
+            folderId,
+            adminUid: caller.uid,
+            decision,
+            reason,
+          },
+          caller.rawIdToken
+        );
+        res.json({ ok: true, folderId, ...result });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de vérification des frais.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/accounts/:userId/governance',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const userId = String(req.params.userId || '').trim();
+      const blockedForRequests = req.body?.blockedForRequests === true;
+      const blockReason = String(req.body?.blockReason || '').trim().slice(0, 360);
+
+      if (!userId || !store.updateAccountGovernance) {
+        res.status(400).json({ error: 'Gouvernance de compte indisponible.' });
+        return;
+      }
+
+      try {
+        const existing = store.getAccountGovernance
+          ? await store.getAccountGovernance(userId, caller.rawIdToken)
+          : null;
+        const doc = {
+          id: userId,
+          userId,
+          abandonmentCount: existing?.abandonmentCount ?? 0,
+          flaggedAtRisk: existing?.flaggedAtRisk ?? blockedForRequests,
+          blockedForRequests,
+          blockReason: blockedForRequests
+            ? blockReason || 'Compte suspendu manuellement par l’administration AMARO.'
+            : '',
+          updatedBy: caller.uid,
+          updatedAtIso: new Date().toISOString(),
+        };
+        await store.updateAccountGovernance(doc, caller.rawIdToken);
+        res.json({ ok: true, governance: doc });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de mise à jour du compte.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/admin/notifications-issues',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      try {
+        const issues = store.listFailedOrUnconfiguredNotifications
+          ? await store.listFailedOrUnconfiguredNotifications(caller.rawIdToken)
+          : [];
+        res.json({
+          ok: true,
+          channels: {
+            in_app: { configured: true, status: 'active' },
+            email: {
+              configured: Boolean(process.env.SMTP_API_KEY?.trim()),
+              status: process.env.SMTP_API_KEY?.trim() ? 'configured' : 'channel_unconfigured',
+            },
+            sms: {
+              configured: Boolean(process.env.SMS_API_KEY?.trim()),
+              status: process.env.SMS_API_KEY?.trim() ? 'configured' : 'channel_unconfigured',
+            },
+            whatsapp: {
+              configured: Boolean(process.env.WHATSAPP_API_KEY?.trim()),
+              status: process.env.WHATSAPP_API_KEY?.trim()
+                ? 'configured'
+                : 'channel_unconfigured',
+            },
+          },
+          issues,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  app.post('/api/amaro/admin/evaluate-deadlines', async (req: Request, res: Response) => {
+    // Lot 1.2: Protected Admin endpoint (supports either Admin Bearer token OR X-Amaro-Cron-Secret for external scheduler)
+    const configuredSecret = process.env.AMARO_CRON_SECRET?.trim();
+    const headerSecret = String(req.headers['x-amaro-cron-secret'] || '').trim();
+    let actorUid = 'scheduler_cron';
+    let rawIdToken = '';
+
+    if (configuredSecret && headerSecret && headerSecret === configuredSecret) {
+      actorUid = 'external_scheduler';
+    } else {
+      const bearer = extractBearerToken(req);
+      if (!bearer) {
+        res.status(401).json({
+          error: 'Authentification administrateur ou secret planificateur requis.',
+        });
+        return;
+      }
+      try {
+        const decoded = await verifyToken(bearer);
+        const isAdmin = await checkCallerAdminFlag(
+          decoded.uid,
+          decoded.email,
+          decoded.emailVerified,
+          bearer
+        );
+        if (!isAdmin) {
+          res.status(403).json({ error: 'Accès réservé à l’administrateur AMARO.' });
+          return;
+        }
+        actorUid = decoded.uid;
+        rawIdToken = bearer;
+      } catch {
+        res.status(401).json({ error: 'Jeton administrateur invalide.' });
+        return;
+      }
+    }
+
+    if (!store.evaluateDeadlinesAndExpirations) {
+      res.status(501).json({ error: 'Évaluation des délais non supportée par le magasin actif.' });
+      return;
+    }
+
+    try {
+      const setting = await store.getSystemSetting('BJ', rawIdToken || undefined);
+      const summary = await store.evaluateDeadlinesAndExpirations(
+        {
+          nowIso: typeof req.body?.nowIso === 'string' ? req.body.nowIso : undefined,
+          folderId: typeof req.body?.folderId === 'string' ? req.body.folderId : undefined,
+          actorUid,
+          abandonmentRiskThreshold: setting.abandonmentRiskThreshold ?? 3,
+          balancePaymentHours: setting.balancePaymentHours ?? 48,
+        },
+        rawIdToken
+      );
+      res.json({
+        ok: true,
+        evaluatedAt: new Date().toISOString(),
+        schedulerMode:
+          'Exécution à la demande (ou via planificateur externe branché par le propriétaire)',
+        ...summary,
+      });
+    } catch (err) {
+      res.status(500).json({ error: redactSecrets(err) || 'Échec d’évaluation des délais.' });
+    }
+  });
+
+  async function resolveServiceOrOfficial(
+    serviceId: string,
+    rawIdToken?: string
+  ): Promise<ServerServiceRecord | null> {
+    if (!serviceId) return null;
+    const fromStore = await store.getService(serviceId, rawIdToken);
+    if (fromStore) return fromStore;
+    return OFFICIAL_PUBLIC_AND_DEMO_SERVICES[serviceId] || null;
+  }
+
+  async function resolveMergedPublishedCatalogue(
+    rawIdToken?: string
+  ): Promise<ServerServiceRecord[]> {
+    const fromStore = store.listAllPublishedServices
+      ? await store.listAllPublishedServices(rawIdToken)
+      : [];
+    const byId = new Map<string, ServerServiceRecord>();
+    for (const svc of Object.values(OFFICIAL_PUBLIC_AND_DEMO_SERVICES)) {
+      if (svc.status === 'published') {
+        byId.set(svc.id, svc);
+      }
+    }
+    for (const svc of fromStore) {
+      if (svc.status === 'published') {
+        byId.set(svc.id, svc);
+      }
+    }
+    return Array.from(byId.values());
+  }
+
+  app.post('/api/amaro/alternatives', async (req: Request, res: Response) => {
+    const rl = publicApiLimiter.check(`alt:${getClientIp(req)}`);
+    if (!rl.allowed) {
+      res.status(429).json({ error: 'Trop de recherches d’alternatives.' });
+      return;
+    }
+
+    const failedServiceId = String(
+      req.body?.failedServiceId || req.body?.serviceId || ''
+    ).trim();
+    const category = String(req.body?.category || 'accommodation').trim() as ServiceCategory;
+    const cityId = String(req.body?.cityId || 'cotonou').trim();
+    const scheduledDate =
+      String(req.body?.scheduledDate || '').trim() || new Date().toISOString().slice(0, 10);
+    const scheduledTime = String(req.body?.scheduledTime || '09:00').trim();
+    const participants = Math.max(1, Math.min(100, Number(req.body?.participants || 1)));
+    const currentUnitPriceXof = Math.max(
+      0,
+      Number(req.body?.currentUnitPriceXof ?? req.body?.maxBudgetXof ?? 0)
+    );
+    const widenSearch =
+      req.body?.widenSearch === true || req.body?.broadenCitySearch === true;
+    const rawSlots: unknown[] = Array.isArray(req.body?.existingSlots)
+      ? req.body.existingSlots.slice(0, 100)
+      : [];
+
+    if (!VALID_CATEGORIES.has(category)) {
+      res.status(400).json({ error: 'Catégorie invalide.' });
+      return;
+    }
+
+    try {
+      const bearer = extractBearerToken(req) || undefined;
+      const setting = await store.getSystemSetting('BJ', bearer);
+      const catalogue = await resolveMergedPublishedCatalogue(bearer);
+      const existingFailed = await resolveServiceOrOfficial(failedServiceId, bearer);
+      const failedService: ServerServiceRecord = existingFailed
+        ? {
+            ...existingFailed,
+            ...(currentUnitPriceXof > 0
+              ? { priceAmount: currentUnitPriceXof, priceKnown: true }
+              : {}),
+          }
+        : {
+            id: failedServiceId || '__virtual_failed_service__',
+            providerId: '__virtual_provider__',
+            ownerId: 'manual_concierge',
+            title: 'Prestation à remplacer',
+            category,
+            countryCode: 'BJ',
+            cityId,
+            priceAmount: currentUnitPriceXof,
+            priceKnown: currentUnitPriceXof > 0,
+            currency: 'XOF',
+            durationMinutes: 90,
+            capacity: participants,
+            status: 'published',
+            dataOrigin: 'public_directory',
+          };
+
+      const existingSlots: ScheduleSlot[] = rawSlots
+        .filter((it): it is Record<string, any> => Boolean(it && typeof it === 'object'))
+        .map((it) => ({
+          serviceId: String(it.serviceId || ''),
+          providerId: String(it.providerId || ''),
+          serviceTitle: String(it.serviceTitle || ''),
+          category: (VALID_CATEGORIES.has(String(it.category || ''))
+            ? it.category
+            : 'site') as ServiceCategory,
+          cityId: String(it.cityId || ''),
+          date: String(it.date || ''),
+          startTime: String(it.startTime || '09:00'),
+          endTime: String(it.endTime || '10:30'),
+          durationMinutes: Number(it.durationMinutes || 90),
+        }));
+
+      const result = findSmartAlternatives({
+        allServices: catalogue,
+        failedService,
+        scheduledDate,
+        scheduledTime,
+        participants,
+        existingSchedule: existingSlots,
+        budgetTolerancePercent: setting.alternativeBudgetTolerancePercent ?? 25,
+        widenSearch,
+        includeDemoData: Boolean(setting.includeDemoData),
+      });
+
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(500).json({ error: redactSecrets(err) });
+    }
+  });
+
+  app.post(
+    '/api/amaro/folders/:folderId/recalculate',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const folderId = String(req.params.folderId || '').trim();
+      const confirmApply = req.body?.confirmApply === true;
+      const replacedServiceId = String(req.body?.replacedServiceId || '').trim() || undefined;
+      const replacementCandidate =
+        req.body?.replacement && typeof req.body.replacement === 'object'
+          ? req.body.replacement
+          : req.body?.replacementServiceId
+          ? {
+              serviceId: String(req.body.replacementServiceId),
+              date: req.body?.scheduledDate,
+              startTime: req.body?.scheduledTime,
+              participants: req.body?.participants,
+            }
+          : null;
+
+      try {
+        const folder = await store.getJourneyFolder(folderId, caller.rawIdToken);
+        if (!folder || folder.ownerId !== caller.uid) {
+          res.status(403).json({ error: 'Accès refusé à ce dossier de voyage.' });
+          return;
+        }
+        const setting = await store.getSystemSetting(folder.countryCode || 'BJ', caller.rawIdToken);
+        const { scheduleSlots } = await store.listClientScheduleAndActiveReservations(
+          folderId,
+          caller.uid,
+          caller.rawIdToken
+        );
+
+        const rawBeforeCosts: Record<string, number> =
+          req.body?.beforeCostsByServiceId && typeof req.body.beforeCostsByServiceId === 'object'
+            ? req.body.beforeCostsByServiceId
+            : {};
+
+        let beforeTotalXof = 0;
+        const beforeSlots: Array<ScheduleSlot & { costXof: number }> = [];
+        for (const s of scheduleSlots) {
+          const sid = s.serviceId || '';
+          let c = Number((sid ? rawBeforeCosts[sid] : 0) || 0);
+          if (c <= 0 && sid) {
+            const svc = await resolveServiceOrOfficial(sid, caller.rawIdToken);
+            if (svc && svc.priceKnown !== false && svc.priceAmount > 0) {
+              const q = computeAuthoritativeQuote({
+                unitPrice: svc.priceAmount,
+                priceKnown: svc.priceKnown,
+                participants: Math.max(1, Number(replacementCandidate?.participants || 1)),
+                currency: svc.currency,
+                displayCurrency: 'XOF',
+                setting,
+                dataOrigin: svc.dataOrigin,
+                rates: { EUR: 1, XOF: BCEAO_EUR_TO_XOF, USD: 1.08 },
+                rateSource: 'Parité officielle BCEAO',
+                rateStatus: 'actualise',
+              });
+              c = q.convertedBreakdown.totalAmount;
+            }
+          }
+          beforeTotalXof += c;
+          beforeSlots.push({ ...s, costXof: c });
+        }
+
+        let afterTotalXof = beforeTotalXof;
+        let afterSlots: ScheduleSlot[] = beforeSlots.map(({ costXof: _cost, ...slot }) => slot);
+        let replacementSummary = '';
+        let valid = true;
+        let conflicts: string[] = [];
+        let warnings: string[] = [];
+        const dependentAlerts: string[] = [];
+
+        if (replacementCandidate && typeof replacementCandidate === 'object') {
+          const repService = await resolveServiceOrOfficial(
+            String(replacementCandidate.serviceId || ''),
+            caller.rawIdToken
+          );
+          if (!repService) {
+            res.status(404).json({ error: 'Prestation de remplacement introuvable.' });
+            return;
+          }
+
+          const repDate = String(replacementCandidate.date || scheduledOrToday(beforeSlots));
+          const repTime = String(replacementCandidate.startTime || '10:00');
+          const repParticipants = Math.max(1, Number(replacementCandidate.participants || 1));
+
+          const replacedItems = beforeSlots.filter(
+            (s) => replacedServiceId && s.serviceId === replacedServiceId
+          );
+          const replacedOldCostXof = replacedItems.reduce((acc, s) => acc + s.costXof, 0);
+
+          const reval = computeScheduleAndDependenciesRevalidation({
+            existingSchedule: beforeSlots.map(({ costXof: _cost, ...slot }) => slot),
+            replacedSlotPredicate: (slot) =>
+              Boolean(replacedServiceId && slot.serviceId === replacedServiceId),
+            replacementService: repService,
+            scheduledDate: repDate,
+            scheduledTime: repTime,
+            participants: repParticipants,
+            setting,
+            oldTotalAmountXof: replacedOldCostXof,
+            rates: { EUR: 1, XOF: BCEAO_EUR_TO_XOF, USD: 1.08 },
+          });
+
+          valid = reval.valid;
+          conflicts = reval.conflicts;
+          warnings = reval.warnings;
+          afterSlots = reval.afterSlots;
+
+          if (reval.replacesAllPrincipalTransport) {
+            const allRemovedCost = beforeSlots
+              .filter(
+                (s) =>
+                  (replacedServiceId && s.serviceId === replacedServiceId) ||
+                  s.category === 'transport'
+              )
+              .reduce((acc, s) => acc + s.costXof, 0);
+            afterTotalXof = beforeTotalXof - allRemovedCost + reval.newTotalAmountXof;
+            dependentAlerts.push(
+              'Règle du transporteur principal unique : ce transporteur remplace l’ensemble des liaisons principales du dossier.'
+            );
+          } else {
+            afterTotalXof = beforeTotalXof + reval.deltaAmountXof;
+          }
+
+          replacementSummary = `${repService.title} (${repDate} à ${repTime})`;
+        } else {
+          // Revalidate current itinerary sequentially without replacement
+          const built: ScheduleSlot[] = [];
+          for (const slot of afterSlots) {
+            const check = evaluateJourneyBrain(
+              built,
+              {
+                serviceId: slot.serviceId,
+                providerId: slot.providerId,
+                serviceTitle: slot.serviceTitle,
+                category: slot.category,
+                cityId: slot.cityId,
+                date: slot.date,
+                startTime: slot.startTime,
+                durationMinutes: slot.durationMinutes,
+              },
+              {
+                maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay ?? 1,
+                maxVisitsSameCityDay: setting.maxVisitsSameCityDay ?? 2,
+                freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay ?? 1,
+              }
+            );
+            if (!check.valid) {
+              valid = false;
+              conflicts.push(...check.conflicts);
+            }
+            warnings.push(...check.warnings);
+            built.push(slot);
+          }
+        }
+
+        const deltaXof = Math.round(afterTotalXof - beforeTotalXof);
+        const dossierDeductionXof =
+          folder.dossierFeeStatus === 'validated'
+            ? Number(folder.dossierFeeAmountXof ?? setting.dossierFeeXof ?? 20_000)
+            : 0;
+        const summaryFr = replacementSummary
+          ? `Itinéraire revalidé avec « ${replacementSummary} » (${afterSlots.length} étape(s)).`
+          : `Itinéraire revalidé (${afterSlots.length} étape(s)).`;
+
+        if (confirmApply && valid && store.applyRecalculatedReplacement) {
+          await store.applyRecalculatedReplacement(
+            {
+              folderId,
+              clientId: caller.uid,
+              changeHistorySummary: summaryFr,
+              deltaAmountXof: deltaXof,
+            },
+            caller.rawIdToken
+          );
+        }
+
+        // Lot 1.4: NOTHING is applied without explicit client approval (confirmApply === true)
+        res.json({
+          ok: true,
+          applied: Boolean(confirmApply && valid),
+          requiresClientConfirmation: !confirmApply,
+          valid,
+          conflicts,
+          warnings,
+          dependentAlerts,
+          beforeTotalXof: Math.round(beforeTotalXof),
+          afterTotalXof: Math.round(afterTotalXof),
+          summaryFr,
+          before: {
+            itemCount: beforeSlots.length,
+            totalXof: Math.round(beforeTotalXof),
+            netAfterDossierFeeXof: Math.max(0, Math.round(beforeTotalXof - dossierDeductionXof)),
+          },
+          after: {
+            itemCount: afterSlots.length,
+            totalXof: Math.round(afterTotalXof),
+            netAfterDossierFeeXof: Math.max(0, Math.round(afterTotalXof - dossierDeductionXof)),
+            replacementSummary,
+          },
+          deltaXof,
+          dossierDeductionXof,
+          changeRecord: confirmApply
+            ? {
+                id: `chg-${Date.now()}`,
+                folderId,
+                changeType: 'alternative_accepted',
+                beforeSummary: `${beforeSlots.length} étape(s) · ${Math.round(beforeTotalXof).toLocaleString('fr-FR')} FCFA`,
+                afterSummary: `${afterSlots.length} étape(s) · ${Math.round(afterTotalXof).toLocaleString('fr-FR')} FCFA (${replacementSummary || 'recalculé'})`,
+                deltaCostXof: deltaXof,
+                approvedByClient: true,
+                createdAtIso: new Date().toISOString(),
+              }
+            : null,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  function scheduledOrToday(slots: Array<{ date: string }>): string {
+    return slots[0]?.date || new Date().toISOString().slice(0, 10);
+  }
+
+  app.post('/api/amaro/rescue/incident', async (req: Request, res: Response) => {
+    // Bloc 3: Dynamic Rescue mode ("Signaler un imprévu")
+    const incidentType = String(req.body?.incidentType || 'late_arrival').trim();
+    const cityId = String(req.body?.cityId || 'cotonou').trim();
+    const category = VALID_CATEGORIES.has(String(req.body?.category || ''))
+      ? (req.body.category as ServiceCategory)
+      : 'transport';
+    const scheduledDate =
+      String(req.body?.scheduledDate || '').trim() || new Date().toISOString().slice(0, 10);
+    const note = String(req.body?.note || req.body?.notes || '').trim().slice(0, 400);
+
+    try {
+      const bearer = extractBearerToken(req) || undefined;
+      const setting = await store.getSystemSetting('BJ', bearer);
+      const catalogue = await resolveMergedPublishedCatalogue(bearer);
+      const failedServiceId = String(req.body?.serviceId || '').trim();
+      const existingFailed = await resolveServiceOrOfficial(failedServiceId, bearer);
+      const failedService: ServerServiceRecord =
+        existingFailed || {
+          id: failedServiceId || '__rescue_incident_placeholder__',
+          providerId: '__rescue_provider__',
+          ownerId: 'manual_concierge',
+          title: 'Prestation signalée',
+          category,
+          countryCode: 'BJ',
+          cityId,
+          priceAmount: 0,
+          priceKnown: false,
+          currency: 'XOF',
+          durationMinutes: 90,
+          capacity: Math.max(1, Number(req.body?.participants || 1)),
+          status: 'published',
+          dataOrigin: 'public_directory',
+        };
+
+      const alt = findSmartAlternatives({
+        allServices: catalogue,
+        failedService,
+        scheduledDate,
+        scheduledTime: String(req.body?.scheduledTime || '14:00'),
+        participants: Math.max(1, Number(req.body?.participants || 1)),
+        existingSchedule: [],
+        budgetTolerancePercent: 50,
+        widenSearch: false,
+        includeDemoData: Boolean(setting.includeDemoData),
+      });
+
+      const whatsappMessage = `Bonjour AMARO, je signale un imprévu sur place (${incidentType}) à ${cityId} le ${scheduledDate}. ${note}`;
+      const cleanWaNumber =
+        setting.amaroWhatsappNumber && setting.amaroWhatsappNumber !== OWNER_PLACEHOLDER
+          ? setting.amaroWhatsappNumber.replace(/[^0-9]/g, '')
+          : '';
+      const impactSummary =
+        incidentType === 'fatigue_pause'
+          ? 'Nous vous proposons d’alléger la demi-journée et de reporter les visites non engagées sans toucher à votre hébergement.'
+          : 'Voici les alternatives réelles disponibles dans la même zone ainsi que le contact direct de coordination AMARO.';
+
+      res.json({
+        ok: true,
+        incidentType,
+        guidance: impactSummary,
+        impactSummary,
+        alternatives: alt.alternatives,
+        emptyReason: alt.honestEmptyMessage,
+        emergencyNumbers: DEFAULT_EMERGENCY_NUMBERS_BJ,
+        whatsappContactConfigured: Boolean(cleanWaNumber),
+        whatsappUrl: cleanWaNumber
+          ? `https://wa.me/${cleanWaNumber}?text=${encodeURIComponent(whatsappMessage)}`
+          : null,
+        prefilledMessage: whatsappMessage,
+      });
+    } catch (err) {
+      res.status(500).json({ error: redactSecrets(err) });
+    }
+  });
+
+  app.get(
+    '/api/amaro/admin/export-operational',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      // Bloc 7.3 + Précision 2: Strictly Admin-only operational export
+      const caller = req.caller!;
+      if (!store.exportOperationalDataAdmin) {
+        res.status(501).json({ error: 'Export opérationnel non configuré.' });
+        return;
+      }
+      try {
+        const payload = await store.exportOperationalDataAdmin(caller.rawIdToken);
+        res.json({ ok: true, ...payload });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/account/export-personal',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      // Bloc 10.3 + Précision 2: Personal RGPD export strictly for the authenticated client
+      const caller = req.caller!;
+      if (!store.exportPersonalDataClient) {
+        res.status(501).json({ error: 'Export personnel non configuré.' });
+        return;
+      }
+      try {
+        const payload = await store.exportPersonalDataClient(
+          caller.uid,
+          caller.email,
+          caller.rawIdToken
+        );
+        res.json({ ok: true, ...payload });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/account/delete',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      // Bloc 10.3 + Précision 3: Compliant account deletion (deletes PII & ID vaults, retains minimal financial records & audit log)
+      const caller = req.caller!;
+      if (req.body?.confirmDelete !== true) {
+        res.status(400).json({
+          error: 'Veuillez confirmer explicitement la demande de suppression de compte.',
+        });
+        return;
+      }
+      if (!store.deleteClientAccountCompliant) {
+        res.status(501).json({ error: 'Suppression de compte non configurée.' });
+        return;
+      }
+      try {
+        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const result = await store.deleteClientAccountCompliant(
+          {
+            userId: caller.uid,
+            retentionPolicyLabel: setting.financialRetentionDuration || OWNER_PLACEHOLDER,
+          },
+          caller.rawIdToken
+        );
+        res.json({
+          ok: true,
+          ...result,
+          legalDisclosure:
+            'Vos données personnelles et vos pièces d’identité chiffrées ont été supprimées. Conformément aux obligations comptables et de sécurité, seuls les enregistrements financiers minimaux (références de transaction, montants, dates) et le journal d’audit anonymisé sont conservés selon la durée légale applicable.',
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  // ===========================================================================
+  // 4. AMARO CONVERSATIONAL ASSISTANT — FAST (<3.5s) + DRAFT ITINERARY GENERATOR
+  // ===========================================================================
+  const assistantResponseCache = new Map<
+    string,
+    {
+      reply: string;
+      draftItinerary: AssistantDraftItinerary | null;
+      cachedAt: number;
+    }
+  >();
+
+  app.post('/api/amaro/assistant/generate-draft', async (req: Request, res: Response) => {
+    const rl = publicApiLimiter.check(`draft:${getClientIp(req)}`);
+    if (!rl.allowed) {
+      res.status(429).json({ error: 'Trop de générations rapprochées.' });
+      return;
+    }
+    const rawCitiesInput = Array.isArray(req.body?.preferredCities)
+      ? req.body.preferredCities
+      : Array.isArray(req.body?.cityIds)
+      ? req.body.cityIds
+      : ['cotonou', 'ouidah'];
+    const rawCities: string[] = rawCitiesInput.map(String).slice(0, 6);
+    const daysCount = Math.max(2, Math.min(14, Number(req.body?.daysCount || 4)));
+    const travelersCount = Math.max(
+      1,
+      Math.min(12, Number(req.body?.travelersCount ?? req.body?.travelers ?? 2))
+    );
+    const intentionSummary = String(
+      req.body?.intentionSummary || req.body?.intention || 'Découverte équilibrée'
+    )
+      .trim()
+      .slice(0, 80);
+    const rawStart = String(req.body?.startDateIso || req.body?.startDate || '').trim();
+    const startDateIso = isValidIsoDate(rawStart) ? rawStart : undefined;
+
+    const draft = buildRealDraftItinerary({
+      preferredCities: rawCities,
+      daysCount,
+      travelersCount,
+      intentionSummary,
+      startDateIso,
+      dossierFeeXof: 20_000,
+    });
+    res.json({ ok: true, draftItinerary: draft });
+  });
+
   app.post('/api/amaro/assistant', async (req: Request, res: Response) => {
+    const startedMs = performance.now();
     // Optional token check to grant higher quota to verified travelers while preserving free unauthenticated access
     const bearer = extractBearerToken(req);
     let verifiedUid: string | null = null;
@@ -1514,7 +2662,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     const locale: 'fr' | 'en' = req.body?.locale === 'en' ? 'en' : 'fr';
     const rawContext = req.body?.journeyContext ?? null;
     const rawHistory: unknown[] = Array.isArray(req.body?.history)
-      ? req.body.history.slice(-16)
+      ? req.body.history.slice(-8)
       : [];
 
     if (!prompt || prompt.length > 1500) {
@@ -1535,7 +2683,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       .map(
         (item): AssistantChatHistoryItem => ({
           role: item.role === 'assistant' ? 'assistant' : 'user',
-          content: String(item.content || '').trim().slice(0, 1200),
+          content: String(item.content || '').trim().slice(0, 700),
         })
       )
       .filter((item) => item.content.length > 0);
@@ -1548,10 +2696,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         });
         return;
       }
-      serializedContext = JSON.stringify(rawContext);
-      if (serializedContext.length > 8_000) {
-        serializedContext = serializedContext.slice(0, 8_000);
-      }
+      serializedContext = JSON.stringify(rawContext).slice(0, 2_500);
     }
 
     const analysis = analyzeConversationAndCatalogue(
@@ -1561,15 +2706,56 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       locale
     );
 
-    // Unclear symbols/gibberish -> immediate polite human clarification without wasting tokens
     if (analysis.intent === 'unclear_gibberish') {
       res.json({
         reply: buildResilientHumanReply(analysis, locale),
         suggestedItems: [],
         suggestedActions: analysis.suggestedActions,
+        draftItinerary: null,
         activeCityId: analysis.activeCityId,
         activeCategory: analysis.activeCategory,
+        latencyMs: Math.round(performance.now() - startedMs),
         model: 'amaro-conversational-guard',
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const cacheKey = `${locale}|${Boolean(verifiedUid)}|${prompt.toLowerCase()}|${cleanHistory.length}`;
+    const cached = assistantResponseCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < 10 * 60_000 && !deps.geminiResponder) {
+      res.json({
+        reply: cached.reply,
+        suggestedItems: analysis.suggestedItems,
+        suggestedActions: analysis.suggestedActions,
+        draftItinerary: cached.draftItinerary,
+        activeCityId: analysis.activeCityId,
+        activeCategory: analysis.activeCategory,
+        cached: true,
+        latencyMs: Math.round(performance.now() - startedMs),
+        model: 'amaro-fast-cache',
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // Bloc 4 fast path: deterministic catalogue / itinerary answers respond immediately (<15 ms) without waiting on external LLM latency
+    if (analysis.canAnswerLocally && !deps.geminiResponder) {
+      const fastReply = buildResilientHumanReply(analysis, locale);
+      assistantResponseCache.set(cacheKey, {
+        reply: fastReply,
+        draftItinerary: analysis.draftItinerary,
+        cachedAt: Date.now(),
+      });
+      res.json({
+        reply: fastReply,
+        suggestedItems: analysis.suggestedItems,
+        suggestedActions: analysis.suggestedActions,
+        draftItinerary: analysis.draftItinerary,
+        activeCityId: analysis.activeCityId,
+        activeCategory: analysis.activeCategory,
+        latencyMs: Math.round(performance.now() - startedMs),
+        model: 'amaro-fast-catalogue-engine',
         generatedAt: new Date().toISOString(),
       });
       return;
@@ -1595,8 +2781,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           reply: cleanReply || buildResilientHumanReply(analysis, locale),
           suggestedItems: analysis.suggestedItems,
           suggestedActions: analysis.suggestedActions,
+          draftItinerary: analysis.draftItinerary,
           activeCityId: analysis.activeCityId,
           activeCategory: analysis.activeCategory,
+          latencyMs: Math.round(performance.now() - startedMs),
           model: 'gemini-3.8-flash',
           generatedAt: new Date().toISOString(),
         });
@@ -1609,9 +2797,11 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           reply: buildResilientHumanReply(analysis, locale),
           suggestedItems: analysis.suggestedItems,
           suggestedActions: analysis.suggestedActions,
+          draftItinerary: analysis.draftItinerary,
           activeCityId: analysis.activeCityId,
           activeCategory: analysis.activeCategory,
           degradedFallback: true,
+          latencyMs: Math.round(performance.now() - startedMs),
           model: 'amaro-catalogue-counselor',
           generatedAt: new Date().toISOString(),
         });
@@ -1628,7 +2818,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       });
 
       const multiTurnContents = [
-        ...cleanHistory.map((turn) => ({
+        ...cleanHistory.slice(-4).map((turn) => ({
           role: turn.role === 'assistant' ? ('model' as const) : ('user' as const),
           parts: [{ text: turn.content }],
         })),
@@ -1638,33 +2828,49 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         },
       ];
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: multiTurnContents,
-        config: {
-          systemInstruction,
-        },
-      });
+      // Low thinking latency + 3.2s deadline guard so traveler never waits >3.5s
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: multiTurnContents,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('ASSISTANT_TIMEOUT_GUARD')), 3_200)
+        ),
+      ]);
 
-      const cleanText = redactSecrets(response.text || '').trim();
+      const cleanText =
+        redactSecrets(response.text || '').trim() || buildResilientHumanReply(analysis, locale);
+      assistantResponseCache.set(cacheKey, {
+        reply: cleanText,
+        draftItinerary: analysis.draftItinerary,
+        cachedAt: Date.now(),
+      });
       res.json({
-        reply: cleanText || buildResilientHumanReply(analysis, locale),
+        reply: cleanText,
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,
+        draftItinerary: analysis.draftItinerary,
         activeCityId: analysis.activeCityId,
         activeCategory: analysis.activeCategory,
+        latencyMs: Math.round(performance.now() - startedMs),
         model: 'gemini-3.8-flash',
         generatedAt: new Date().toISOString(),
       });
     } catch {
-      // Section 2.8: NEVER expose raw server errors, JSON/syntax traces, or secrets to the traveler.
       res.json({
         reply: buildResilientHumanReply(analysis, locale),
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,
+        draftItinerary: analysis.draftItinerary,
         activeCityId: analysis.activeCityId,
         activeCategory: analysis.activeCategory,
         degradedFallback: true,
+        latencyMs: Math.round(performance.now() - startedMs),
         model: 'amaro-catalogue-counselor',
         generatedAt: new Date().toISOString(),
       });
@@ -1943,6 +3149,17 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
 
       try {
+        // Bloc 7.2: Block real identity document submission until the owner explicitly confirms dedicated vault key setup
+        const vaultSetting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        if (!vaultSetting.vaultKeyConfirmedByOwner) {
+          res.status(403).json({
+            error:
+              'Fonction en test : n’envoyez pas de vraie pièce d’identité tant que la clé de chiffrement dédiée n’a pas été confirmée par l’administrateur.',
+            vaultTestMode: true,
+          });
+          return;
+        }
+
         const reservation = await store.getReservation(reservationId, caller.rawIdToken);
         if (!reservation) {
           res.status(404).json({ error: 'Réservation introuvable.' });

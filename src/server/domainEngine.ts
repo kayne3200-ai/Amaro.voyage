@@ -30,6 +30,9 @@ export interface ServerServiceRecord {
   activationLevel?: PartnerActivationLevel;
   pilotConventionSigned?: boolean;
   cancellationPolicy?: string;
+  coveredCities?: string[];
+  blockedDates?: string[];
+  providerResponseHours?: number;
 }
 
 export interface ServerPilotStockRecord {
@@ -69,9 +72,33 @@ export interface ServerSystemSetting {
   partnerCommissionPercent?: number;
   attributionWindowDays?: number;
   attributionModel?: 'first_touch' | 'last_touch';
+  partnerMarginPercent?: number;
+  directoryMarginPercent?: number;
+  dossierFeeXof?: number;
+  dossierVerificationHours?: number;
+  providerResponseHours?: number;
+  balancePaymentHours?: number;
+  maxPendingPaymentFolders?: number;
+  abandonmentRiskThreshold?: number;
+  alternativeBudgetTolerancePercent?: number;
+  maxVisitsCityChangeDay?: number;
+  maxVisitsSameCityDay?: number;
+  freeTimeBlocksPerDay?: number;
+  includeDossierFeeInAffiliateBase?: boolean;
+  localContributionPercent?: number;
+  localContributionLabel?: string;
+  amaroMobileMoneyNumber?: string;
+  amaroMobileMoneyHolder?: string;
+  amaroWhatsappNumber?: string;
+  vaultKeyConfirmedByOwner?: boolean;
+  financialRetentionDuration?: string;
+  termsVersion?: string;
+  conventionVersion?: string;
+  includeDemoData?: boolean;
 }
 
 export interface ScheduleSlot {
+  id?: string;
   serviceId?: string;
   providerId?: string;
   serviceTitle: string;
@@ -81,6 +108,7 @@ export interface ScheduleSlot {
   startTime: string;
   endTime: string;
   durationMinutes: number;
+  isFreeTimeBlock?: boolean;
 }
 
 export const OFFICIAL_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord>> = Object.freeze({
@@ -224,11 +252,28 @@ for (const item of SERVER_BENIN_PUBLIC_DIRECTORY) {
     capacity: Math.max(1, Number(item.capacity || 4)),
     status: item.status || 'published',
     dataOrigin: item.dataOrigin || 'public_directory',
+    coveredCities: item.coveredCities,
   };
 }
 
 export const OFFICIAL_PUBLIC_AND_DEMO_SERVICES: Readonly<Record<string, ServerServiceRecord>> =
   Object.freeze(builtDirectoryServices);
+
+export function resolveEffectiveMarginPercent(
+  setting: ServerSystemSetting,
+  dataOrigin?: ServerServiceRecord['dataOrigin']
+): number {
+  if (dataOrigin === 'verified_partner') {
+    if (typeof setting.partnerMarginPercent === 'number') {
+      return setting.partnerMarginPercent;
+    }
+    return typeof setting.commissionPercent === 'number' ? setting.commissionPercent : 10;
+  }
+  if (typeof setting.directoryMarginPercent === 'number') {
+    return setting.directoryMarginPercent;
+  }
+  return 5;
+}
 
 export function isValidIsoDate(dateStr: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
@@ -247,6 +292,13 @@ export function parseMinutes(hhmm: string): number {
     .split(':')
     .map((n) => parseInt(n, 10));
   return (Number.isFinite(h) ? h : 9) * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+export function formatMinutesHhMm(totalMinutes: number): string {
+  const norm = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
+  const h = String(Math.floor(norm / 60)).padStart(2, '0');
+  const m = String(norm % 60).padStart(2, '0');
+  return `${h}:${m}`;
 }
 
 export function roundCurrencyAmount(val: number, cur: CurrencyCode): number {
@@ -272,6 +324,7 @@ export function computeAuthoritativeQuote(params: {
   currency: CurrencyCode;
   displayCurrency: CurrencyCode;
   setting: ServerSystemSetting;
+  dataOrigin?: ServerServiceRecord['dataOrigin'];
   rates: Record<'EUR' | 'XOF' | 'USD', number>;
   rateSource: string;
   rateStatus: string;
@@ -283,6 +336,7 @@ export function computeAuthoritativeQuote(params: {
     currency,
     displayCurrency,
     setting,
+    dataOrigin,
     rates,
     rateSource,
     rateStatus,
@@ -290,26 +344,36 @@ export function computeAuthoritativeQuote(params: {
   const priceKnown = params.priceKnown !== false && unitPrice > 0;
   const effectiveUnitPrice = params.priceKnown === false ? 0 : unitPrice;
   const quotedAt = params.quotedAt || new Date().toISOString();
+  const effectiveMarginPercent = resolveEffectiveMarginPercent(setting, dataOrigin);
+  const circuitType =
+    dataOrigin === 'verified_partner' ? 'circuit_b_partner' : 'circuit_a_directory';
 
   const rawSubtotal = effectiveUnitPrice * participants;
   const providerPrice = roundCurrencyAmount(rawSubtotal, currency);
   const rawCommission =
-    priceKnown || effectiveUnitPrice > 0
-      ? (providerPrice * setting.commissionPercent) / 100 + setting.serviceFeeFlat
-      : (providerPrice * setting.commissionPercent) / 100 + setting.serviceFeeFlat;
+    (providerPrice * effectiveMarginPercent) / 100 + setting.serviceFeeFlat;
   const amaroFee = roundCurrencyAmount(rawCommission, currency);
   const rawTax = ((providerPrice + amaroFee) * setting.taxPercent) / 100;
   const taxAmount = roundCurrencyAmount(rawTax, currency);
   const totalAmount = roundCurrencyAmount(providerPrice + amaroFee + taxAmount, currency);
 
+  const localContribPct = Math.max(0, Number(setting.localContributionPercent || 0));
+  const localContributionAmount =
+    localContribPct > 0
+      ? roundCurrencyAmount((amaroFee * localContribPct) / 100, currency)
+      : 0;
+
   const pricingSnapshotObj = {
     verifiedByServer: true,
     priceKnown,
+    circuitType,
     unitPrice: roundCurrencyAmount(effectiveUnitPrice, currency),
     participants,
-    commissionPercent: setting.commissionPercent,
+    commissionPercent: effectiveMarginPercent,
     serviceFeeFlat: setting.serviceFeeFlat,
     taxPercent: setting.taxPercent,
+    localContributionPercent: localContribPct,
+    localContributionAmount,
     currency,
     rateStatus,
     quotedAt,
@@ -318,6 +382,9 @@ export function computeAuthoritativeQuote(params: {
   return {
     verifiedByServer: true,
     priceKnown,
+    circuitType,
+    effectiveMarginPercent,
+    localContributionAmount,
     calculatedAt: quotedAt,
     sourceCurrency: currency,
     displayCurrency,
@@ -351,8 +418,13 @@ export function detectClientPriceTampering(
     totalAmount: number;
   },
   expectedSetting: ServerSystemSetting,
-  unitPrice: number
+  unitPrice: number,
+  effectiveMarginPercent?: number
 ): { tampered: boolean; reason?: string } {
+  const expectedComm =
+    typeof effectiveMarginPercent === 'number'
+      ? effectiveMarginPercent
+      : expectedSetting.commissionPercent;
   const checks: Array<{ key: string; expected: number }> = [
     { key: 'unitPrice', expected: unitPrice },
     { key: 'priceAmount', expected: unitPrice },
@@ -360,7 +432,7 @@ export function detectClientPriceTampering(
     { key: 'amaroFee', expected: expectedBreakdown.amaroFee },
     { key: 'taxAmount', expected: expectedBreakdown.taxAmount },
     { key: 'totalAmount', expected: expectedBreakdown.totalAmount },
-    { key: 'commissionPercent', expected: expectedSetting.commissionPercent },
+    { key: 'commissionPercent', expected: expectedComm },
     { key: 'serviceFeeFlat', expected: expectedSetting.serviceFeeFlat },
     { key: 'taxPercent', expected: expectedSetting.taxPercent },
   ];
@@ -380,7 +452,7 @@ export function detectClientPriceTampering(
   return { tampered: false };
 }
 
-function resolveTransportProviderId(slot: {
+export function resolveTransportProviderId(slot: {
   providerId?: string;
   serviceId?: string;
 }): string {
@@ -400,7 +472,7 @@ const PUNCTUAL_URBAN_TRANSPORT_PROVIDERS = new Set<string>([
   'dir-trans-zemidjan-urbain',
 ]);
 
-function isPunctualUrbanOrDeliveryTransport(slot: {
+export function isPunctualUrbanOrDeliveryTransport(slot: {
   providerId?: string;
   serviceId?: string;
   serviceTitle?: string;
@@ -426,6 +498,12 @@ function isPunctualUrbanOrDeliveryTransport(slot: {
   );
 }
 
+export interface JourneyBrainRulesConfig {
+  maxVisitsCityChangeDay?: number;
+  maxVisitsSameCityDay?: number;
+  freeTimeBlocksPerDay?: number;
+}
+
 export function evaluateJourneyBrain(
   existingItems: ScheduleSlot[],
   candidate: {
@@ -437,10 +515,21 @@ export function evaluateJourneyBrain(
     date: string;
     startTime: string;
     durationMinutes: number;
-  }
+    isFreeTimeBlock?: boolean;
+  },
+  rulesConfig?: JourneyBrainRulesConfig
 ) {
   const conflicts: string[] = [];
   const warnings: string[] = [];
+
+  const maxVisitsCityChange =
+    typeof rulesConfig?.maxVisitsCityChangeDay === 'number'
+      ? rulesConfig.maxVisitsCityChangeDay
+      : 1;
+  const maxVisitsSameCity =
+    typeof rulesConfig?.maxVisitsSameCityDay === 'number'
+      ? rulesConfig.maxVisitsSameCityDay
+      : 2;
 
   if (!isValidIsoDate(candidate.date) || !isValidTimeHhMm(candidate.startTime)) {
     return {
@@ -456,10 +545,7 @@ export function evaluateJourneyBrain(
   const candidateDuration = Math.max(15, Number(candidate.durationMinutes || 90));
   const candidateEnd = candidateStart + candidateDuration;
 
-  // Partie 8 — Transport Principal Exclusivity Rule across the itinerary:
-  // Multiple vehicles from the SAME principal transport provider are allowed;
-  // punctual urban rides, independent taxis and deliveries are treated separately without conflict;
-  // mixing distinct principal rental/intercity transport providers is blocked.
+  // Partie 8 — Transport Principal Exclusivity Rule across the itinerary
   if (
     candidate.category === 'transport' &&
     !isPunctualUrbanOrDeliveryTransport(candidate)
@@ -488,42 +574,60 @@ export function evaluateJourneyBrain(
 
   const allDaySiteCities = new Set<string>(
     sameDayItems
-      .filter((it) => it.category === 'site')
+      .filter((it) => it.category === 'site' && !it.isFreeTimeBlock)
       .map((it) => String(it.cityId))
   );
-  if (candidate.category === 'site') {
+  if (candidate.category === 'site' && !candidate.isFreeTimeBlock) {
     allDaySiteCities.add(String(candidate.cityId));
   }
 
-  const existingSiteVisits = sameDayItems.filter((it) => it.category === 'site').length;
+  const existingSiteVisits = sameDayItems.filter(
+    (it) => it.category === 'site' && !it.isFreeTimeBlock
+  ).length;
   const totalSiteVisits =
-    existingSiteVisits + (candidate.category === 'site' ? 1 : 0);
+    existingSiteVisits +
+    (candidate.category === 'site' && !candidate.isFreeTimeBlock ? 1 : 0);
 
-  // Partie 9 — Tourist Site & City-Change Coherence Rules:
-  // 1) Strictly forbid tourist site visits in two different cities on the same day.
-  // 2) Organize city changes on a day distinct from tourist visits (transfers & hotel installations are NOT tourist visits).
-  // 3) Allow 2 or 3 tourist visits in the SAME city on the same day if hours & travel buffers permit.
+  // Point 5.1 — Harmonized configurable visit rules:
+  // - On a city-change day: up to `maxVisitsCityChange` (default 1) site visit in addition to the intercity trip; never visits across 2 distinct cities on the same day.
+  // - In the same city: up to `maxVisitsSameCity` (default 2) site visits per day.
   if (allDaySiteCities.size > 1) {
     conflicts.push(
       'Règle Journey Brain : Les visites touristiques dans deux villes différentes le même jour (changement de ville) sont interdites afin de préserver un rythme réaliste.'
     );
-  } else if (involvesCityChange && totalSiteVisits > 0) {
+  } else if (involvesCityChange && totalSiteVisits > maxVisitsCityChange) {
     conflicts.push(
-      'Règle Journey Brain : Le changement de ville doit être organisé sur une journée dédiée au transfert et à l’installation, distincte des visites de sites touristiques.'
+      `Règle Journey Brain : Le jour d’un changement de ville, maximum ${maxVisitsCityChange} visite(s) de site touristique autorisée(s) en plus du trajet et de l’installation.`
     );
-  } else if (!involvesCityChange && totalSiteVisits > 3) {
+  } else if (!involvesCityChange && totalSiteVisits > maxVisitsSameCity) {
     conflicts.push(
-      'Règle Journey Brain : Maximum 3 visites de sites touristiques autorisées sur une même journée dans la même ville.'
+      `Règle Journey Brain : Maximum ${maxVisitsSameCity} visite(s) de sites touristiques autorisée(s) par jour dans une même ville.`
     );
-  } else if (!involvesCityChange && totalSiteVisits === 3) {
+  } else if (!involvesCityChange && totalSiteVisits === maxVisitsSameCity && maxVisitsSameCity > 0) {
     warnings.push(
-      'Rythme soutenu (3 visites touristiques dans la même ville sur la journée) : vérifiez les horaires d’ouverture et ménagez un temps de pause.'
+      `Rythme complet (${maxVisitsSameCity} visites dans la même ville sur la journée) : pensez à conserver une plage de temps libre.`
     );
   }
 
-  // Partie 7 — Accommodation Coherence:
-  // Multiple rooms/units in the SAME establishment are allowed, and changing city/stage is allowed,
-  // while booking two incompatible establishments on the same date in the same city triggers a conflict.
+  // Point 9.3 — Mandatory Free-Time Breathing Room Alert (non-blocking warning if day gets dense)
+  const activeDaySlots = sameDayItems.filter(
+    (it) => it.category !== 'accommodation' && !it.isFreeTimeBlock
+  );
+  const hasFreeBlock =
+    sameDayItems.some((it) => it.isFreeTimeBlock) || Boolean(candidate.isFreeTimeBlock);
+  const totalScheduledActiveMinutes =
+    activeDaySlots.reduce((acc, it) => acc + Math.max(15, Number(it.durationMinutes || 60)), 0) +
+    (candidate.category !== 'accommodation' && !candidate.isFreeTimeBlock
+      ? candidateDuration
+      : 0);
+
+  if (!hasFreeBlock && (activeDaySlots.length >= 2 || totalScheduledActiveMinutes > 360)) {
+    warnings.push(
+      'Respiration du séjour : aucune plage de temps libre n’est encore réservée sur cette journée. Nous vous conseillons de préserver un temps calme (sans obligation).'
+    );
+  }
+
+  // Partie 7 — Accommodation Coherence
   if (candidate.category === 'accommodation') {
     const otherLodging = sameDayItems.find(
       (it) =>
@@ -572,6 +676,294 @@ export function evaluateJourneyBrain(
     warnings,
   };
 }
+
+export interface SmartAlternativeCandidate {
+  id: string;
+  providerId: string;
+  title: string;
+  category: ServiceCategory;
+  cityId: string;
+  dataOrigin: ServerServiceRecord['dataOrigin'];
+  badgeLabel: 'Partenaire AMARO' | 'Recensé, non vérifié';
+  priceKnown: boolean;
+  priceAmount: number;
+  currency: CurrencyCode;
+  capacity: number;
+  durationMinutes: number;
+  replacesAllPrincipalTransport: boolean;
+  suggestedDate: string;
+  suggestedTime: string;
+}
+
+export function findSmartAlternatives(params: {
+  allServices: ServerServiceRecord[];
+  failedService: ServerServiceRecord;
+  scheduledDate: string;
+  scheduledTime: string;
+  participants: number;
+  existingSchedule: ScheduleSlot[];
+  budgetTolerancePercent?: number;
+  widenSearch?: boolean;
+  includeDemoData?: boolean;
+}) {
+  const {
+    allServices,
+    failedService,
+    scheduledDate,
+    scheduledTime,
+    participants,
+    existingSchedule,
+    widenSearch = false,
+    includeDemoData = false,
+  } = params;
+  const tolerancePct =
+    typeof params.budgetTolerancePercent === 'number'
+      ? params.budgetTolerancePercent
+      : 25;
+
+  const isPrincipalTransport =
+    failedService.category === 'transport' &&
+    !isPunctualUrbanOrDeliveryTransport({
+      providerId: failedService.providerId,
+      serviceId: failedService.id,
+      serviceTitle: failedService.title,
+    });
+
+  const maxAllowedPrice =
+    failedService.priceKnown !== false && failedService.priceAmount > 0 && !widenSearch
+      ? failedService.priceAmount * (1 + tolerancePct / 100)
+      : Number.POSITIVE_INFINITY;
+
+  const pool = allServices.filter((svc) => {
+    if (svc.status !== 'published') return false;
+    if (!includeDemoData && svc.dataOrigin === 'demo_test') return false;
+    if (svc.id === failedService.id) return false;
+    if (svc.category !== failedService.category) return false;
+    if (svc.activationLevel === 'level_a_verified') return false;
+    if (svc.blockedDates && svc.blockedDates.includes(scheduledDate)) return false;
+
+    const cityMatch =
+      widenSearch ||
+      svc.cityId === failedService.cityId ||
+      Boolean(svc.coveredCities && svc.coveredCities.includes(failedService.cityId));
+    if (!cityMatch) return false;
+
+    if (svc.category !== 'accommodation' && svc.capacity < participants) {
+      return false;
+    }
+
+    if (
+      svc.priceKnown !== false &&
+      svc.priceAmount > 0 &&
+      Number.isFinite(maxAllowedPrice) &&
+      svc.priceAmount > maxAllowedPrice
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  // Sort: 1) Partenaire AMARO (verified_partner) strictly before Recensé, non vérifié
+  //       2) Same transport provider first if available, otherwise full replacement
+  //       3) Closest known price
+  const sorted = [...pool].sort((a, b) => {
+    const aPartner = a.dataOrigin === 'verified_partner' ? 1 : 0;
+    const bPartner = b.dataOrigin === 'verified_partner' ? 1 : 0;
+    if (aPartner !== bPartner) return bPartner - aPartner;
+
+    if (isPrincipalTransport) {
+      const aSameProv = a.providerId === failedService.providerId ? 1 : 0;
+      const bSameProv = b.providerId === failedService.providerId ? 1 : 0;
+      if (aSameProv !== bSameProv) return bSameProv - aSameProv;
+    }
+
+    const aKnown = a.priceKnown !== false ? 1 : 0;
+    const bKnown = b.priceKnown !== false ? 1 : 0;
+    if (aKnown !== bKnown) return bKnown - aKnown;
+
+    return (
+      Math.abs(a.priceAmount - failedService.priceAmount) -
+      Math.abs(b.priceAmount - failedService.priceAmount)
+    );
+  });
+
+  const alternatives: SmartAlternativeCandidate[] = sorted.slice(0, 3).map((svc) => ({
+    id: svc.id,
+    providerId: svc.providerId,
+    title: svc.title,
+    category: svc.category,
+    cityId: svc.cityId,
+    dataOrigin: svc.dataOrigin,
+    badgeLabel:
+      svc.dataOrigin === 'verified_partner'
+        ? 'Partenaire AMARO'
+        : 'Recensé, non vérifié',
+    priceKnown: svc.priceKnown !== false,
+    priceAmount: svc.priceAmount,
+    currency: svc.currency,
+    capacity: svc.capacity,
+    durationMinutes: svc.durationMinutes,
+    replacesAllPrincipalTransport:
+      isPrincipalTransport && svc.providerId !== failedService.providerId,
+    suggestedDate: scheduledDate,
+    suggestedTime: scheduledTime,
+  }));
+
+  // For visits (site) and restaurants, also propose alternative non-conflicting slots
+  const alternativeTimeSlots: Array<{ date: string; time: string; label: string }> = [];
+  if (failedService.category === 'site' || failedService.category === 'restaurant') {
+    const candidateTimes =
+      failedService.category === 'restaurant'
+        ? ['12:30', '13:30', '19:30', '20:30']
+        : ['09:00', '11:00', '15:00', '16:30'];
+    const filteredExisting = existingSchedule.filter(
+      (s) => !(s.serviceId === failedService.id && s.date === scheduledDate)
+    );
+    for (const t of candidateTimes) {
+      if (t === scheduledTime) continue;
+      const check = evaluateJourneyBrain(filteredExisting, {
+        serviceId: failedService.id,
+        providerId: failedService.providerId,
+        serviceTitle: failedService.title,
+        category: failedService.category,
+        cityId: failedService.cityId,
+        date: scheduledDate,
+        startTime: t,
+        durationMinutes: failedService.durationMinutes,
+      });
+      if (check.valid) {
+        alternativeTimeSlots.push({
+          date: scheduledDate,
+          time: t,
+          label: `Même jour (${scheduledDate}) à ${t}`,
+        });
+      }
+      if (alternativeTimeSlots.length >= 2) break;
+    }
+  }
+
+  return {
+    alternatives,
+    alternativeTimeSlots,
+    canWidenSearch: !widenSearch,
+    honestEmptyMessage:
+      alternatives.length === 0
+        ? widenSearch
+          ? 'Aucune alternative disponible ne correspond actuellement à ces critères dans notre catalogue publié. Notre équipe peut effectuer une recherche manuelle sur mesure.'
+          : `Aucune alternative directe dans la même ville (${failedService.cityId}) et la même enveloppe budgétaire. Vous pouvez élargir la recherche aux villes voisines ou à un budget supérieur.`
+        : null,
+  };
+}
+
+export function computeScheduleAndDependenciesRevalidation(params: {
+  existingSchedule: ScheduleSlot[];
+  replacedSlotPredicate: (slot: ScheduleSlot) => boolean;
+  replacementService: ServerServiceRecord;
+  scheduledDate: string;
+  scheduledTime: string;
+  participants: number;
+  setting: ServerSystemSetting;
+  oldTotalAmountXof: number;
+  rates: Record<'EUR' | 'XOF' | 'USD', number>;
+}) {
+  const {
+    existingSchedule,
+    replacedSlotPredicate,
+    replacementService,
+    scheduledDate,
+    scheduledTime,
+    participants,
+    setting,
+    oldTotalAmountXof,
+    rates,
+  } = params;
+
+  const replacesAllTransport =
+    replacementService.category === 'transport' &&
+    !isPunctualUrbanOrDeliveryTransport({
+      providerId: replacementService.providerId,
+      serviceId: replacementService.id,
+      serviceTitle: replacementService.title,
+    });
+
+  const retainedSlots = existingSchedule.filter((slot) => {
+    if (replacedSlotPredicate(slot)) return false;
+    if (
+      replacesAllTransport &&
+      slot.category === 'transport' &&
+      !isPunctualUrbanOrDeliveryTransport(slot)
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const newSlotCheck = evaluateJourneyBrain(
+    retainedSlots,
+    {
+      serviceId: replacementService.id,
+      providerId: replacementService.providerId,
+      serviceTitle: replacementService.title,
+      category: replacementService.category,
+      cityId: replacementService.cityId,
+      date: scheduledDate,
+      startTime: scheduledTime,
+      durationMinutes: replacementService.durationMinutes,
+    },
+    {
+      maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay ?? 1,
+      maxVisitsSameCityDay: setting.maxVisitsSameCityDay ?? 2,
+      freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay ?? 1,
+    }
+  );
+
+  const newQuote = computeAuthoritativeQuote({
+    unitPrice: replacementService.priceAmount,
+    priceKnown: replacementService.priceKnown !== false,
+    participants,
+    currency: replacementService.currency,
+    displayCurrency: 'XOF',
+    setting,
+    dataOrigin: replacementService.dataOrigin,
+    rates,
+    rateSource: 'AMARO Recalcul',
+    rateStatus: 'verified',
+  });
+
+  const deltaXof = newQuote.convertedBreakdown.totalAmount - oldTotalAmountXof;
+
+  const afterSlots: ScheduleSlot[] = [
+    ...retainedSlots,
+    {
+      serviceId: replacementService.id,
+      providerId: replacementService.providerId,
+      serviceTitle: replacementService.title,
+      category: replacementService.category,
+      cityId: replacementService.cityId,
+      date: scheduledDate,
+      startTime: scheduledTime,
+      endTime: newSlotCheck.computedEndTime,
+      durationMinutes: replacementService.durationMinutes,
+    },
+  ];
+
+  return {
+    valid: newSlotCheck.valid,
+    conflicts: newSlotCheck.conflicts,
+    warnings: newSlotCheck.warnings,
+    replacesAllPrincipalTransport: replacesAllTransport,
+    beforeCount: existingSchedule.length,
+    afterCount: afterSlots.length,
+    oldTotalAmountXof,
+    newTotalAmountXof: newQuote.convertedBreakdown.totalAmount,
+    deltaAmountXof: deltaXof,
+    newBreakdown: newQuote.breakdown,
+    pricingSnapshot: newQuote.pricingSnapshot,
+    afterSlots,
+  };
+}
+
 
 export function buildDeterministicReservationId(
   clientId: string,

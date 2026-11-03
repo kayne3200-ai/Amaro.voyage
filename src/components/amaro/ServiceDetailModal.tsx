@@ -1,4 +1,4 @@
-import { X, MapPin, CalendarPlus, ShieldCheck, Info, Languages, CheckCircle2 } from 'lucide-react';
+import { X, MapPin, CalendarPlus, ShieldCheck, Info, Languages, CheckCircle2, HeartHandshake, Star } from 'lucide-react';
 import type {
   CatalogueItem,
   CurrencyCode,
@@ -6,10 +6,13 @@ import type {
   PartnerActivationLevel,
   PilotStockDoc,
   StandingLevel,
+  TravelerReviewDoc,
 } from '../../types/amaro';
 import { EDITORIAL_IMAGES } from '../../data/amaroRegistry';
 import { ACTIVATION_LEVEL_LABELS } from '../../data/pilotConventioningData';
 import { TRANSLATIONS } from '../../i18n/translations';
+import { ListingTrustBadge } from './ListingTrustBadge';
+import { isAmaroOwnAssistanceOffer, isSacredOrCeremonialItem } from '../../data/amaroGovernanceDefaults';
 
 const STANDING_LABELS: Record<StandingLevel, string> = {
   luxe: '5★ Luxe & Prestige International',
@@ -27,6 +30,7 @@ interface ServiceDetailModalProps {
   displayCurrency: CurrencyCode;
   formattedPrice: string;
   activeStocks?: PilotStockDoc[];
+  approvedReviews?: TravelerReviewDoc[];
   onClose: () => void;
   onAddToJourney: (item: CatalogueItem) => void;
   onRequestBooking: (item: CatalogueItem) => void;
@@ -37,6 +41,7 @@ export function ServiceDetailModal({
   locale,
   formattedPrice,
   activeStocks = [],
+  approvedReviews = [],
   onClose,
   onAddToJourney,
   onRequestBooking,
@@ -44,6 +49,15 @@ export function ServiceDetailModal({
   if (!item) return null;
   const t = TRANSLATIONS[locale];
   const imgMeta = EDITORIAL_IMAGES[item.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+  const photoSrc = item.customPhotoUrl?.trim() ? item.customPhotoUrl.trim() : imgMeta.src;
+  const isPhotoVerified = Boolean(item.photoVerified && item.customPhotoUrl?.trim());
+  const isAmaroAssistance = isAmaroOwnAssistanceOffer(item);
+  const isPartnerVerified =
+    !isAmaroAssistance &&
+    (item.dataOrigin === 'verified_partner' || Boolean(item.pilotConventionSigned));
+  const itemReviews = approvedReviews.filter(
+    (rv) => rv.serviceId === item.id && rv.moderationStatus === 'approved'
+  );
   const ed = item.siteEditorial;
   const verificationText = item.verificationStatus
     ? t.verification[item.verificationStatus]
@@ -63,10 +77,15 @@ export function ServiceDetailModal({
         {/* Top Photo Banner */}
         <div className="relative h-56 sm:h-64 bg-slate-900 overflow-hidden">
           <img
-            src={imgMeta.src}
+            src={photoSrc}
             alt={item.title}
             className="w-full h-full object-cover"
           />
+          {!isPhotoVerified && (
+            <div className="absolute top-3 left-3">
+              <ListingTrustBadge variant="non_contractual_photo" />
+            </div>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -75,10 +94,21 @@ export function ServiceDetailModal({
           >
             <X className="w-5 h-5" />
           </button>
-          <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/90 via-black/55 to-transparent text-white space-y-1">
-            <div className="text-xs text-teal-300 font-medium">
-              {t.categories[item.category]} · <span className="capitalize">{item.cityId}</span>
-              {item.department ? ` (${item.department})` : ''} · {verificationText}
+          <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/90 via-black/55 to-transparent text-white space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-teal-300 font-medium">
+              <span>
+                {t.categories[item.category]} · <span className="capitalize">{item.cityId}</span>
+                {item.department ? ` (${item.department})` : ''}
+              </span>
+              <ListingTrustBadge
+                variant={
+                  isAmaroAssistance
+                    ? 'amaro_accompaniment'
+                    : isPartnerVerified
+                    ? 'partner_verified'
+                    : 'directory_unverified'
+                }
+              />
             </div>
             <h2 className="font-display text-xl sm:text-2xl font-bold leading-tight">
               {item.title}
@@ -292,23 +322,68 @@ export function ServiceDetailModal({
             </div>
           )}
 
-          {/* Honest Origin, Conventioning & Activation Level Disclaimer */}
+          {/* Admin-designated Sacred or Ceremonial Site Respect Notice (9.5 — shown once, non-blocking) */}
+          {isSacredOrCeremonialItem(item) && (
+            <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-xl space-y-1.5 text-xs text-amber-950 dark:text-amber-200">
+              <div className="flex items-center gap-2 font-bold">
+                <HeartHandshake className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
+                <span>Lieu sacré ou cérémoniel (signalé par l&apos;administrateur) — Information de respect</span>
+              </div>
+              <p className="leading-relaxed">
+                {item.sacredNotice ||
+                  "Tenue vestimentaire respectueuse recommandée, interdiction de photographier sans autorisation explicite du gardien des lieux et présence d'un guide local agréé conseillée."}
+              </p>
+            </div>
+          )}
+
+          {/* Verified Post-Stay Traveler Reviews ONLY (6.3 / 10.1 — zero fake ratings) */}
+          {itemReviews.length > 0 && (
+            <div className="p-4 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <strong className="text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <Star className="w-4 h-4 text-amber-500 fill-amber-500" />
+                  Avis de voyageurs ayant réservé et terminé cette prestation ({itemReviews.length})
+                </strong>
+              </div>
+              <div className="space-y-2">
+                {itemReviews.map((rv) => (
+                  <div
+                    key={rv.id}
+                    className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800"
+                  >
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <strong className="text-slate-800 dark:text-slate-200">
+                        {rv.authorDisplayName} · {rv.rating}/5
+                      </strong>
+                      <span>Séjour vérifié · {rv.createdAtIso.slice(0, 10)}</span>
+                    </div>
+                    <p className="text-slate-700 dark:text-slate-300 mt-1">{rv.comment}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Honest Origin, Source & Verification Date Disclaimer (5.6 & 10.1) */}
           <div className="p-3.5 bg-slate-100 dark:bg-slate-800/70 rounded-xl flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-300">
-            {item.dataOrigin === 'verified_partner' && item.pilotConventionSigned ? (
+            {isPartnerVerified ? (
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             ) : (
               <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
             )}
             <div className="space-y-0.5">
               <p className="font-semibold text-slate-900 dark:text-slate-100">
-                {activationMeta.shortLabel}
+                {isAmaroAssistance
+                  ? 'Offre propre d’accompagnement humain AMARO.VOYAGE'
+                  : isPartnerVerified
+                  ? 'Partenaire AMARO conventionné'
+                  : 'Établissement recensé dans l’annuaire public — non vérifié contractuellement'}
               </p>
               <p>{activationMeta.publicNotice}</p>
-              {item.sourceName && (
-                <p className="text-[11px] text-slate-500">
-                  Source référencée : {item.sourceName}
-                </p>
-              )}
+              <p className="text-[11px] text-slate-500">
+                Source : <strong>{item.sourceName || 'Répertoire public documenté'}</strong> · Date de vérification :{' '}
+                <strong>{item.verifiedAt ? item.verifiedAt.slice(0, 10) : 'à vérifier lors d’une demande'}</strong>
+              </p>
             </div>
           </div>
 

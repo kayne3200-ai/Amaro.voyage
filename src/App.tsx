@@ -1,7 +1,6 @@
-import React, { Component, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
-  signInWithPopup,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -10,6 +9,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -20,20 +20,24 @@ import {
 import {
   auth,
   db,
-  googleProvider,
   handleFirestoreError,
   OperationType,
   verifyFirestoreConnectivity,
 } from './lib/firebase';
 import { authorizedFetch } from './lib/apiClient';
 import type {
+  AssistantDraftItinerary,
   CatalogueItem,
   CulturalStoryDoc,
   CurrencyCode,
   DataOriginType,
+  EmergencyNumberEntry,
+  FolderExpenseEntry,
+  FolderShareDoc,
   IdentityVerificationDoc,
   JournalEntryDoc,
   JourneyFolderDoc,
+  JourneyIntentionDoc,
   JourneyItemDoc,
   LocaleCode,
   NotificationDoc,
@@ -43,11 +47,15 @@ import type {
   PartnerReferralDoc,
   PilotPartnerDoc,
   PilotStockDoc,
+  PlatformContentDoc,
   ProviderProfileDoc,
+  ProviderThankYouDoc,
   ReservationDispatchChannel,
   ReservationDoc,
   ServiceCategory,
   SystemSettingDoc,
+  TravelerReviewDoc,
+  UserSavedPreferencesDoc,
   VerificationLevel,
 } from './types/amaro';
 import {
@@ -55,11 +63,25 @@ import {
   DEMO_REFERENCE_CATALOGUE,
   EDITORIAL_IMAGES,
 } from './data/amaroRegistry';
+import {
+  DEFAULT_EMERGENCY_NUMBERS_BJ,
+  DEFAULT_PLATFORM_CONTENT,
+} from './data/amaroGovernanceDefaults';
 import { AmaroHeader, type AmaroTab } from './components/amaro/AmaroHeader';
 import { ExplorerView } from './components/amaro/ExplorerView';
 import { JourneyHubView } from './components/amaro/JourneyHubView';
-import { AssistantRescueView } from './components/amaro/AssistantRescueView';
+import {
+  AssistantRescueView,
+  PENDING_ASSISTANT_DRAFT_KEY,
+} from './components/amaro/AssistantRescueView';
+import { PromoteServicesView } from './components/amaro/PromoteServicesView';
 import { WorkspacesAdminView } from './components/amaro/WorkspacesAdminView';
+import { AuthModal } from './components/amaro/AuthModal';
+import {
+  LegalAndCharterModal,
+  type LegalDocKey,
+} from './components/amaro/LegalAndCharterModal';
+import { SharedFolderReadOnlyView } from './components/amaro/SharedFolderReadOnlyView';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'kayne3200@gmail.com';
 const REFERRAL_STORAGE_KEY = 'amaro_referral_attribution';
@@ -115,6 +137,26 @@ function readValidStoredReferral(windowDays = 30): StoredReferralAttribution | n
   }
 }
 
+function readInitialShareToken(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = (params.get('share') || '').trim();
+    return /^[a-zA-Z0-9_-]{4,120}$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function canUserAccessFirestore(user: User | null): boolean {
+  if (!user) return false;
+  if (user.emailVerified) return true;
+  const usesPasswordProvider = user.providerData.some((p) => p.providerId === 'password');
+  return (
+    usesPasswordProvider &&
+    (user.email || '').toLowerCase() !== BOOTSTRAPPED_ADMIN_EMAIL
+  );
+}
+
 interface ErrorBoundaryState {
   hasError: boolean;
   message: string;
@@ -165,6 +207,9 @@ interface RateInfo {
 }
 
 function AmaroPlatform() {
+  const [sharedFolderToken, setSharedFolderToken] = useState<string | null>(() =>
+    readInitialShareToken()
+  );
   const [activeTab, setActiveTab] = useState<AmaroTab>('explorer');
   const [explorerJump, setExplorerJump] = useState<{
     cityId?: string;
@@ -175,6 +220,8 @@ function AmaroPlatform() {
   const [locale, setLocale] = useState<LocaleCode>('fr');
   const [currency, setCurrency] = useState<CurrencyCode>('XOF');
   const [isDark, setIsDark] = useState<boolean>(false);
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocKey | null>(null);
 
   // Non-blocking feedback toast (no window.alert)
   const [toastMsg, setToastMsg] = useState<string>('');
@@ -194,7 +241,7 @@ function AmaroPlatform() {
 
   // Auth & Cloud Connectivity State
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
+  const [isSigningIn] = useState<boolean>(false);
   const [hasAdminDoc, setHasAdminDoc] = useState<boolean>(false);
   const [firestoreProbe, setFirestoreProbe] = useState<{
     reachable: boolean;
@@ -207,6 +254,10 @@ function AmaroPlatform() {
   const [publishedServices, setPublishedServices] = useState<CatalogueItem[]>([]);
   const [publicActiveStocks, setPublicActiveStocks] = useState<PilotStockDoc[]>([]);
   const [approvedStories, setApprovedStories] = useState<CulturalStoryDoc[]>([]);
+  const [approvedReviews, setApprovedReviews] = useState<TravelerReviewDoc[]>([]);
+  const [firestorePlatformContents, setFirestorePlatformContents] = useState<
+    Record<string, PlatformContentDoc>
+  >({});
   const [countrySetting, setCountrySetting] = useState<SystemSettingDoc | null>(null);
   const [activeReferralCode, setActiveReferralCode] = useState<string | null>(() => {
     const existing = readValidStoredReferral(30);
@@ -225,13 +276,19 @@ function AmaroPlatform() {
     uid: string;
     email: string;
     phone: string;
+    phoneVerified?: boolean;
     emergencyContact: string;
   } | null>(null);
+  const [userSavedPrefs, setUserSavedPrefs] = useState<UserSavedPreferencesDoc | null>(null);
 
   const [folders, setFolders] = useState<JourneyFolderDoc[]>([]);
   const [selectedFolderId, setSelectedFolderIdState] = useState<string>('');
   const [folderItems, setFolderItems] = useState<JourneyItemDoc[]>([]);
   const [journalEntries, setJournalEntries] = useState<JournalEntryDoc[]>([]);
+  const [folderIntention, setFolderIntention] = useState<JourneyIntentionDoc | null>(null);
+  const [folderExpenses, setFolderExpenses] = useState<FolderExpenseEntry[]>([]);
+  const [folderShares, setFolderShares] = useState<FolderShareDoc[]>([]);
+  const [myTravelerReviews, setMyTravelerReviews] = useState<TravelerReviewDoc[]>([]);
   const [clientReservations, setClientReservations] = useState<ReservationDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   const [lastBrainDiagnostic, setLastBrainDiagnostic] = useState<{
@@ -252,6 +309,7 @@ function AmaroPlatform() {
   } | null>(null);
   const [myServices, setMyServices] = useState<CatalogueItem[]>([]);
   const [providerReservations, setProviderReservations] = useState<ReservationDoc[]>([]);
+  const [providerThankYous, setProviderThankYous] = useState<ProviderThankYouDoc[]>([]);
 
   // Partner / Affiliate Data
   const [myPartner, setMyPartner] = useState<PartnerProfileDoc | null>(null);
@@ -261,11 +319,17 @@ function AmaroPlatform() {
   const [allCatalogueServices, setAllCatalogueServices] = useState<CatalogueItem[]>([]);
   const [allProviders, setAllProviders] = useState<ProviderProfileDoc[]>([]);
   const [allReservations, setAllReservations] = useState<ReservationDoc[]>([]);
+  const [allFolders, setAllFolders] = useState<JourneyFolderDoc[]>([]);
   const [allStories, setAllStories] = useState<CulturalStoryDoc[]>([]);
+  const [allReviews, setAllReviews] = useState<TravelerReviewDoc[]>([]);
+  const [allThankYous, setAllThankYous] = useState<ProviderThankYouDoc[]>([]);
   const [allPartners, setAllPartners] = useState<PartnerProfileDoc[]>([]);
   const [allReferrals, setAllReferrals] = useState<PartnerReferralDoc[]>([]);
   const [adminPilotPartners, setAdminPilotPartners] = useState<PilotPartnerDoc[]>([]);
   const [adminPilotStocks, setAdminPilotStocks] = useState<PilotStockDoc[]>([]);
+  const [adminsList, setAdminsList] = useState<
+    Array<{ id: string; email?: string; role?: string }>
+  >([]);
   const [auditLogs, setAuditLogs] = useState<
     Array<{
       id: string;
@@ -290,7 +354,8 @@ function AmaroPlatform() {
   const isBootstrappedAdmin =
     Boolean(authUser?.emailVerified) &&
     authUser?.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-  const isAdmin = isBootstrappedAdmin || hasAdminDoc;
+  const isAdmin = isBootstrappedAdmin || (Boolean(authUser?.emailVerified) && hasAdminDoc);
+  const hasFirestoreSession = canUserAccessFirestore(authUser);
 
   const setSelectedFolderId = useCallback(
     (folderId: string) => {
@@ -358,32 +423,42 @@ function AmaroPlatform() {
       if (!user) {
         setUserPublic(null);
         setUserPrivate(null);
+        setUserSavedPrefs(null);
         setHasAdminDoc(false);
         setFolders([]);
         setSelectedFolderIdState('');
         setFolderItems([]);
         setJournalEntries([]);
+        setFolderIntention(null);
+        setFolderExpenses([]);
+        setFolderShares([]);
+        setMyTravelerReviews([]);
         setClientReservations([]);
         setNotifications([]);
         setMyProvider(null);
         setMyProviderPrivate(null);
         setMyServices([]);
         setProviderReservations([]);
+        setProviderThankYous([]);
         setMyPartner(null);
         setMyReferrals([]);
         setAllCatalogueServices([]);
         setAllProviders([]);
         setAllReservations([]);
+        setAllFolders([]);
         setAllStories([]);
+        setAllReviews([]);
+        setAllThankYous([]);
         setAllPartners([]);
         setAllReferrals([]);
         setAdminPilotPartners([]);
         setAdminPilotStocks([]);
+        setAdminsList([]);
         setAuditLogs([]);
         return;
       }
 
-      if (user.emailVerified) {
+      if (canUserAccessFirestore(user)) {
         try {
           const pubRef = doc(db, 'users', user.uid);
           const snap = await getDoc(pubRef);
@@ -402,6 +477,7 @@ function AmaroPlatform() {
               uid: user.uid,
               email: (user.email || '').slice(0, 195),
               phone: '',
+              phoneVerified: false,
               emergencyContact: '',
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),
@@ -415,7 +491,7 @@ function AmaroPlatform() {
     return () => unsub();
   }, []);
 
-  // Public real-time listeners (Published Services, Approved Stories, System Settings BJ)
+  // Public real-time listeners (Published Services, Stories, Reviews, Platform Content, Settings BJ, Pilot Stocks)
   useEffect(() => {
     const qServices = query(
       collection(db, 'services'),
@@ -448,6 +524,54 @@ function AmaroPlatform() {
         );
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'cultural_stories')
+    );
+
+    const qReviews = query(
+      collection(db, 'traveler_reviews'),
+      where('moderationStatus', '==', 'approved')
+    );
+    const unsubReviews = onSnapshot(
+      qReviews,
+      (snap) => {
+        setApprovedReviews(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as TravelerReviewDoc;
+          })
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'traveler_reviews')
+    );
+
+    const unsubPlatformContent = onSnapshot(
+      collection(db, 'platform_content'),
+      (snap) => {
+        const map: Record<string, PlatformContentDoc> = {};
+        for (const d of snap.docs) {
+          const raw = d.data() as any;
+          map[d.id] = {
+            id: d.id,
+            slug: raw.slug || d.id,
+            title: raw.title || d.id,
+            body: raw.body ?? raw.bodyMarkdown ?? '',
+            structuredJson: raw.structuredJson,
+            version: raw.version || '1.0',
+            isProvisional:
+              typeof raw.isProvisional === 'boolean'
+                ? raw.isProvisional
+                : !Boolean(raw.ownerValidated),
+            ownerValidated: Boolean(raw.ownerValidated),
+            updatedBy: raw.updatedBy || 'admin',
+            updatedAtIso: formatFirestoreIso(raw.updatedAt),
+          };
+        }
+        setFirestorePlatformContents(map);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'platform_content')
     );
 
     const unsubSettings = onSnapshot(
@@ -489,6 +613,8 @@ function AmaroPlatform() {
     return () => {
       unsubServices();
       unsubStories();
+      unsubReviews();
+      unsubPlatformContent();
       unsubSettings();
       unsubStocks();
     };
@@ -496,7 +622,7 @@ function AmaroPlatform() {
 
   // Authenticated user real-time listeners
   useEffect(() => {
-    if (!authUser?.uid) return;
+    if (!authUser?.uid || !hasFirestoreSession) return;
     const uid = authUser.uid;
 
     const unsubUserPub = onSnapshot(
@@ -525,11 +651,37 @@ function AmaroPlatform() {
             uid: d.uid,
             email: d.email,
             phone: d.phone,
+            phoneVerified: Boolean(d.phoneVerified),
             emergencyContact: d.emergencyContact,
           });
         }
       },
       (err) => handleFirestoreError(err, OperationType.GET, `users/${uid}/private/info`)
+    );
+
+    const unsubUserPrefs = onSnapshot(
+      doc(db, 'users', uid, 'private', 'preferences'),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data() as any;
+          setUserSavedPrefs({
+            userId: uid,
+            consentEnabled:
+              typeof d.consentEnabled === 'boolean' ? d.consentEnabled : true,
+            preferredStanding: d.preferredStanding || d.budgetStyle || 'equilibre',
+            travelPace: d.travelPace || d.preferredPace || 'equilibre',
+            dietaryNotes: d.dietaryNotes || '',
+            favoriteInterests: Array.isArray(d.favoriteInterests) ? d.favoriteInterests : [],
+            muteNonEssentialNotifications: Boolean(d.muteNonEssentialNotifications),
+            phoneNumberDeclared: d.phoneNumberDeclared || '',
+            phoneVerified: Boolean(d.phoneVerified),
+            updatedAtIso: formatFirestoreIso(d.updatedAt),
+          });
+        } else {
+          setUserSavedPrefs(null);
+        }
+      },
+      () => setUserSavedPrefs(null)
     );
 
     const unsubAdminDoc = onSnapshot(
@@ -556,12 +708,52 @@ function AmaroPlatform() {
           }
           const activeTrip = list.find((f) => f.status === 'active');
           if (activeTrip) return activeTrip.id;
-          const planningTrip = list.find((f) => f.status === 'planning');
+          const planningTrip = list.find(
+            (f) =>
+              f.status === 'planning' ||
+              f.status === 'draft' ||
+              f.status === 'requests_in_progress'
+          );
           if (planningTrip) return planningTrip.id;
           return list[0]?.id || '';
         });
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'journey_folders')
+    );
+
+    const unsubFolderShares = onSnapshot(
+      query(collection(db, 'folder_shares'), where('ownerId', '==', uid)),
+      (snap) => {
+        setFolderShares(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as FolderShareDoc;
+          })
+        );
+      },
+      () => setFolderShares([])
+    );
+
+    const unsubMyReviews = onSnapshot(
+      query(collection(db, 'traveler_reviews'), where('clientId', '==', uid)),
+      (snap) => {
+        setMyTravelerReviews(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as TravelerReviewDoc;
+          })
+        );
+      },
+      () => setMyTravelerReviews([])
     );
 
     const unsubClientRes = onSnapshot(
@@ -632,6 +824,27 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'services(owner)')
     );
 
+    const unsubProviderThanks = onSnapshot(
+      query(
+        collection(db, 'provider_thank_yous'),
+        where('providerOwnerId', '==', uid),
+        where('status', '==', 'transmitted_to_provider')
+      ),
+      (snap) => {
+        setProviderThankYous(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as ProviderThankYouDoc;
+          })
+        );
+      },
+      () => setProviderThankYous([])
+    );
+
     const unsubMyPartner = onSnapshot(
       query(collection(db, 'partners'), where('ownerId', '==', uid)),
       (snap) => {
@@ -694,23 +907,27 @@ function AmaroPlatform() {
     return () => {
       unsubUserPub();
       unsubUserPriv();
+      unsubUserPrefs();
       unsubAdminDoc();
       unsubFolders();
+      unsubFolderShares();
+      unsubMyReviews();
       unsubClientRes();
       unsubProvRes();
       unsubNotifs();
       unsubMyProvider();
       unsubMyServices();
+      unsubProviderThanks();
       unsubMyPartner();
       unsubMyReferrals();
       unsubClientIdentity();
       unsubProviderIdentity();
     };
-  }, [authUser?.uid]);
+  }, [authUser?.uid, hasFirestoreSession]);
 
   // Provider private commercial subdocument listener
   useEffect(() => {
-    if (!authUser?.uid || !myProvider?.id) {
+    if (!authUser?.uid || !hasFirestoreSession || !myProvider?.id) {
       setMyProviderPrivate(null);
       return;
     }
@@ -736,13 +953,15 @@ function AmaroPlatform() {
         )
     );
     return () => unsub();
-  }, [authUser?.uid, myProvider?.id]);
+  }, [authUser?.uid, hasFirestoreSession, myProvider?.id]);
 
-  // Active Journey Folder Items & Electronic Travel Logbook subcollection listeners
+  // Active Journey Folder Items, Journal, Private Intention & Expenses subcollection listeners
   useEffect(() => {
-    if (!authUser?.uid || !selectedFolderId) {
+    if (!authUser?.uid || !hasFirestoreSession || !selectedFolderId) {
       setFolderItems([]);
       setJournalEntries([]);
+      setFolderIntention(null);
+      setFolderExpenses([]);
       return;
     }
     const qItems = query(
@@ -789,17 +1008,76 @@ function AmaroPlatform() {
         )
     );
 
+    const unsubIntention = onSnapshot(
+      doc(db, 'journey_folders', selectedFolderId, 'private', 'intention'),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data() as any;
+          const parsedReasons = Array.isArray(d.reasons)
+            ? d.reasons
+            : Array.isArray(d.motivations)
+            ? d.motivations
+            : [];
+          const parsedNote = d.freeNote ?? d.personalNote ?? '';
+          setFolderIntention({
+            folderId: selectedFolderId,
+            ownerId: d.ownerId || authUser.uid,
+            reasons: parsedReasons,
+            freeNote: parsedNote,
+            motivations: parsedReasons,
+            personalNote: parsedNote,
+            reflectionAnswers:
+              d.reflectionAnswers && typeof d.reflectionAnswers === 'object'
+                ? d.reflectionAnswers
+                : {},
+            skipped: Boolean(d.skipped),
+            updatedAtIso: formatFirestoreIso(d.updatedAt),
+          });
+        } else {
+          setFolderIntention(null);
+        }
+      },
+      () => setFolderIntention(null)
+    );
+
+    const qExpenses = query(
+      collection(db, 'journey_folders', selectedFolderId, 'expenses'),
+      where('ownerId', '==', authUser.uid)
+    );
+    const unsubExpenses = onSnapshot(
+      qExpenses,
+      (snap) => {
+        setFolderExpenses(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as FolderExpenseEntry;
+          })
+        );
+      },
+      () => setFolderExpenses([])
+    );
+
     return () => {
       unsubItems();
       unsubJournal();
+      unsubIntention();
+      unsubExpenses();
     };
-  }, [authUser?.uid, selectedFolderId]);
+  }, [authUser?.uid, hasFirestoreSession, selectedFolderId]);
 
-  // Bootstrapped Admin global listeners (Cost-Optimized Zero-Lookup Rules)
+  // Admin global listeners (supports owner admin & delegated admins in `admins/{uid}`)
   useEffect(() => {
-    if (!isBootstrappedAdmin) {
+    if (!isAdmin) {
       setAdminPilotPartners([]);
       setAdminPilotStocks([]);
+      setAllFolders([]);
+      setAllReviews([]);
+      setAllThankYous([]);
+      setAdminsList([]);
       return;
     }
 
@@ -842,6 +1120,19 @@ function AmaroPlatform() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'reservations(admin)')
     );
 
+    const uFolders = onSnapshot(
+      collection(db, 'journey_folders'),
+      (snap) => {
+        setAllFolders(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<JourneyFolderDoc, 'id'>),
+          }))
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'journey_folders(admin)')
+    );
+
     const u3 = onSnapshot(
       collection(db, 'cultural_stories'),
       (snap) => {
@@ -853,6 +1144,53 @@ function AmaroPlatform() {
         );
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'cultural_stories(admin)')
+    );
+
+    const uReviews = onSnapshot(
+      collection(db, 'traveler_reviews'),
+      (snap) => {
+        setAllReviews(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as TravelerReviewDoc;
+          })
+        );
+      },
+      () => setAllReviews([])
+    );
+
+    const uThanks = onSnapshot(
+      collection(db, 'provider_thank_yous'),
+      (snap) => {
+        setAllThankYous(
+          snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id,
+              ...raw,
+              createdAtIso: raw.createdAtIso || formatFirestoreIso(raw.createdAt),
+            } as ProviderThankYouDoc;
+          })
+        );
+      },
+      () => setAllThankYous([])
+    );
+
+    const uAdmins = onSnapshot(
+      collection(db, 'admins'),
+      (snap) => {
+        setAdminsList(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as { email?: string; role?: string }),
+          }))
+        );
+      },
+      () => setAdminsList([])
     );
 
     const u4 = onSnapshot(
@@ -947,7 +1285,11 @@ function AmaroPlatform() {
       u0();
       u1();
       u2();
+      uFolders();
       u3();
+      uReviews();
+      uThanks();
+      uAdmins();
       u4();
       u5();
       u6();
@@ -955,9 +1297,9 @@ function AmaroPlatform() {
       u8();
       u9();
     };
-  }, [isBootstrappedAdmin]);
+  }, [isAdmin]);
 
-  // Combined Catalogue: Firestore published overrides + Benin Public Directory + Demo Test entries (strictly deduplicated)
+  // Combined Catalogue (Bloc 5.8: DEMO_REFERENCE_CATALOGUE hidden unless countrySetting?.includeDemoData === true)
   const combinedCatalogue = useMemo(() => {
     const overriddenIds = new Set<string>(publishedServices.map((s) => s.id));
     for (const s of allCatalogueServices) {
@@ -977,9 +1319,10 @@ function AmaroPlatform() {
     const remainingDirectory = BENIN_PUBLIC_DIRECTORY.filter(
       (b) => !overriddenIds.has(b.id)
     );
-    const remainingDemo = DEMO_REFERENCE_CATALOGUE.filter(
-      (d) => !overriddenIds.has(d.id)
-    );
+    const remainingDemo = countrySetting?.includeDemoData
+      ? DEMO_REFERENCE_CATALOGUE.filter((d) => !overriddenIds.has(d.id))
+      : [];
+
     const seenIds = new Set<string>();
     const seenTitleCity = new Set<string>();
     const uniqueItems: typeof mergedPublished = [];
@@ -993,14 +1336,59 @@ function AmaroPlatform() {
       uniqueItems.push(item);
     }
     return uniqueItems;
-  }, [allCatalogueServices, publishedServices]);
+  }, [allCatalogueServices, countrySetting?.includeDemoData, publishedServices]);
+
+  // Merged Platform Content (Defaults + Firestore Admin Overrides)
+  const platformContentMap = useMemo(() => {
+    return {
+      ...DEFAULT_PLATFORM_CONTENT,
+      ...firestorePlatformContents,
+    };
+  }, [firestorePlatformContents]);
+
+  // Unified Benin Emergency Numbers (Bloc 3.2: single authoritative source)
+  const emergencyNumbers = useMemo<EmergencyNumberEntry[]>(() => {
+    const docOverride = firestorePlatformContents['numeros_urgence_benin'];
+    const rawEmergencyJson = docOverride?.structuredJson || docOverride?.body;
+    if (rawEmergencyJson) {
+      try {
+        const parsed = JSON.parse(rawEmergencyJson);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch {
+        // Fallback to default emergency registry
+      }
+    }
+    return DEFAULT_EMERGENCY_NUMBERS_BJ;
+  }, [firestorePlatformContents]);
+
+  // Real Local Contribution Total (Bloc 9.6: strictly from paid & verified reservations, never invented)
+  const realLocalContributionTotalXof = useMemo(() => {
+    const source = isAdmin ? allReservations : clientReservations;
+    return source
+      .filter((r) => r.paymentStatus === 'succeeded')
+      .reduce(
+        (acc, r) =>
+          acc + Math.max(0, Number(r.localContributionXof ?? r.providerPrice ?? 0)),
+        0
+      );
+  }, [allReservations, clientReservations, isAdmin]);
+
+  // Combined Traveler Reviews for JourneyHubView (approved public + current user's own pending/approved)
+  const mergedTravelerReviews = useMemo(() => {
+    const map = new Map<string, TravelerReviewDoc>();
+    for (const r of approvedReviews) map.set(r.id, r);
+    for (const r of myTravelerReviews) map.set(r.id, r);
+    return Array.from(map.values());
+  }, [approvedReviews, myTravelerReviews]);
 
   const activeFolder = useMemo(
     () => folders.find((f) => f.id === selectedFolderId) || null,
     [folders, selectedFolderId]
   );
 
-  // Smart Dynamic Primary CTA (Section 4)
+  // Smart Dynamic Primary CTA
   const smartJourneyCtaLabel = useMemo(() => {
     if (!authUser || folders.length === 0 || !activeFolder) {
       return 'Créer mon voyage';
@@ -1011,7 +1399,11 @@ function AmaroPlatform() {
     const hasConfirmedBooking = clientReservations.some(
       (r) => r.folderId === activeFolder.id && r.status === 'confirmed'
     );
-    if (activeFolder.status === 'active' || hasConfirmedBooking) {
+    if (
+      activeFolder.status === 'active' ||
+      activeFolder.status === 'fully_confirmed' ||
+      hasConfirmedBooking
+    ) {
       return 'Suivre mon voyage';
     }
     return 'Continuer mon voyage';
@@ -1021,21 +1413,10 @@ function AmaroPlatform() {
     setActiveTab('journey');
   }, []);
 
-  // Auth Handlers
-  const handleSignIn = useCallback(async () => {
-    if (isSigningIn) return;
-    setIsSigningIn(true);
-    try {
-      await signInWithPopup(auth, googleProvider);
-      showToast('Connexion Google vérifiée.');
-    } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        showToast('Connexion annulée ou bloquée par le navigateur.');
-      }
-    } finally {
-      setIsSigningIn(false);
-    }
-  }, [isSigningIn, showToast]);
+  // Auth Handlers (opens Google + Email/Password + Reset Modal)
+  const handleSignIn = useCallback(() => {
+    setShowAuthModal(true);
+  }, []);
 
   const handleSignOut = useCallback(async () => {
     await signOut(auth);
@@ -1082,12 +1463,126 @@ function AmaroPlatform() {
     }
   };
 
-  // Ensure user reuses an existing non-archived folder before creating one (prevents unintended duplicates)
+  // Materialize Free Assistant Draft Itinerary into a real Journey Folder + Steps (Bloc 2.1)
+  const handleApplyAssistantDraft = useCallback(
+    async (draft: AssistantDraftItinerary) => {
+      if (!authUser?.uid || !hasFirestoreSession) {
+        try {
+          sessionStorage.setItem(PENDING_ASSISTANT_DRAFT_KEY, JSON.stringify(draft));
+        } catch {
+          // ignore
+        }
+        setShowAuthModal(true);
+        return;
+      }
+
+      const folderId = makeSafeId('folder');
+      const primaryCityId = draft.cities[0] || 'cotonou';
+      const startDate =
+        draft.startDate || new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+      const endDate = draft.endDate || startDate;
+      const estimatedTotal = Math.max(0, Number(draft.knownBudgetXof || 0));
+      const dailyBudget = Math.round(
+        estimatedTotal / Math.max(1, draft.daysCount || 1)
+      );
+
+      try {
+        await setDoc(doc(db, 'journey_folders', folderId), {
+          ownerId: authUser.uid,
+          title: draft.title.slice(0, 135),
+          countryCode: 'BJ',
+          primaryCityId,
+          startDate,
+          endDate,
+          travelersCount: Math.max(1, Math.min(50, Math.round(draft.travelersCount || 2))),
+          totalBudget: estimatedTotal > 0 ? estimatedTotal : 250_000,
+          dailyBudget: dailyBudget > 0 ? dailyBudget : 45_000,
+          currency: 'XOF',
+          preferencesNotes: `Généré via l’Assistant AMARO (${draft.intentionSummary || 'Découverte'})`.slice(
+            0,
+            950
+          ),
+          status: 'planning',
+          dossierFeeStatus: 'pending',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        for (const step of draft.steps) {
+          if (step.isFreeTimeBlock || !step.serviceId) continue;
+          const itemId = makeSafeId('step');
+          const [hh, mm] = (step.startTime || '09:00').split(':').map(Number);
+          const endTotal = ((hh || 9) * 60 + (mm || 0) + (step.durationMinutes || 90)) % 1440;
+          const endTime =
+            step.endTime ||
+            `${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(
+              endTotal % 60
+            ).padStart(2, '0')}`;
+
+          await setDoc(doc(db, 'journey_folders', folderId, 'items', itemId), {
+            folderId,
+            ownerId: authUser.uid,
+            serviceId: step.serviceId,
+            providerId: 'dir-assistant',
+            serviceTitle: step.serviceTitle.slice(0, 155),
+            category: step.category,
+            cityId: step.cityId,
+            date: step.date,
+            startTime: step.startTime || '09:00',
+            endTime,
+            durationMinutes: Math.max(15, Math.round(step.durationMinutes || 90)),
+            estimatedCost: step.priceKnown ? Math.max(0, Number(step.estimatedCostXof || 0)) : 0,
+            currency: 'XOF',
+            stage: 'envisaged',
+            notes: (step.notes || '').slice(0, 580),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        setSelectedFolderId(folderId);
+        setActiveTab('journey');
+        showToast(
+          'Votre proposition d’itinéraire a été transformée en dossier de voyage modifiable.'
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `journey_folders/${folderId}`);
+      }
+    },
+    [authUser?.uid, hasFirestoreSession, setSelectedFolderId, showToast]
+  );
+
+  // Automatically restore pending draft saved before sign-in so work is never lost
+  const pendingDraftRestoredRef = useRef<string>('');
+  useEffect(() => {
+    if (!authUser?.uid || !hasFirestoreSession) return;
+    if (pendingDraftRestoredRef.current === authUser.uid) return;
+    try {
+      const raw = sessionStorage.getItem(PENDING_ASSISTANT_DRAFT_KEY);
+      if (!raw) return;
+      pendingDraftRestoredRef.current = authUser.uid;
+      sessionStorage.removeItem(PENDING_ASSISTANT_DRAFT_KEY);
+      const parsed = JSON.parse(raw) as AssistantDraftItinerary;
+      if (parsed && Array.isArray(parsed.steps)) {
+        void handleApplyAssistantDraft(parsed);
+      }
+    } catch {
+      // ignore malformed session draft
+    }
+  }, [authUser?.uid, handleApplyAssistantDraft, hasFirestoreSession]);
+
+  // Ensure user reuses an existing non-archived folder before creating one
   const ensureActiveFolderId = async (): Promise<string> => {
     if (activeFolder?.id && activeFolder.status !== 'archived') return activeFolder.id;
     const reusable =
       folders.find((f) => f.status === 'active') ||
-      folders.find((f) => f.status === 'planning');
+      folders.find(
+        (f) =>
+          f.status === 'planning' ||
+          f.status === 'draft' ||
+          f.status === 'coordinating' ||
+          f.status === 'requests_in_progress'
+      );
     if (reusable) {
       setSelectedFolderId(reusable.id);
       return reusable.id;
@@ -1104,11 +1599,14 @@ function AmaroPlatform() {
         startDate: '2026-11-15',
         endDate: '2026-11-21',
         travelersCount: 2,
-        totalBudget: 300000,
-        dailyBudget: 45000,
+        totalBudget: userSavedPrefs?.preferredStanding === 'haut_de_gamme' ? 600_000 : 300_000,
+        dailyBudget: userSavedPrefs?.preferredStanding === 'haut_de_gamme' ? 85_000 : 45_000,
         currency: 'XOF',
-        preferencesNotes: 'Dossier initialisé automatiquement',
+        preferencesNotes: userSavedPrefs?.dietaryNotes
+          ? `Préférences enregistrées : ${userSavedPrefs.dietaryNotes}`.slice(0, 950)
+          : 'Dossier initialisé automatiquement',
         status: 'planning',
+        dossierFeeStatus: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1152,6 +1650,7 @@ function AmaroPlatform() {
         currency: payload.currency,
         preferencesNotes: payload.preferencesNotes.slice(0, 950),
         status: 'planning',
+        dossierFeeStatus: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1192,13 +1691,274 @@ function AmaroPlatform() {
       });
       showToast(
         status === 'completed'
-          ? 'Voyage marqué comme terminé : votre Carnet Souvenir est prêt.'
+          ? 'Voyage marqué comme terminé : votre Carnet Souvenir et vos avis post-séjour sont disponibles.'
           : status === 'active'
           ? 'Voyage passé en statut « En cours ».'
-          : 'Voyage repassé en préparation.'
+          : 'Statut du dossier mis à jour.'
       );
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `journey_folders/${folderId}`);
+    }
+  };
+
+  // Duplicate Folder as Reusable Template (Bloc 6.2)
+  const handleDuplicateFolderAsTemplate = async (sourceFolder: JourneyFolderDoc) => {
+    if (!authUser?.uid) return;
+    const newFolderId = makeSafeId('folder-tpl');
+    try {
+      await setDoc(doc(db, 'journey_folders', newFolderId), {
+        ownerId: authUser.uid,
+        title: `Copie modèle — ${sourceFolder.title}`.slice(0, 135),
+        countryCode: sourceFolder.countryCode || 'BJ',
+        primaryCityId: sourceFolder.primaryCityId || 'cotonou',
+        startDate: sourceFolder.startDate,
+        endDate: sourceFolder.endDate,
+        travelersCount: sourceFolder.travelersCount || 2,
+        totalBudget: sourceFolder.totalBudget || 300_000,
+        dailyBudget: sourceFolder.dailyBudget || 45_000,
+        currency: sourceFolder.currency || 'XOF',
+        preferencesNotes: (sourceFolder.preferencesNotes || '').slice(0, 950),
+        status: 'planning',
+        dossierFeeStatus: 'pending',
+        templateSourceFolderId: sourceFolder.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const itemsSnap = await getDocs(
+        query(
+          collection(db, 'journey_folders', sourceFolder.id, 'items'),
+          where('ownerId', '==', authUser.uid)
+        )
+      );
+      for (const itemDoc of itemsSnap.docs) {
+        const d = itemDoc.data() as any;
+        const copyId = makeSafeId('step');
+        await setDoc(doc(db, 'journey_folders', newFolderId, 'items', copyId), {
+          folderId: newFolderId,
+          ownerId: authUser.uid,
+          serviceId: d.serviceId,
+          providerId: d.providerId,
+          serviceTitle: d.serviceTitle,
+          category: d.category,
+          cityId: d.cityId,
+          date: d.date,
+          startTime: d.startTime,
+          endTime: d.endTime,
+          durationMinutes: d.durationMinutes,
+          estimatedCost: d.estimatedCost,
+          currency: d.currency,
+          stage: 'envisaged',
+          notes: d.notes || '',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      setSelectedFolderId(newFolderId);
+      showToast('Itinéraire dupliqué comme nouveau modèle de voyage (sans réservations liées).');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `journey_folders/${newFolderId}`);
+    }
+  };
+
+  // Private Folder Intention Save (Bloc 6.1 & 9.4)
+  const handleSaveFolderIntention = async (payload: {
+    motivations: string[];
+    personalNote: string;
+    skipped: boolean;
+  }) => {
+    if (!authUser?.uid || !selectedFolderId) return;
+    const ref = doc(db, 'journey_folders', selectedFolderId, 'private', 'intention');
+    try {
+      await setDoc(
+        ref,
+        {
+          folderId: selectedFolderId,
+          ownerId: authUser.uid,
+          motivations: payload.motivations.slice(0, 8),
+          personalNote: payload.personalNote.slice(0, 900),
+          skipped: Boolean(payload.skipped),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      showToast(
+        payload.skipped
+          ? 'Étape d’intention passée librement.'
+          : 'Votre intention personnelle de voyage a été enregistrée en privé.'
+      );
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.WRITE,
+        `journey_folders/${selectedFolderId}/private/intention`
+      );
+    }
+  };
+
+  // On-Site Expense Entry Save (Bloc 6.1)
+  const handleAddFolderExpense = async (payload: {
+    label: string;
+    category: ServiceCategory;
+    amount: number;
+    currency: CurrencyCode;
+    date: string;
+  }) => {
+    if (!authUser?.uid || !selectedFolderId) return;
+    const expId = makeSafeId('exp');
+    try {
+      await setDoc(doc(db, 'journey_folders', selectedFolderId, 'expenses', expId), {
+        folderId: selectedFolderId,
+        ownerId: authUser.uid,
+        label: payload.label.slice(0, 155),
+        category: payload.category,
+        amount: Math.max(0, Number(payload.amount)),
+        currency: payload.currency,
+        date: payload.date.slice(0, 20),
+        createdAtIso: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+      });
+      showToast('Dépense sur place ajoutée au suivi budgétaire.');
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.CREATE,
+        `journey_folders/${selectedFolderId}/expenses/${expId}`
+      );
+    }
+  };
+
+  // Read-Only Folder Share Link Create & Revoke (Bloc 6.1)
+  const handleCreateFolderShare = async (folderId: string) => {
+    if (!authUser?.uid) return;
+    const targetFolder = folders.find((f) => f.id === folderId);
+    if (!targetFolder) return;
+    const shareId = makeSafeId('shr');
+    const summaryLines = folderItems.map(
+      (it) =>
+        `• ${it.date} (${it.startTime}) — ${it.serviceTitle} [${it.cityId}, ${it.category}]`
+    );
+    const snapshotSummary = (
+      summaryLines.length > 0
+        ? summaryLines.join('\n')
+        : `${targetFolder.title} (${targetFolder.startDate} → ${targetFolder.endDate}) — Étapes en cours de préparation.`
+    ).slice(0, 5800);
+    const publicSnapshotJson = JSON.stringify({
+      steps: folderItems.map((it) => ({
+        date: it.date,
+        startTime: it.startTime,
+        cityId: it.cityId,
+        category: it.category,
+        serviceTitle: it.serviceTitle,
+      })),
+    });
+
+    try {
+      await setDoc(doc(db, 'folder_shares', shareId), {
+        folderId: targetFolder.id,
+        ownerId: authUser.uid,
+        folderTitle: targetFolder.title.slice(0, 135),
+        startDate: targetFolder.startDate,
+        endDate: targetFolder.endDate,
+        primaryCityId: targetFolder.primaryCityId,
+        snapshotSummary,
+        publicSnapshotJson: publicSnapshotJson.slice(0, 18_000),
+        revoked: false,
+        suggestions: [],
+        createdAtIso: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Lien de partage en lecture seule généré (révocable en un clic).');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `folder_shares/${shareId}`);
+    }
+  };
+
+  const handleRevokeFolderShare = async (shareId: string) => {
+    try {
+      await updateDoc(doc(db, 'folder_shares', shareId), {
+        revoked: true,
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Lien de partage révoqué immédiatement.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `folder_shares/${shareId}`);
+    }
+  };
+
+  // Post-Stay Verified Traveler Review & Private Provider Thank-You (Bloc 6.3 & 9.5)
+  const handleSubmitTravelerReview = async (payload: {
+    reservation: ReservationDoc;
+    rating: number;
+    comment: string;
+  }) => {
+    if (!authUser?.uid) return;
+    const revId = makeSafeId('rev');
+    const displayLabel = (
+      userPublic?.displayName ||
+      authUser.displayName ||
+      'Voyageur vérifié'
+    ).slice(0, 95);
+    try {
+      await setDoc(doc(db, 'traveler_reviews', revId), {
+        reservationId: payload.reservation.id,
+        folderId: payload.reservation.folderId,
+        serviceId: payload.reservation.serviceId,
+        serviceTitle: payload.reservation.serviceTitle.slice(0, 155),
+        cityId: payload.reservation.cityId,
+        clientId: authUser.uid,
+        authorId: authUser.uid,
+        authorDisplayName: displayLabel,
+        authorName: displayLabel,
+        rating: Math.max(1, Math.min(5, Math.round(payload.rating))),
+        comment: payload.comment.slice(0, 1900),
+        moderationStatus: 'pending',
+        verifiedStay: payload.reservation.status === 'confirmed',
+        createdAtIso: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Votre avis vérifié a été transmis à la modération AMARO.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `traveler_reviews/${revId}`);
+    }
+  };
+
+  const handleSendProviderThankYou = async (payload: {
+    reservation: ReservationDoc;
+    message: string;
+  }) => {
+    if (!authUser?.uid) return;
+    const tyId = makeSafeId('thx');
+    const senderLabel = (
+      userPublic?.displayName ||
+      authUser.displayName ||
+      'Voyageur AMARO'
+    ).slice(0, 95);
+    try {
+      await setDoc(doc(db, 'provider_thank_yous', tyId), {
+        reservationId: payload.reservation.id,
+        serviceId: payload.reservation.serviceId,
+        serviceTitle: payload.reservation.serviceTitle.slice(0, 155),
+        providerId: payload.reservation.providerId,
+        providerOwnerId: payload.reservation.providerOwnerId,
+        clientId: authUser.uid,
+        senderId: authUser.uid,
+        clientDisplayName: senderLabel,
+        senderName: senderLabel,
+        message: payload.message.slice(0, 1100),
+        status: 'pending_admin',
+        createdAtIso: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      showToast(
+        'Votre message privé de remerciement a été enregistré pour transmission au prestataire.'
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `provider_thank_yous/${tyId}`);
     }
   };
 
@@ -1417,7 +2177,7 @@ function AmaroPlatform() {
     }
   };
 
-  // Server-Authoritative Reservation Creation (+ Affiliate Referral Attribution & Anti-Self-Referral)
+  // Server-Authoritative Reservation Creation (+ Dossier Fee Gate & Affiliate Anti-Abuse)
   const handleRequestReservation = async (
     item: CatalogueItem,
     date: string,
@@ -1614,7 +2374,7 @@ function AmaroPlatform() {
     }
   };
 
-  // User Profile & Isolated RGPD PII Save
+  // User Profile, Saved Preferences & Mute Non-Essential Toggle
   const handleSaveUserProfile = async (
     pub: {
       displayName: string;
@@ -1625,6 +2385,7 @@ function AmaroPlatform() {
     priv: {
       email: string;
       phone: string;
+      phoneVerified?: boolean;
       emergencyContact: string;
     }
   ) => {
@@ -1655,10 +2416,12 @@ function AmaroPlatform() {
 
       const privRef = doc(db, 'users', uid, 'private', 'info');
       const privSnap = await getDoc(privRef);
+      const phoneChanged = userPrivate?.phone !== priv.phone;
       if (privSnap.exists()) {
         await updateDoc(privRef, {
           email: priv.email.slice(0, 195),
           phone: priv.phone.slice(0, 38),
+          phoneVerified: phoneChanged ? false : Boolean(userPrivate?.phoneVerified),
           emergencyContact: priv.emergencyContact.slice(0, 195),
           updatedAt: serverTimestamp(),
         });
@@ -1667,6 +2430,7 @@ function AmaroPlatform() {
           uid,
           email: priv.email.slice(0, 195),
           phone: priv.phone.slice(0, 38),
+          phoneVerified: false,
           emergencyContact: priv.emergencyContact.slice(0, 195),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1681,7 +2445,129 @@ function AmaroPlatform() {
     }
   };
 
-  // Provider Profile & Isolated Commercial Private Info Save
+  const handleSaveUserPreferences = async (
+    prefs: Omit<UserSavedPreferencesDoc, 'userId' | 'updatedAtIso'>
+  ) => {
+    if (!authUser?.uid) return;
+    const ref = doc(db, 'users', authUser.uid, 'private', 'preferences');
+    try {
+      await setDoc(
+        ref,
+        {
+          userId: authUser.uid,
+          consentEnabled: Boolean(prefs.consentEnabled),
+          preferredStanding: (prefs.preferredStanding || 'equilibre').slice(0, 80),
+          travelPace: (prefs.travelPace || 'equilibre').slice(0, 80),
+          dietaryNotes: (prefs.dietaryNotes || '').slice(0, 500),
+          favoriteInterests: Array.isArray(prefs.favoriteInterests)
+            ? prefs.favoriteInterests.slice(0, 20)
+            : [],
+          muteNonEssentialNotifications: Boolean(prefs.muteNonEssentialNotifications),
+          phoneNumberDeclared: (prefs.phoneNumberDeclared || '').slice(0, 40),
+          phoneVerified: Boolean(prefs.phoneVerified),
+          updatedAtIso: new Date().toISOString(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      showToast('Préférences de voyage mémorisées pour vos prochains dossiers.');
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.WRITE,
+        `users/${authUser.uid}/private/preferences`
+      );
+    }
+  };
+
+  const handleToggleMuteNonEssential = async () => {
+    if (!authUser?.uid) return;
+    const nextVal = !Boolean(userSavedPrefs?.muteNonEssentialNotifications);
+    await handleSaveUserPreferences({
+      consentEnabled: userSavedPrefs?.consentEnabled ?? true,
+      preferredStanding: userSavedPrefs?.preferredStanding || 'equilibre',
+      travelPace: userSavedPrefs?.travelPace || 'equilibre',
+      dietaryNotes: userSavedPrefs?.dietaryNotes || '',
+      favoriteInterests: userSavedPrefs?.favoriteInterests || [],
+      muteNonEssentialNotifications: nextVal,
+      phoneNumberDeclared: userSavedPrefs?.phoneNumberDeclared || '',
+      phoneVerified: Boolean(userSavedPrefs?.phoneVerified),
+    });
+  };
+
+  // Circuit B Single Entry Point: Register Provider via "Promouvoir mes services" (Bloc 1)
+  const handleRegisterProviderViaPromote = async (payload: {
+    businessName: string;
+    category: ServiceCategory;
+    cityId: string;
+    publicZone: string;
+    descriptionFr: string;
+    phone: string;
+    whatsapp: string;
+    email: string;
+    taxOrRegistrationId: string;
+    acceptedConvention: boolean;
+    claimDirectoryServiceId?: string;
+  }): Promise<boolean> => {
+    if (!authUser?.uid) {
+      setShowAuthModal(true);
+      return false;
+    }
+    try {
+      const resp = await authorizedFetch('/api/amaro/providers/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceFlow: 'promote_services',
+          conventionAccepted: payload.acceptedConvention,
+          companyName: payload.businessName,
+          category: payload.category,
+          cityId: payload.cityId,
+          phone: payload.phone,
+          contactEmail: payload.email,
+          description: `${payload.descriptionFr}${
+            payload.publicZone ? ` (Zone : ${payload.publicZone})` : ''
+          }`,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data?.error || 'Inscription prestataire refusée.');
+        return false;
+      }
+
+      const providerId = String(data.providerId || `prv-${authUser.uid.slice(0, 24)}`);
+      if (payload.claimDirectoryServiceId?.trim()) {
+        await updateDoc(doc(db, 'providers', providerId), {
+          claimedDirectoryServiceId: payload.claimDirectoryServiceId.trim().slice(0, 120),
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+      await setDoc(
+        doc(db, 'providers', providerId, 'private', 'commercial'),
+        {
+          ownerId: authUser.uid,
+          contactEmail: payload.email.slice(0, 195),
+          contactPhone: (payload.whatsapp || payload.phone).slice(0, 38),
+          payoutChannel: payload.whatsapp ? `WhatsApp/MoMo ${payload.whatsapp}`.slice(0, 115) : '',
+          registrationRef: payload.taxOrRegistrationId.slice(0, 115),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      showToast(
+        data?.notice ||
+          'Candidature enregistrée avec le statut « En attente de validation ».'
+      );
+      return true;
+    } catch {
+      showToast('Erreur de communication lors de l’inscription prestataire.');
+      return false;
+    }
+  };
+
+  // Update Existing Provider Profile (Workspace only allows editing an ALREADY registered provider)
   const handleSaveProviderProfile = async (
     pub: {
       businessName: string;
@@ -1698,57 +2584,110 @@ function AmaroPlatform() {
     }
   ) => {
     if (!authUser?.uid) return;
-    const providerId = myProvider?.id || `prov-${authUser.uid.slice(0, 20)}`;
+    if (!myProvider) {
+      showToast(
+        'Veuillez passer par « Promouvoir mes services » pour inscrire votre établissement.'
+      );
+      setActiveTab('promote');
+      return;
+    }
+    const providerId = myProvider.id;
     try {
-      const provRef = doc(db, 'providers', providerId);
-      if (myProvider) {
-        await updateDoc(provRef, {
-          businessName: pub.businessName.slice(0, 135),
-          category: pub.category,
-          countryCode: pub.countryCode,
-          cityId: pub.cityId,
-          description: pub.description.slice(0, 1450),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(provRef, {
-          ownerId: authUser.uid,
-          businessName: pub.businessName.slice(0, 135),
-          category: pub.category,
-          countryCode: pub.countryCode,
-          cityId: pub.cityId,
-          description: pub.description.slice(0, 1450),
-          verificationStatus: 'pending',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
+      await updateDoc(doc(db, 'providers', providerId), {
+        businessName: pub.businessName.slice(0, 135),
+        category: pub.category,
+        countryCode: pub.countryCode,
+        cityId: pub.cityId,
+        description: pub.description.slice(0, 1450),
+        updatedAt: serverTimestamp(),
+      });
 
       const commRef = doc(db, 'providers', providerId, 'private', 'commercial');
-      const commSnap = await getDoc(commRef);
-      if (commSnap.exists()) {
-        await updateDoc(commRef, {
-          contactEmail: priv.contactEmail.slice(0, 195),
-          contactPhone: priv.contactPhone.slice(0, 38),
-          payoutChannel: priv.payoutChannel.slice(0, 115),
-          registrationRef: priv.registrationRef.slice(0, 115),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(commRef, {
+      await setDoc(
+        commRef,
+        {
           ownerId: authUser.uid,
           contactEmail: priv.contactEmail.slice(0, 195),
           contactPhone: priv.contactPhone.slice(0, 38),
           payoutChannel: priv.payoutChannel.slice(0, 115),
           registrationRef: priv.registrationRef.slice(0, 115),
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      showToast('Profil prestataire mis à jour.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `providers/${providerId}`);
+    }
+  };
+
+  const handleCreateOrUpdatePromoteService = async (draft: {
+    id?: string;
+    title: string;
+    category: ServiceCategory;
+    cityId: string;
+    address: string;
+    priceAmount: number;
+    capacity: number;
+    durationMinutes: number;
+    description: string;
+    blockedDates: string[];
+  }) => {
+    if (!authUser?.uid || !myProvider) return;
+    const isVerifiedPartner = myProvider.verificationStatus === 'verified';
+    const serviceId = draft.id || makeSafeId('srv');
+    const imgKey =
+      draft.category === 'transport'
+        ? 'cotonou_road'
+        : draft.category === 'site'
+        ? 'ouidah_memorial'
+        : 'cotonou_coast';
+    const imgMeta = EDITORIAL_IMAGES[imgKey] || EDITORIAL_IMAGES.cotonou_coast;
+
+    try {
+      const ref = doc(db, 'services', serviceId);
+      const snap = await getDoc(ref);
+      const commonFields = {
+        title: draft.title.slice(0, 155),
+        category: draft.category,
+        cityId: draft.cityId,
+        address: draft.address.slice(0, 230),
+        description: draft.description.slice(0, 1900),
+        priceAmount: Math.max(0, Number(draft.priceAmount)),
+        priceKnown: Number(draft.priceAmount) > 0,
+        durationMinutes: Math.max(15, Math.round(draft.durationMinutes)),
+        capacity: Math.max(1, Math.round(draft.capacity)),
+        blockedDates: draft.blockedDates.slice(0, 180),
+        // Bloc 1: Strictly draft / non-bookable until Admin validates the provider!
+        dataOrigin: isVerifiedPartner ? 'verified_partner' : 'pending_verification',
+        verificationStatus: isVerifiedPartner ? 'verified' : 'unverified',
+        status: isVerifiedPartner ? 'published' : 'draft',
+        updatedAt: serverTimestamp(),
+      };
+
+      if (snap.exists()) {
+        await updateDoc(ref, commonFields);
+      } else {
+        await setDoc(ref, {
+          providerId: myProvider.id,
+          ownerId: authUser.uid,
+          countryCode: 'BJ',
+          currency: 'XOF',
+          imageKey: imgKey,
+          imageLicense: imgMeta.license.slice(0, 195),
+          ...commonFields,
+          createdAt: serverTimestamp(),
         });
       }
 
-      showToast('Dossier prestataire enregistré.');
+      showToast(
+        isVerifiedPartner
+          ? 'Offre Partenaire AMARO enregistrée et publiée.'
+          : 'Offre enregistrée en brouillon : elle sera publiée dès validation de votre dossier par l’administrateur AMARO.'
+      );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `providers/${providerId}`);
+      handleFirestoreError(err, OperationType.WRITE, `services/${serviceId}`);
     }
   };
 
@@ -1764,38 +2703,17 @@ function AmaroPlatform() {
     capacity: number;
     imageKey: string;
   }) => {
-    if (!authUser?.uid || !myProvider) return;
-    const serviceId = makeSafeId('srv');
-    const imgMeta =
-      EDITORIAL_IMAGES[payload.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
-    try {
-      await setDoc(doc(db, 'services', serviceId), {
-        providerId: myProvider.id,
-        ownerId: authUser.uid,
-        title: payload.title.slice(0, 155),
-        category: payload.category,
-        countryCode: 'BJ',
-        cityId: payload.cityId,
-        address: payload.address.slice(0, 230),
-        description: payload.description.slice(0, 1900),
-        priceAmount: Math.max(0, Number(payload.priceAmount)),
-        currency: payload.currency,
-        durationMinutes: Math.max(15, Math.round(payload.durationMinutes)),
-        capacity: Math.max(1, Math.round(payload.capacity)),
-        dataOrigin:
-          isAdmin && myProvider.verificationStatus === 'verified'
-            ? 'verified_partner'
-            : 'pending_verification',
-        status: 'published',
-        imageKey: payload.imageKey,
-        imageLicense: imgMeta.license.slice(0, 195),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      showToast('Prestation publiée dans le catalogue.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `services/${serviceId}`);
-    }
+    await handleCreateOrUpdatePromoteService({
+      title: payload.title,
+      category: payload.category,
+      cityId: payload.cityId,
+      address: payload.address,
+      description: payload.description,
+      priceAmount: payload.priceAmount,
+      capacity: payload.capacity,
+      durationMinutes: payload.durationMinutes,
+      blockedDates: [],
+    });
   };
 
   const handleProviderRespondReservation = async (
@@ -1806,6 +2724,31 @@ function AmaroPlatform() {
     newTime: string
   ) => {
     try {
+      const actionMap = {
+        accepted: 'provider_accept',
+        rejected: 'provider_reject',
+        alternative_proposed: 'provider_propose_alternative',
+      } as const;
+
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(reservation.id)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: actionMap[decision],
+            alternativeProposal,
+            scheduledDate: newDate,
+            scheduledTime: newTime,
+          }),
+        }
+      );
+      if (resp.ok) {
+        showToast('Réponse transmise au voyageur et dossier mis à jour.');
+        return;
+      }
+
+      // Fallback direct Firestore update if server store is unavailable
       await updateDoc(doc(db, 'reservations', reservation.id), {
         status: decision,
         alternativeProposal: alternativeProposal.slice(0, 780),
@@ -1813,7 +2756,6 @@ function AmaroPlatform() {
         scheduledTime: newTime,
         updatedAt: serverTimestamp(),
       });
-
       await createInternalNotification(
         reservation.clientId,
         decision === 'alternative_proposed' ? 'alternative' : 'reservation',
@@ -1824,7 +2766,6 @@ function AmaroPlatform() {
           ? `Alternative proposée : ${alternativeProposal} (${newDate} à ${newTime}).`
           : `Créneau indisponible : ${alternativeProposal}`
       );
-
       showToast('Réponse envoyée au voyageur.');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `reservations/${reservation.id}`);
@@ -1842,13 +2783,15 @@ function AmaroPlatform() {
         updatedAt: serverTimestamp(),
       });
 
-      const matchingServices = publishedServices.filter(
+      const matchingServices = allCatalogueServices.filter(
         (s) => s.providerId === providerId
       );
       for (const srv of matchingServices) {
         await updateDoc(doc(db, 'services', srv.id), {
           dataOrigin:
             status === 'verified' ? 'verified_partner' : 'pending_verification',
+          verificationStatus: status === 'verified' ? 'verified' : 'unverified',
+          status: status === 'verified' ? 'published' : 'draft',
           updatedAt: serverTimestamp(),
         });
       }
@@ -1861,6 +2804,71 @@ function AmaroPlatform() {
       showToast(`Prestataire mis à jour (${status}).`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `providers/${providerId}`);
+    }
+  };
+
+  // Bloc 1: Link a registered provider account to an existing public directory listing in 1 click WITHOUT creating a duplicate
+  const handleAdminLinkProviderToDirectoryListing = async (
+    provider: ProviderProfileDoc,
+    directoryServiceId: string
+  ) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const cleanId = directoryServiceId.trim();
+    const staticMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === cleanId);
+    const existingDoc = allCatalogueServices.find((s) => s.id === cleanId);
+    const baseItem = existingDoc || staticMatch;
+    if (!baseItem) {
+      showToast('Fiche répertoire introuvable pour ce rattachement.');
+      return;
+    }
+
+    const imgMeta =
+      EDITORIAL_IMAGES[baseItem.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+
+    try {
+      await setDoc(
+        doc(db, 'services', cleanId),
+        {
+          providerId: provider.id,
+          ownerId: provider.ownerId,
+          title: baseItem.title.slice(0, 155),
+          category: baseItem.category,
+          countryCode: 'BJ',
+          cityId: baseItem.cityId,
+          address: (baseItem.address || '').slice(0, 230),
+          description: (baseItem.description || '').slice(0, 1900),
+          priceAmount: Math.max(0, Number(baseItem.priceAmount || 0)),
+          priceKnown: baseItem.priceKnown !== false && Number(baseItem.priceAmount || 0) > 0,
+          currency: baseItem.currency || 'XOF',
+          durationMinutes: Math.max(15, Number(baseItem.durationMinutes || 120)),
+          capacity: Math.max(1, Number(baseItem.capacity || 2)),
+          dataOrigin: 'verified_partner',
+          verificationStatus: 'verified',
+          status: 'published',
+          imageKey: baseItem.imageKey,
+          imageLicense: imgMeta.license.slice(0, 195),
+          updatedAt: serverTimestamp(),
+          ...(existingDoc ? {} : { createdAt: serverTimestamp() }),
+        },
+        { merge: true }
+      );
+
+      await updateDoc(doc(db, 'providers', provider.id), {
+        verificationStatus: 'verified',
+        claimedDirectoryServiceId: cleanId,
+        updatedAt: serverTimestamp(),
+      });
+
+      await writeAuditLog(
+        'LINK_PROVIDER_TO_DIRECTORY',
+        cleanId,
+        `Fiche répertoire ${cleanId} rattachée sans doublon au prestataire ${provider.businessName} (${provider.id})`
+      );
+      showToast(
+        `Fiche « ${baseItem.title} » rattachée en 1 clic au compte « ${provider.businessName} » (Partenaire AMARO, zéro doublon).`
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `services/${cleanId}`);
     }
   };
 
@@ -1881,6 +2889,87 @@ function AmaroPlatform() {
       showToast(`Récit culturel : ${status}.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `cultural_stories/${storyId}`);
+    }
+  };
+
+  const handleAdminModerateReview = async (
+    reviewId: string,
+    status: 'approved' | 'rejected'
+  ) => {
+    if (!isAdmin) return;
+    try {
+      await updateDoc(doc(db, 'traveler_reviews', reviewId), {
+        moderationStatus: status,
+        updatedAt: serverTimestamp(),
+      });
+      await writeAuditLog('MODERATE_REVIEW', reviewId, `Avis voyageur -> ${status}`);
+      showToast(
+        status === 'approved'
+          ? 'Avis voyageur vérifié approuvé et publié.'
+          : 'Avis voyageur refusé.'
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `traveler_reviews/${reviewId}`);
+    }
+  };
+
+  const handleAdminUpdateThankYou = async (
+    thankYouId: string,
+    status: 'transmitted_to_provider' | 'archived'
+  ) => {
+    if (!isAdmin) return;
+    try {
+      await updateDoc(doc(db, 'provider_thank_yous', thankYouId), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+      await writeAuditLog(
+        'UPDATE_PROVIDER_THANK_YOU',
+        thankYouId,
+        `Remerciement privé -> ${status}`
+      );
+      showToast(
+        status === 'transmitted_to_provider'
+          ? 'Remerciement transmis à l’espace du prestataire.'
+          : 'Remerciement archivé.'
+      );
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.UPDATE,
+        `provider_thank_yous/${thankYouId}`
+      );
+    }
+  };
+
+  const handleAdminAddAdminUid = async (uid: string, email: string) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const cleanUid = uid.trim();
+    if (!cleanUid) return;
+    try {
+      await setDoc(doc(db, 'admins', cleanUid), {
+        uid: cleanUid,
+        roleLevel: 'moderator',
+        email: email.trim().toLowerCase().slice(0, 195),
+        role: 'admin_delegue',
+        addedBy: authUser.uid,
+        createdAt: serverTimestamp(),
+      });
+      await writeAuditLog('ADD_ADMIN_UID', cleanUid, `Ajout co-admin ${email}`);
+      showToast(`Administrateur délégué (${email || cleanUid}) ajouté.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `admins/${cleanUid}`);
+    }
+  };
+
+  const handleAdminRemoveAdminUid = async (uid: string) => {
+    if (!authUser?.uid || !isAdmin) return;
+    try {
+      await deleteDoc(doc(db, 'admins', uid));
+      await writeAuditLog('REMOVE_ADMIN_UID', uid, 'Révocation co-administrateur');
+      showToast('Accès co-administrateur révoqué.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `admins/${uid}`);
     }
   };
 
@@ -1923,6 +3012,79 @@ function AmaroPlatform() {
       showToast('Barèmes financiers Bénin enregistrés.');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'system_settings/BJ');
+    }
+  };
+
+  const handleAdminSaveExtendedSettings = async (patch: Partial<SystemSettingDoc>) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const ref = doc(db, 'system_settings', 'BJ');
+    try {
+      const snap = await getDoc(ref);
+      const base = snap.exists()
+        ? {}
+        : {
+            countryCode: 'BJ',
+            commissionPercent: countrySetting?.commissionPercent ?? 10,
+            serviceFeeFlat: countrySetting?.serviceFeeFlat ?? 1_000,
+            taxPercent: countrySetting?.taxPercent ?? 18,
+            currency: 'XOF',
+            createdAt: serverTimestamp(),
+          };
+      const { id: _ignore, ...cleanPatch } = patch as any;
+      await setDoc(
+        ref,
+        {
+          ...base,
+          ...cleanPatch,
+          updatedBy: authUser.uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await writeAuditLog(
+        'UPDATE_GOVERNANCE_SETTINGS_BJ',
+        'BJ',
+        `Paramètres étendus mis à jour (${Object.keys(cleanPatch).join(', ')})`
+      );
+      showToast('Paramètres opérationnels et juridiques enregistrés.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'system_settings/BJ');
+    }
+  };
+
+  const handleAdminSavePlatformContent = async (
+    docDraft: Omit<PlatformContentDoc, 'updatedBy' | 'updatedAtIso'>
+  ) => {
+    if (!authUser?.uid || !isAdmin) return;
+    const cleanId = (docDraft.id || docDraft.slug)
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 120);
+    try {
+      await setDoc(
+        doc(db, 'platform_content', cleanId),
+        {
+          slug: docDraft.slug || cleanId,
+          title: docDraft.title.slice(0, 175),
+          body: (docDraft.body || '').slice(0, 24_000),
+          ...(docDraft.structuredJson
+            ? { structuredJson: docDraft.structuredJson.slice(0, 24_000) }
+            : {}),
+          version: (docDraft.version || '1.0').slice(0, 24),
+          isProvisional: Boolean(docDraft.isProvisional),
+          ownerValidated: Boolean(docDraft.ownerValidated),
+          updatedBy: authUser.uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await writeAuditLog(
+        'UPDATE_PLATFORM_CONTENT',
+        cleanId,
+        `${docDraft.title} (v${docDraft.version} · validé=${Boolean(docDraft.ownerValidated)})`
+      );
+      showToast(`Document « ${docDraft.title} » enregistré.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `platform_content/${cleanId}`);
     }
   };
 
@@ -2073,9 +3235,9 @@ function AmaroPlatform() {
       } else {
         await setDoc(ref, {
           countryCode: 'BJ',
-          commissionPercent: 0,
-          serviceFeeFlat: 0,
-          taxPercent: 0,
+          commissionPercent: 10,
+          serviceFeeFlat: 1_000,
+          taxPercent: 18,
           currency: 'XOF',
           partnerCommissionPercent: safePct,
           attributionWindowDays: safeWindow,
@@ -2088,7 +3250,7 @@ function AmaroPlatform() {
       await writeAuditLog(
         'UPDATE_PARTNER_SETTINGS_BJ',
         'BJ',
-        `CommissionPartenaire=${safePct}%, Fenêtre=${safeWindow}j, Modèle=${attributionModel}`
+        `CommissionPartenaire=${safePct}% (sur marge AMARO), Fenêtre=${safeWindow}j, Modèle=${attributionModel}`
       );
       showToast('Paramètres AMARO PARTNERS enregistrés.');
     } catch (err) {
@@ -2112,6 +3274,13 @@ function AmaroPlatform() {
     verificationStatus: VerificationLevel;
     status: 'published' | 'draft' | 'archived';
     imageKey: string;
+    customPhotoUrl?: string;
+    photoVerified?: boolean;
+    sourceName?: string;
+    verifiedAt?: string;
+    isSacredOrCeremonial?: boolean;
+    sacredNotice?: string;
+    providerResponseHours?: number;
   }) => {
     if (!authUser?.uid || !isAdmin) return;
     const cleanId = payload.serviceId
@@ -2121,6 +3290,30 @@ function AmaroPlatform() {
       payload.providerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'dir-admin-benin';
     const imgMeta =
       EDITORIAL_IMAGES[payload.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+
+    const extraFields = {
+      ...(typeof payload.customPhotoUrl === 'string'
+        ? { customPhotoUrl: payload.customPhotoUrl.trim().slice(0, 650) }
+        : {}),
+      ...(typeof payload.photoVerified === 'boolean'
+        ? { photoVerified: payload.photoVerified }
+        : {}),
+      ...(typeof payload.sourceName === 'string'
+        ? { sourceName: payload.sourceName.trim().slice(0, 235) }
+        : {}),
+      ...(typeof payload.verifiedAt === 'string'
+        ? { verifiedAt: payload.verifiedAt.trim().slice(0, 32) }
+        : {}),
+      ...(typeof payload.isSacredOrCeremonial === 'boolean'
+        ? { isSacredOrCeremonial: payload.isSacredOrCeremonial }
+        : {}),
+      ...(typeof payload.sacredNotice === 'string'
+        ? { sacredNotice: payload.sacredNotice.trim().slice(0, 500) }
+        : {}),
+      ...(typeof payload.providerResponseHours === 'number' && payload.providerResponseHours > 0
+        ? { providerResponseHours: Math.round(payload.providerResponseHours) }
+        : {}),
+    };
 
     const ref = doc(db, 'services', cleanId);
     try {
@@ -2141,6 +3334,7 @@ function AmaroPlatform() {
           status: payload.status,
           imageKey: payload.imageKey,
           imageLicense: imgMeta.license.slice(0, 195),
+          ...extraFields,
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -2163,6 +3357,7 @@ function AmaroPlatform() {
           status: payload.status,
           imageKey: payload.imageKey,
           imageLicense: imgMeta.license.slice(0, 195),
+          ...extraFields,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -2363,7 +3558,6 @@ function AmaroPlatform() {
         });
       }
 
-      // Sync registeredServiceId and allowedBookingMode back onto pilot_partners CRM record
       const canSetLevelCOnPilot =
         params.activationLevel === 'level_c_instant' &&
         params.pilot.conventionSigned &&
@@ -2512,6 +3706,27 @@ function AmaroPlatform() {
     }
   };
 
+  // Read-only Shared Itinerary Mode (?share=<shareId>)
+  if (sharedFolderToken) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <SharedFolderReadOnlyView
+          shareId={sharedFolderToken}
+          onExitShareView={() => {
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('share');
+              window.history.replaceState({}, '', url.toString());
+            } catch {
+              // ignore
+            }
+            setSharedFolderToken(null);
+          }}
+        />
+      </div>
+    );
+  }
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
@@ -2523,9 +3738,13 @@ function AmaroPlatform() {
         isSignedIn={Boolean(authUser)}
         isSigningIn={isSigningIn}
         unreadNotifications={unreadCount}
+        muteNonEssential={Boolean(userSavedPrefs?.muteNonEssentialNotifications)}
+        onToggleMuteNonEssential={
+          authUser ? () => void handleToggleMuteNonEssential() : undefined
+        }
         smartJourneyCtaLabel={smartJourneyCtaLabel}
         onSmartJourneyCta={handleSmartJourneyCta}
-        onSignIn={() => void handleSignIn()}
+        onSignIn={handleSignIn}
         onSignOut={() => void handleSignOut()}
       />
 
@@ -2554,11 +3773,15 @@ function AmaroPlatform() {
             isSignedIn={Boolean(authUser)}
             smartJourneyCtaLabel={smartJourneyCtaLabel}
             activeReferralCode={activeReferralCode}
-            onRequireSignIn={() => void handleSignIn()}
+            onRequireSignIn={handleSignIn}
             onOpenJourneyTab={() => setActiveTab('journey')}
             onAddServiceToJourney={handleAddServiceToJourney}
             onRequestReservation={handleRequestReservation}
             onSubmitCulturalStory={handleSubmitCulturalStory}
+            approvedReviews={approvedReviews}
+            emergencyNumbers={emergencyNumbers}
+            realLocalContributionTotalXof={realLocalContributionTotalXof}
+            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
             externalJump={explorerJump}
           />
         )}
@@ -2569,7 +3792,7 @@ function AmaroPlatform() {
             displayCurrency={currency}
             rateInfo={rateInfo}
             isSignedIn={Boolean(authUser)}
-            onRequireSignIn={() => void handleSignIn()}
+            onRequireSignIn={handleSignIn}
             catalogue={combinedCatalogue}
             folders={folders}
             activeFolder={activeFolder}
@@ -2594,6 +3817,20 @@ function AmaroPlatform() {
             lastBrainDiagnostic={lastBrainDiagnostic}
             identityByReservation={clientIdentityByRes}
             onNotify={showToast}
+            countrySetting={countrySetting}
+            platformContentMap={platformContentMap}
+            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+            folderIntention={folderIntention}
+            onSaveFolderIntention={handleSaveFolderIntention}
+            folderExpenses={folderExpenses}
+            onAddFolderExpense={handleAddFolderExpense}
+            folderShares={folderShares}
+            onCreateFolderShare={handleCreateFolderShare}
+            onRevokeFolderShare={handleRevokeFolderShare}
+            onDuplicateFolderAsTemplate={handleDuplicateFolderAsTemplate}
+            travelerReviews={mergedTravelerReviews}
+            onSubmitTravelerReview={handleSubmitTravelerReview}
+            onSendProviderThankYou={handleSendProviderThankYou}
           />
         )}
 
@@ -2604,12 +3841,50 @@ function AmaroPlatform() {
             activeFolder={activeFolder}
             folderItems={folderItems}
             isSignedIn={Boolean(authUser)}
+            clientDisplayName={userPublic?.displayName || authUser?.displayName || ''}
+            emergencyNumbers={emergencyNumbers}
+            supportWhatsappNumber={countrySetting?.amaroWhatsappNumber}
             onOpenExplorer={(cityId, category, itemId) => {
               setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
               setActiveTab('explorer');
             }}
             onOpenJourney={() => setActiveTab('journey')}
-            onRequireSignIn={() => void handleSignIn()}
+            onRequireSignIn={handleSignIn}
+            onApplyAssistantDraft={handleApplyAssistantDraft}
+          />
+        )}
+
+        {activeTab === 'promote' && (
+          <PromoteServicesView
+            isSignedIn={Boolean(authUser)}
+            onRequireSignIn={handleSignIn}
+            myProvider={myProvider}
+            myServices={myServices}
+            providerReservations={providerReservations}
+            providerThankYous={providerThankYous}
+            platformContentMap={platformContentMap}
+            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+            onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
+            onCreateOrUpdateProviderService={handleCreateOrUpdatePromoteService}
+            onProviderRespondReservation={async ({
+              reservation,
+              decision,
+              alternativeProposal,
+            }) => {
+              const mapped =
+                decision === 'accept'
+                  ? 'accepted'
+                  : decision === 'propose_alternative'
+                  ? 'alternative_proposed'
+                  : 'rejected';
+              await handleProviderRespondReservation(
+                reservation,
+                mapped,
+                alternativeProposal || '',
+                reservation.scheduledDate,
+                reservation.scheduledTime
+              );
+            }}
           />
         )}
 
@@ -2621,12 +3896,17 @@ function AmaroPlatform() {
             isSignedIn={Boolean(authUser)}
             currentUserEmail={authUser?.email || null}
             isAdmin={isAdmin}
-            onRequireSignIn={() => void handleSignIn()}
+            onRequireSignIn={handleSignIn}
             firestoreProbe={firestoreProbe}
             onRecheckFirestore={runFirestoreProbe}
             userPublic={userPublic}
             userPrivate={userPrivate}
             onSaveUserProfile={handleSaveUserProfile}
+            userSavedPrefs={userSavedPrefs}
+            onSaveUserPreferences={handleSaveUserPreferences}
+            onSignOutAfterDelete={handleSignOut}
+            onOpenPromoteServices={() => setActiveTab('promote')}
+            onOpenLegalDoc={(slug) => setActiveLegalDoc(slug as LegalDocKey)}
             myProvider={myProvider}
             myProviderPrivate={myProviderPrivate}
             myServices={myServices}
@@ -2646,13 +3926,25 @@ function AmaroPlatform() {
             allCatalogueServices={allCatalogueServices}
             allProviders={allProviders}
             allReservations={allReservations}
+            allFolders={allFolders}
             allStories={allStories}
             auditLogs={auditLogs}
             onAdminUpsertCatalogueService={handleAdminUpsertCatalogueService}
             onAdminVerifyProvider={handleAdminVerifyProvider}
+            onAdminLinkProviderToDirectoryListing={handleAdminLinkProviderToDirectoryListing}
             onAdminModerateStory={handleAdminModerateStory}
             onAdminSaveSettings={handleAdminSaveSettings}
+            onAdminSaveExtendedSettings={handleAdminSaveExtendedSettings}
             onAdminSettleReservation={handleAdminSettleReservation}
+            platformContents={platformContentMap}
+            onAdminSavePlatformContent={handleAdminSavePlatformContent}
+            allReviews={allReviews}
+            onAdminModerateReview={handleAdminModerateReview}
+            allThankYous={allThankYous}
+            onAdminUpdateThankYou={handleAdminUpdateThankYou}
+            adminsList={adminsList}
+            onAdminAddAdminUid={handleAdminAddAdminUid}
+            onAdminRemoveAdminUid={handleAdminRemoveAdminUid}
             pilotPartners={adminPilotPartners}
             pilotStocks={adminPilotStocks}
             onSavePilotPartner={handleSavePilotPartner}
@@ -2667,6 +3959,128 @@ function AmaroPlatform() {
           />
         )}
       </main>
+
+      {/* Institutional, Ethical & Legal Footer (Blocs 9 & 10) */}
+      <footer className="no-print border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-8 px-4 sm:px-6 lg:px-8 mt-12">
+        <div className="max-w-7xl mx-auto flex flex-col gap-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <p className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                AMARO.VOYAGE — Préparation & Conciergerie de séjour au Bénin
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Exploration gratuite · Accompagnement et réservations vérifiées sur dossier · Devises XOF / EUR / USD
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <button
+                type="button"
+                onClick={() => setActiveTab('promote')}
+                className="font-semibold text-[#0B192C] dark:text-amber-300 hover:underline"
+              >
+                Promouvoir mes services (Prestataires)
+              </button>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={() => setActiveLegalDoc('vision_amaro')}
+                className="hover:underline"
+              >
+                Vision d’AMARO
+              </button>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={() => setActiveLegalDoc('charte_voyage_respectueux')}
+                className="hover:underline"
+              >
+                Charte du voyage respectueux
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-400">
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('comment_amaro_verifie')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Comment AMARO vérifie
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('ce_qu_amaro_garantit')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Ce qu’AMARO garantit (et limites)
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('cgv')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              CGV
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('politique_annulation')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Politique d’annulation
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('mentions_legales')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Mentions légales
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('assurance_voyage')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Assurance voyage
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('securite_regions')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Sécurité par région
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('partenaires_officiels')}
+              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Partenaires officiels
+            </button>
+          </div>
+        </div>
+      </footer>
+
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onSuccessMessage={(msg) => showToast(msg)}
+        />
+      )}
+
+      {activeLegalDoc && (
+        <LegalAndCharterModal
+          docId={activeLegalDoc}
+          platformContentMap={platformContentMap}
+          onClose={() => setActiveLegalDoc(null)}
+        />
+      )}
     </div>
   );
 }

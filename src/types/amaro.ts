@@ -1,5 +1,18 @@
 export type LocaleCode = 'fr' | 'en';
+export type SupportedLocale = LocaleCode;
 export type CurrencyCode = 'XOF' | 'EUR' | 'USD';
+
+export interface EmergencyNumberEntry {
+  id: string;
+  labelFr: string;
+  zoneFr: string;
+  serviceFr: string;
+  serviceEn: string;
+  number: string;
+  source: string;
+  verifiedDate: string;
+  verifiedByOwner: boolean;
+}
 
 export type ServiceCategory =
   | 'accommodation'
@@ -142,7 +155,63 @@ export interface CatalogueItem {
   activationLevel?: PartnerActivationLevel;
   pilotConventionSigned?: boolean;
   cancellationPolicy?: string;
+  // Bloc 5.4, 9.5 & 10.2 Extended Honest Media, Sacred Site & Provider Availability Metadata
+  customPhotoUrl?: string;
+  photoVerified?: boolean;
+  photoSource?: string;
+  photoUsageRights?: string;
+  isSacredOrCeremonial?: boolean;
+  sacredNotice?: string;
+  linkedDirectoryServiceId?: string;
+  seasonalTariffs?: Array<{
+    label: string;
+    startDate: string;
+    endDate: string;
+    priceAmount: number;
+  }>;
+  unitTariffs?: Array<{
+    unitLabel: string;
+    priceAmount: number;
+    capacity?: number;
+  }>;
+  blockedDates?: string[];
+  providerResponseHours?: number;
 }
+
+export type JourneyFolderStatus =
+  | 'draft'
+  | 'planning'
+  | 'fees_pending'
+  | 'fees_in_verification'
+  | 'fees_validated'
+  | 'coordinating'
+  | 'requests_in_progress'
+  | 'partially_confirmed'
+  | 'to_replan'
+  | 'needs_rescheduling'
+  | 'confirmed'
+  | 'fully_confirmed'
+  | 'awaiting_balance'
+  | 'paid'
+  | 'active'
+  | 'completed'
+  | 'expired'
+  | 'cancelled'
+  | 'cancelled_by_client'
+  | 'archived'
+  | 'abandoned';
+
+export type DossierFeeStatus =
+  | 'not_required'
+  | 'pending'
+  | 'declared'
+  | 'in_verification'
+  | 'validated'
+  | 'rejected'
+  | 'refund_pending'
+  | 'refunded';
+
+export type JourneyLifecyclePhase = 'avant' | 'pendant' | 'apres';
 
 export interface JourneyFolderDoc {
   id: string;
@@ -157,7 +226,26 @@ export interface JourneyFolderDoc {
   dailyBudget: number;
   currency: CurrencyCode;
   preferencesNotes: string;
-  status: 'planning' | 'active' | 'completed' | 'archived';
+  status: JourneyFolderStatus;
+  dossierFeeStatus?: DossierFeeStatus;
+  dossierFeeAmountXof?: number;
+  dossierTxRef?: string;
+  dossierPayerName?: string;
+  dossierPayerPhone?: string;
+  dossierDeclaredAt?: string;
+  dossierVerifiedAt?: string;
+  dossierVerifiedBy?: string;
+  dossierRejectionReason?: string;
+  dossierFeeCredited?: boolean;
+  termsAcceptedVersion?: string;
+  termsAcceptedAt?: string;
+  balanceDueAt?: string;
+  balanceDueDeadlineAt?: string;
+  balanceReminderSentAt?: string;
+  manualRefundRequired?: boolean;
+  manualRefundReason?: string;
+  insuranceChecked?: boolean;
+  duplicatedFromFolderId?: string;
 }
 
 export interface JourneyItemDoc {
@@ -177,6 +265,7 @@ export interface JourneyItemDoc {
   stage: 'envisaged' | 'requested' | 'accepted' | 'confirmed';
   notes: string;
   providerId?: string;
+  isFreeTimeBlock?: boolean;
 }
 
 export interface JournalEntryDoc {
@@ -224,6 +313,19 @@ export interface ReservationDoc {
   dispatchStatus?: ReservationDispatchStatus;
   responseDeadlineAt?: string;
   followUpCount?: number;
+  circuitType?: 'circuit_a_directory' | 'circuit_b_partner';
+  coordinationStatus?:
+    | 'to_contact'
+    | 'contacted'
+    | 'confirmed'
+    | 'unavailable'
+    | 'quote_received';
+  coordinationContactedAt?: string;
+  coordinationOutcome?: string;
+  halfTimeReminderSentAt?: string;
+  balanceDeadlineAt?: string;
+  adminNotifyProviderTask?: 'none' | 'pending_inform_cancellation' | 'informed';
+  localContributionXof?: number;
 }
 
 export interface ProviderProfileDoc {
@@ -235,6 +337,19 @@ export interface ProviderProfileDoc {
   cityId: string;
   description: string;
   verificationStatus: 'pending' | 'verified' | 'rejected';
+  contactName?: string;
+  businessPhone?: string;
+  businessEmail?: string;
+  address?: string;
+  conventionVersionAccepted?: string;
+  conventionAcceptedAt?: string;
+  linkedDirectoryServiceId?: string;
+  adminConventionStage?: 'non_contacte' | 'en_discussion' | 'signe';
+  agreedCommissionPercent?: number;
+  agreedResponseHours?: number;
+  agreedCancellationTerms?: string;
+  blockedDates?: string[];
+  seasonalRatesSummary?: string;
 }
 
 export interface PartnerProfileDoc {
@@ -302,6 +417,36 @@ export interface SystemSettingDoc {
   partnerCommissionPercent?: number;
   attributionWindowDays?: number;
   attributionModel?: 'last_touch' | 'first_touch';
+  // Configurable Governance & Commercial Rules (Blocs 1-10)
+  partnerMarginPercent?: number; // default 10% (Circuit B)
+  directoryMarginPercent?: number; // default 5% (Circuit A)
+  dossierFeeXof?: number; // default 20000 XOF
+  dossierFeeAmount?: number;
+  dossierVerificationHours?: number; // default 24h
+  providerResponseHours?: number; // default 24h
+  balancePaymentHours?: number; // default 48h
+  maxPendingPaymentFolders?: number; // default 1
+  abandonmentRiskThreshold?: number; // default 3
+  alternativeBudgetTolerancePercent?: number; // default 25%
+  maxVisitsCityChangeDay?: number; // default 1 (5.1)
+  maxVisitsSameCityDay?: number; // default 2 (5.1)
+  freeTimeBlocksPerDay?: number; // default 1 (9.3)
+  includeDossierFeeInAffiliateBase?: boolean; // default false (5.2)
+  localContributionPercent?: number; // default 0% (9.6)
+  localContributionLabel?: string; // « à renseigner par le propriétaire »
+  amaroMobileMoneyNumber?: string; // « à renseigner par le propriétaire »
+  amaroMobileMoneyHolder?: string; // « à renseigner par le propriétaire »
+  amaroWhatsappNumber?: string; // « à renseigner par le propriétaire »
+  supportWhatsappNumber?: string;
+  vaultKeyConfirmedByOwner?: boolean; // default false (7.2)
+  financialRetentionDuration?: string; // « à renseigner par le propriétaire » (Précision 3)
+  termsVersion?: string; // default '1.0'
+  conventionVersion?: string; // default '1.0'
+  includeDemoData?: boolean; // default false (5.8)
+  exchangeRateEurToXof?: number; // default 655.957
+  exchangeRateUsdToXof?: number; // default 605
+  exchangeRateSource?: string;
+  exchangeRateUpdatedAt?: string;
 }
 
 export type FeatureLifecycleStatus =
@@ -385,7 +530,7 @@ export interface IdentityAccessLogDoc {
 }
 
 // ===========================================================================
-// AMARO ASSISTANT CONVERSATIONNEL CONNECTÉ AU CATALOGUE
+// AMARO ASSISTANT CONVERSATIONNEL CONNECTÉ AU CATALOGUE & BROUILLON ITINÉRAIRE
 // ===========================================================================
 export interface AssistantChatHistoryItem {
   role: 'user' | 'assistant';
@@ -403,6 +548,7 @@ export interface AssistantSuggestionItem {
   priceRangeNote?: string;
   verificationStatus: VerificationLevel;
   dataOrigin: DataOriginType;
+  isPartnerVerified?: boolean;
 }
 
 export interface AssistantQuickAction {
@@ -411,10 +557,43 @@ export interface AssistantQuickAction {
     | 'filter_city'
     | 'open_journey'
     | 'open_logbook'
-    | 'sign_in';
+    | 'sign_in'
+    | 'generate_draft'
+    | 'generate_draft_folder';
   label: string;
   cityId?: string;
   category?: ServiceCategory;
+}
+
+export interface AssistantDraftStep {
+  dayIndex: number;
+  date: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  cityId: string;
+  category: ServiceCategory;
+  serviceId: string;
+  serviceTitle: string;
+  dataOrigin: DataOriginType;
+  priceKnown: boolean;
+  estimatedCostXof: number;
+  isFreeTimeBlock?: boolean;
+  notes: string;
+}
+
+export interface AssistantDraftItinerary {
+  title: string;
+  startDate: string;
+  endDate: string;
+  daysCount: number;
+  travelersCount: number;
+  cities: string[];
+  intentionSummary: string;
+  knownBudgetXof: number;
+  onRequestCount: number;
+  dossierFeeNextStepXof: number;
+  steps: AssistantDraftStep[];
 }
 
 // ===========================================================================
@@ -527,4 +706,154 @@ export interface PilotStockDoc {
   updatedBy: string;
   updatedAtIso?: string;
 }
+
+// ===========================================================================
+// COUCHE UNIFIÉE DE NOTIFICATIONS, GOUVERNANCE, PARTAGE, AVIS & PAGES ÉDITABLES
+// ===========================================================================
+export type NotificationChannelType = 'in_app' | 'email' | 'sms' | 'whatsapp';
+export type NotificationDeliveryStatus =
+  | 'created'
+  | 'sent'
+  | 'failed'
+  | 'channel_unconfigured';
+
+export interface NotificationDispatchDoc {
+  id: string;
+  recipientId: string;
+  reservationId?: string;
+  folderId?: string;
+  channel: NotificationChannelType;
+  status: NotificationDeliveryStatus;
+  title: string;
+  summary: string;
+  errorDetail?: string;
+  createdAtIso: string;
+}
+
+export interface AccountGovernanceDoc {
+  id: string; // uid
+  userId: string;
+  abandonmentCount: number;
+  flaggedAtRisk: boolean;
+  blockedForRequests: boolean;
+  blockReason: string;
+  updatedBy: string;
+  updatedAtIso: string;
+}
+
+export interface JourneyIntentionDoc {
+  folderId: string;
+  ownerId: string;
+  reasons: string[];
+  freeNote: string;
+  motivations?: string[];
+  personalNote?: string;
+  skipped: boolean;
+  reflectionAnswers?: Record<string, string>;
+  updatedAtIso: string;
+}
+
+export interface FolderExpenseEntry {
+  id: string;
+  category: ServiceCategory;
+  label: string;
+  amount: number;
+  currency: CurrencyCode;
+  date: string;
+}
+
+export interface FolderChangeHistoryEntry {
+  id: string;
+  summary: string;
+  deltaAmountXof: number;
+  createdAtIso: string;
+}
+
+export interface UserSavedPreferencesDoc {
+  userId: string;
+  consentEnabled: boolean;
+  preferredStanding: string;
+  travelPace: string;
+  dietaryNotes: string;
+  favoriteInterests: string[];
+  muteNonEssentialNotifications: boolean;
+  phoneNumberDeclared: string;
+  phoneVerified: boolean;
+  updatedAtIso: string;
+}
+
+export interface FolderShareSuggestion {
+  id: string;
+  authorName: string;
+  message: string;
+  createdAtIso: string;
+}
+
+export interface FolderShareDoc {
+  id: string;
+  shareToken?: string;
+  folderId: string;
+  ownerId: string;
+  folderTitle: string;
+  startDate: string;
+  endDate: string;
+  snapshotSummary: string;
+  suggestions: FolderShareSuggestion[];
+  revoked: boolean;
+  createdAtIso: string;
+}
+
+export interface TravelerReviewDoc {
+  id: string;
+  reservationId: string;
+  folderId: string;
+  serviceId: string;
+  serviceTitle: string;
+  clientId: string;
+  authorDisplayName: string;
+  rating: number;
+  comment: string;
+  moderationStatus: 'pending' | 'approved' | 'rejected';
+  createdAtIso: string;
+}
+
+export interface ProviderThankYouDoc {
+  id: string;
+  reservationId: string;
+  folderId: string;
+  providerId: string;
+  providerOwnerId: string;
+  serviceTitle: string;
+  clientId: string;
+  clientDisplayName: string;
+  message: string;
+  status: 'pending_admin' | 'transmitted_to_provider' | 'archived';
+  createdAtIso: string;
+}
+
+export interface PlatformContentDoc {
+  id: string;
+  slug: string;
+  title: string;
+  version: string;
+  body: string;
+  structuredJson?: string;
+  isProvisional: boolean;
+  ownerValidated: boolean;
+  updatedBy: string;
+  updatedAtIso: string;
+}
+
+export interface FinancialArchiveDoc {
+  id: string;
+  reservationOrFolderRef: string;
+  transactionRef: string;
+  amount: number;
+  currency: CurrencyCode;
+  recordedDate: string;
+  recordKind: 'dossier_fee' | 'reservation_payment';
+  retentionPolicyLabel: string;
+  anonymizedAtIso: string;
+}
+
 

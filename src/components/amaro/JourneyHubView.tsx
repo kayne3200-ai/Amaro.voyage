@@ -7,15 +7,21 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Copy,
   Edit3,
   FileText,
   FolderPlus,
+  Heart,
   Lock,
   MapPin,
+  MessageCircle,
   Plus,
   Printer,
   RefreshCw,
+  Share2,
   ShieldCheck,
+  Sparkles,
+  Star,
   Trash2,
   Wallet,
   X,
@@ -23,21 +29,36 @@ import {
 import type {
   CatalogueItem,
   CurrencyCode,
+  FolderExpenseEntry,
+  FolderShareDoc,
   IdentityVerificationDoc,
   JournalEntryDoc,
   JourneyFolderDoc,
+  JourneyIntentionDoc,
   JourneyItemDoc,
+  JourneyLifecyclePhase,
   LocaleCode,
   NotificationDoc,
+  PlatformContentDoc,
   ReservationDoc,
+  ServiceCategory,
+  SystemSettingDoc,
+  TravelerReviewDoc,
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
+import {
+  HARMONIZED_FOLDER_STATUS_LABELS,
+  INTENTION_OPTIONS_FR,
+  LOGBOOK_REFLECTION_QUESTIONS,
+  OWNER_PLACEHOLDER,
+} from '../../data/amaroGovernanceDefaults';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { authorizedFetch } from '../../lib/apiClient';
 import {
   IDENTITY_STATUS_META,
   IdentityVerificationModal,
 } from './IdentityVerificationModal';
+import type { LegalDocKey } from './LegalAndCharterModal';
 
 interface ElectronicReceiptData {
   receiptNumber: string;
@@ -148,6 +169,38 @@ interface JourneyHubViewProps {
   lastBrainDiagnostic: BrainDiagnostic | null;
   identityByReservation?: Record<string, IdentityVerificationDoc>;
   onNotify?: (msg: string) => void;
+  countrySetting?: SystemSettingDoc | null;
+  platformContentMap?: Record<string, PlatformContentDoc>;
+  onOpenLegalDoc?: (docId: LegalDocKey) => void;
+  folderIntention?: JourneyIntentionDoc | null;
+  onSaveFolderIntention?: (payload: {
+    motivations: string[];
+    personalNote: string;
+    skipped: boolean;
+  }) => Promise<void>;
+  folderExpenses?: FolderExpenseEntry[];
+  onAddFolderExpense?: (payload: {
+    label: string;
+    category: ServiceCategory;
+    amount: number;
+    currency: CurrencyCode;
+    date: string;
+  }) => Promise<void>;
+  folderShares?: FolderShareDoc[];
+  onCreateFolderShare?: (folderId: string) => Promise<void>;
+  onRevokeFolderShare?: (shareId: string) => Promise<void>;
+  onDuplicateFolderAsTemplate?: (folder: JourneyFolderDoc) => Promise<void>;
+  travelerReviews?: TravelerReviewDoc[];
+  onSubmitTravelerReview?: (payload: {
+    reservation: ReservationDoc;
+    rating: number;
+    comment: string;
+  }) => Promise<void>;
+  onSendProviderThankYou?: (payload: {
+    reservation: ReservationDoc;
+    message: string;
+  }) => Promise<void>;
+  onRefreshFolderState?: () => void;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
@@ -176,12 +229,8 @@ function isPriceOnRequestSnapshot(pricingSnapshot: string | undefined): boolean 
   return pricingSnapshot.includes('"priceKnown":false');
 }
 
-const FOLDER_STATUS_LABELS: Record<JourneyFolderDoc['status'], string> = {
-  planning: 'En préparation',
-  active: 'Voyage en cours',
-  completed: 'Terminé · Carnet souvenir',
-  archived: 'Archivé',
-};
+const FOLDER_STATUS_LABELS: Record<JourneyFolderDoc['status'], string> =
+  HARMONIZED_FOLDER_STATUS_LABELS;
 
 const RESERVATION_STATUS_LABELS: Record<ReservationDoc['status'], string> = {
   pending_provider: '1. En attente de réponse du prestataire / conciergerie',
@@ -233,10 +282,25 @@ export function JourneyHubView({
   lastBrainDiagnostic,
   identityByReservation = {},
   onNotify,
+  countrySetting = null,
+  platformContentMap = {},
+  onOpenLegalDoc,
+  folderIntention = null,
+  onSaveFolderIntention,
+  folderExpenses = [],
+  onAddFolderExpense,
+  folderShares = [],
+  onCreateFolderShare,
+  onRevokeFolderShare,
+  onDuplicateFolderAsTemplate,
+  travelerReviews = [],
+  onSubmitTravelerReview,
+  onSendProviderThankYou,
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale];
 
   const [subTab, setSubTab] = useState<JourneySubTab>('agenda');
+  const [lifecyclePhase, setLifecyclePhase] = useState<JourneyLifecyclePhase>('avant');
   const [showNewFolderForm, setShowNewFolderForm] = useState<boolean>(false);
   const [title, setTitle] = useState<string>('Séjour Découverte Sud & Nord Bénin');
   const [countryCode, setCountryCode] = useState<string>('BJ');
@@ -251,6 +315,56 @@ export function JourneyHubView({
     'Rythme équilibré, gastronomie locale, respect des sites patrimoniaux.'
   );
   const [isCreating, setIsCreating] = useState<boolean>(false);
+
+  // Dossier Fee Declaration State (Bloc 2)
+  const [feePaymentMethod, setFeePaymentMethod] = useState<string>('MTN Mobile Money');
+  const [feePayerName, setFeePayerName] = useState<string>('');
+  const [feePayerPhone, setFeePayerPhone] = useState<string>('');
+  const [feeTxRef, setFeeTxRef] = useState<string>('');
+  const [acceptedCgvForFee, setAcceptedCgvForFee] = useState<boolean>(false);
+  const [declaringFee, setDeclaringFee] = useState<boolean>(false);
+  const [localFeeOverrideStatus, setLocalFeeOverrideStatus] = useState<string | null>(null);
+
+  // Optional Travel Intention State (9.2)
+  const [selectedMotivations, setSelectedMotivations] = useState<string[]>([]);
+  const [intentionNote, setIntentionNote] = useState<string>('');
+  const [savingIntention, setSavingIntention] = useState<boolean>(false);
+
+  // Insurance Checklist & Next-Trip Discreet Suggestion
+  const [insuranceChecked, setInsuranceChecked] = useState<boolean>(false);
+  const [dismissedNextTripHint, setDismissedNextTripHint] = useState<boolean>(false);
+
+  // Real On-Site Expense Form (5.3)
+  const [expLabel, setExpLabel] = useState<string>('');
+  const [expCategory, setExpCategory] = useState<ServiceCategory>('restaurant');
+  const [expAmount, setExpAmount] = useState<number>(5000);
+  const [expDate, setExpDate] = useState<string>('2026-11-16');
+
+  // Smart Alternatives & Recalculation Preview (Lot 1.3 & 1.4)
+  const [altDrawerRes, setAltDrawerRes] = useState<ReservationDoc | null>(null);
+  const [broadenAltSearch, setBroadenAltSearch] = useState<boolean>(false);
+  const [serverAlternatives, setServerAlternatives] = useState<CatalogueItem[]>([]);
+  const [altEmptyReason, setAltEmptyReason] = useState<string>('');
+  const [loadingAlts, setLoadingAlts] = useState<boolean>(false);
+  const [recalcPreview, setRecalcPreview] = useState<{
+    candidate: CatalogueItem;
+    forReservation: ReservationDoc;
+    valid: boolean;
+    conflicts: string[];
+    warnings: string[];
+    beforeTotalXof: number;
+    afterTotalXof: number;
+    deltaXof: number;
+    summaryFr: string;
+  } | null>(null);
+
+  // Incident report during stay (Bloc 3)
+  const [incidentNote, setIncidentNote] = useState<string>('');
+
+  // Post-stay Review & Private Thank-You (6.3 & 9.4)
+  const [reviewRatingByRes, setReviewRatingByRes] = useState<Record<string, number>>({});
+  const [reviewTextByRes, setReviewTextByRes] = useState<Record<string, string>>({});
+  const [thankYouTextByRes, setThankYouTextByRes] = useState<Record<string, string>>({});
 
   // Quick budget update state for active folder
   const [editingBudget, setEditingBudget] = useState<boolean>(false);
@@ -407,8 +521,23 @@ export function JourneyHubView({
         0
       );
 
-    const remainingToPay = accepted + confirmed;
-    const cumulativeProjected = estimated + proposed + accepted + confirmed + paid;
+    const dossierFeeAmountXof =
+      countrySetting?.dossierFeeXof ?? countrySetting?.dossierFeeAmount ?? 20000;
+    const effectiveFeeStatus =
+      localFeeOverrideStatus || activeFolder?.dossierFeeStatus || 'pending';
+    const dossierFeeDeducted =
+      effectiveFeeStatus === 'validated'
+        ? convertValue(dossierFeeAmountXof, 'XOF', targetCur, rates)
+        : 0;
+
+    const grossRemainingToPay = accepted + confirmed;
+    const remainingToPay = Math.max(0, grossRemainingToPay - dossierFeeDeducted);
+    const realRecordedExpenses = folderExpenses.reduce(
+      (sum, e) => sum + convertValue(e.amount, e.currency, targetCur, rates),
+      0
+    );
+    const cumulativeProjected =
+      estimated + proposed + accepted + confirmed + paid + realRecordedExpenses;
     const cap = activeFolder?.totalBudget || 0;
     const overrun = cap > 0 && cumulativeProjected > cap ? cumulativeProjected - cap : 0;
 
@@ -420,12 +549,304 @@ export function JourneyHubView({
       confirmed,
       paid,
       refunded,
+      grossRemainingToPay,
+      dossierFeeAmountXof,
+      effectiveFeeStatus,
+      dossierFeeDeducted,
+      realRecordedExpenses,
       remainingToPay,
       cumulativeProjected,
       cap,
       overrun,
     };
-  }, [activeFolder, clientReservations, displayCurrency, folderItems, rateInfo?.rates]);
+  }, [
+    activeFolder,
+    clientReservations,
+    countrySetting?.dossierFeeAmount,
+    countrySetting?.dossierFeeXof,
+    displayCurrency,
+    folderExpenses,
+    folderItems,
+    localFeeOverrideStatus,
+    rateInfo?.rates,
+  ]);
+
+  // 3 Real Budget Scenarios based on actual Benin catalogue items (5.3)
+  const realBudgetScenarios = useMemo(() => {
+    const city = activeFolder?.primaryCityId || 'cotonou';
+    const nights = Math.max(
+      1,
+      activeFolder
+        ? Math.round(
+            (Date.parse(activeFolder.endDate) - Date.parse(activeFolder.startDate)) /
+              (24 * 3600 * 1000)
+          ) || 3
+        : 3
+    );
+    const cityLodgings = catalogue
+      .filter(
+        (c) =>
+          c.cityId === city &&
+          c.category === 'accommodation' &&
+          c.priceKnown !== false &&
+          c.priceAmount > 0 &&
+          c.dataOrigin !== 'demo_test'
+      )
+      .sort((a, b) => a.priceAmount - b.priceAmount);
+    const allLodgings =
+      cityLodgings.length > 0
+        ? cityLodgings
+        : catalogue
+            .filter(
+              (c) =>
+                c.category === 'accommodation' &&
+                c.priceKnown !== false &&
+                c.priceAmount > 0 &&
+                c.dataOrigin !== 'demo_test'
+            )
+            .sort((a, b) => a.priceAmount - b.priceAmount);
+
+    const sites = catalogue
+      .filter(
+        (c) =>
+          c.cityId === city &&
+          c.category === 'site' &&
+          c.priceKnown !== false &&
+          c.dataOrigin !== 'demo_test'
+      )
+      .sort((a, b) => a.priceAmount - b.priceAmount);
+
+    if (allLodgings.length === 0) return [];
+    const ecoHotel = allLodgings[0];
+    const midHotel = allLodgings[Math.floor(allLodgings.length / 2)] || ecoHotel;
+    const confHotel = allLodgings[allLodgings.length - 1] || midHotel;
+    const sampleSiteCost = (sites[0]?.priceAmount || 2500) * 2;
+
+    return [
+      {
+        id: 'eco',
+        label: 'Scénario Économique (catalogue réel)',
+        hotelTitle: ecoHotel.title,
+        totalXof: ecoHotel.priceAmount * nights + sampleSiteCost,
+        detail: `${nights} nuit(s) · ${ecoHotel.title}`,
+      },
+      {
+        id: 'equilibre',
+        label: 'Scénario Équilibré (catalogue réel)',
+        hotelTitle: midHotel.title,
+        totalXof: midHotel.priceAmount * nights + sampleSiteCost * 2,
+        detail: `${nights} nuit(s) · ${midHotel.title}`,
+      },
+      {
+        id: 'confort',
+        label: 'Scénario Confort (catalogue réel)',
+        hotelTitle: confHotel.title,
+        totalXof: confHotel.priceAmount * nights + sampleSiteCost * 3,
+        detail: `${nights} nuit(s) · ${confHotel.title}`,
+      },
+    ];
+  }, [activeFolder, catalogue]);
+
+  // Global Dossier Confirmation Summary & Dependent Services Detection (Lot 1.5)
+  const dossierGlobalConfirmation = useMemo(() => {
+    const active = activeFolder
+      ? clientReservations.filter(
+          (r) => r.folderId === activeFolder.id && r.status !== 'cancelled'
+        )
+      : [];
+    if (active.length === 0) {
+      return {
+        badge: 'Aucune demande envoyée',
+        tone: 'slate',
+        confirmedCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        dependentWarnings: [] as string[],
+      };
+    }
+    const confirmedCount = active.filter(
+      (r) => r.status === 'confirmed' || r.status === 'accepted'
+    ).length;
+    const failedCount = active.filter(
+      (r) => r.status === 'rejected' || r.dispatchStatus === 'expired'
+    ).length;
+    const pendingCount = active.filter(
+      (r) => r.status === 'pending_provider' || r.status === 'alternative_proposed'
+    ).length;
+
+    const dependentWarnings: string[] = [];
+    for (const failed of active.filter(
+      (r) => r.status === 'rejected' || r.dispatchStatus === 'expired'
+    )) {
+      const sameDayOthers = active.filter(
+        (other) =>
+          other.id !== failed.id &&
+          other.scheduledDate === failed.scheduledDate &&
+          other.status !== 'rejected'
+      );
+      if (sameDayOthers.length > 0) {
+        dependentWarnings.push(
+          `Prestation liée le ${failed.scheduledDate} : « ${failed.serviceTitle} » est indisponible alors que ${sameDayOthers
+            .map((o) => `« ${o.serviceTitle} »`)
+            .join(', ')} est prévue le même jour.`
+        );
+      }
+    }
+
+    if (failedCount > 0 && confirmedCount > 0) {
+      return {
+        badge: 'Partiellement confirmé · Choix requis',
+        tone: 'amber',
+        confirmedCount,
+        pendingCount,
+        failedCount,
+        dependentWarnings,
+      };
+    }
+    if (failedCount > 0) {
+      return {
+        badge: 'À replanifier',
+        tone: 'rose',
+        confirmedCount,
+        pendingCount,
+        failedCount,
+        dependentWarnings,
+      };
+    }
+    if (confirmedCount === active.length) {
+      return {
+        badge: 'Tout confirmé',
+        tone: 'emerald',
+        confirmedCount,
+        pendingCount,
+        failedCount,
+        dependentWarnings,
+      };
+    }
+    return {
+      badge: 'En attente de confirmation',
+      tone: 'amber',
+      confirmedCount,
+      pendingCount,
+      failedCount,
+      dependentWarnings,
+    };
+  }, [activeFolder, clientReservations]);
+
+  const handleDeclareDossierFee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeFolder || !acceptedCgvForFee || declaringFee) return;
+    setDeclaringFee(true);
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/folders/${encodeURIComponent(activeFolder.id)}/declare-fee`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentMethod: feePaymentMethod,
+            payerName: feePayerName.trim(),
+            payerPhone: feePayerPhone.trim(),
+            transactionRef: feeTxRef.trim(),
+            transactionReference: feeTxRef.trim(),
+            termsAccepted: true,
+            acceptedCgv: true,
+          }),
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (onNotify) onNotify(data?.error || 'Impossible de déclarer les frais de dossier.');
+        return;
+      }
+      setLocalFeeOverrideStatus('in_verification');
+      setFeeTxRef('');
+      if (onNotify) {
+        onNotify(
+          'Versement des frais de dossier déclaré. L’administrateur vérifiera la réception avant l’envoi des réservations.'
+        );
+      }
+    } catch {
+      if (onNotify) onNotify('Erreur réseau lors de la déclaration des frais de dossier.');
+    } finally {
+      setDeclaringFee(false);
+    }
+  };
+
+  const handleFetchSmartAlternatives = async (res: ReservationDoc, broaden = false) => {
+    setAltDrawerRes(res);
+    setBroadenAltSearch(broaden);
+    setLoadingAlts(true);
+    setRecalcPreview(null);
+    try {
+      const resp = await authorizedFetch('/api/amaro/alternatives', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceId: res.serviceId,
+          cityId: res.cityId,
+          category: res.category,
+          scheduledDate: res.scheduledDate,
+          scheduledTime: res.scheduledTime,
+          participants: res.participants,
+          maxBudgetXof: broaden
+            ? Math.round((res.providerPrice || 50000) * 1.5)
+            : Math.max(res.providerPrice || 50000, 35000),
+          principalTransportProviderId: activeTransportProvider?.providerId || undefined,
+          broadenCitySearch: broaden,
+        }),
+      });
+      const data = await resp.json();
+      setServerAlternatives(Array.isArray(data?.alternatives) ? data.alternatives : []);
+      setAltEmptyReason(data?.emptyReason || '');
+    } catch {
+      setServerAlternatives([]);
+      setAltEmptyReason('Impossible de charger les alternatives du serveur.');
+    } finally {
+      setLoadingAlts(false);
+    }
+  };
+
+  const handlePreviewRecalculation = async (
+    forReservation: ReservationDoc,
+    candidate: CatalogueItem
+  ) => {
+    if (!activeFolder) return;
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/folders/${encodeURIComponent(activeFolder.id)}/recalculate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            replacedServiceId: forReservation.serviceId,
+            replacementServiceId: candidate.id,
+            scheduledDate: forReservation.scheduledDate,
+            scheduledTime: forReservation.scheduledTime,
+            participants: forReservation.participants,
+          }),
+        }
+      );
+      const data = await resp.json();
+      setRecalcPreview({
+        candidate,
+        forReservation,
+        valid: Boolean(data?.valid),
+        conflicts: Array.isArray(data?.conflicts) ? data.conflicts : [],
+        warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+        beforeTotalXof: Number(data?.beforeTotalXof || forReservation.providerPrice || 0),
+        afterTotalXof: Number(
+          data?.afterTotalXof || candidate.priceAmount * forReservation.participants
+        ),
+        deltaXof: Number(data?.deltaXof || 0),
+        summaryFr:
+          data?.summaryFr ||
+          `Remplacement de « ${forReservation.serviceTitle} » par « ${candidate.title} ».`,
+      });
+    } catch {
+      if (onNotify) onNotify('Impossible de calculer l’aperçu avant/après.');
+    }
+  };
 
   const handleOpenElectronicReceipt = async (res: ReservationDoc) => {
     if (res.paymentStatus !== 'succeeded') {
@@ -590,7 +1011,7 @@ export function JourneyHubView({
             onClick={onRequireSignIn}
             className="min-h-[46px] px-6 py-2.5 text-sm font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors"
           >
-            Se connecter avec Google (Gratuit)
+            Se connecter ou créer un compte (Google ou E-mail)
           </button>
         </div>
       </div>
@@ -768,17 +1189,557 @@ export function JourneyHubView({
             </button>
           </div>
 
-          {subTab === 'journal' && (
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => window.print()}
               className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
             >
               <Printer className="w-4 h-4" />
-              <span>Imprimer / Exporter en PDF Souvenir</span>
+              <span>Exporter en PDF (Itinéraire / Carnet)</span>
             </button>
-          )}
+
+            {(() => {
+              const rawWa =
+                countrySetting?.amaroWhatsappNumber &&
+                countrySetting.amaroWhatsappNumber !== OWNER_PLACEHOLDER
+                  ? countrySetting.amaroWhatsappNumber
+                  : countrySetting?.supportWhatsappNumber &&
+                    countrySetting.supportWhatsappNumber !== OWNER_PLACEHOLDER
+                  ? countrySetting.supportWhatsappNumber
+                  : '';
+              const digits = rawWa.replace(/[^0-9]/g, '');
+              if (digits.length < 8) return null;
+              return (
+                <a
+                  href={`https://wa.me/${digits}?text=${encodeURIComponent(
+                    `Bonjour AMARO.VOYAGE, besoin d'assistance pour mon dossier "${activeFolder.title}" (${activeFolder.id}).`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Support WhatsApp</span>
+                </a>
+              );
+            })()}
+          </div>
         </div>
+      )}
+
+      {/* 3 Visible Lifecycle Phases (9.1): Avant / Pendant / Après le voyage */}
+      {activeFolder && (
+        <section className="no-print p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {(
+                [
+                  { id: 'avant', label: '1. Avant le voyage (Intention, Frais & Préparation)' },
+                  { id: 'pendant', label: '2. Pendant le voyage (Terrain, Imprévus & Dépenses)' },
+                  { id: 'apres', label: '3. Après le voyage (Bilan, Remerciements & Réutilisation)' },
+                ] as const
+              ).map((ph) => (
+                <button
+                  key={ph.id}
+                  type="button"
+                  onClick={() => setLifecyclePhase(ph.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+                    lifecyclePhase === ph.id
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  {ph.label}
+                </button>
+              ))}
+            </div>
+
+            <span
+              className={`px-3 py-1 rounded-lg text-xs font-bold ${
+                dossierGlobalConfirmation.tone === 'emerald'
+                  ? 'bg-emerald-100 text-emerald-900'
+                  : dossierGlobalConfirmation.tone === 'rose'
+                  ? 'bg-rose-100 text-rose-900'
+                  : dossierGlobalConfirmation.tone === 'amber'
+                  ? 'bg-amber-100 text-amber-900'
+                  : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              Statut global : {dossierGlobalConfirmation.badge}
+            </span>
+          </div>
+
+          {/* Phase 1: Avant le voyage -> Pourquoi ce voyage ? (9.2) + Frais de dossier (Bloc 2) + Assurance & Sécurité (6.1, 6.2) */}
+          {lifecyclePhase === 'avant' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+              {/* Optional Travel Intention (9.2) */}
+              <div className="lg:col-span-5 p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-teal-800 dark:text-teal-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Pourquoi ce voyage ? (Facultatif &amp; strictement privé)
+                  </h3>
+                  {onSaveFolderIntention && !folderIntention?.skipped && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onSaveFolderIntention({
+                          motivations: [],
+                          personalNote: '',
+                          skipped: true,
+                        })
+                      }
+                      className="text-[11px] underline text-slate-500 hover:text-slate-800"
+                    >
+                      Passer cette étape
+                    </button>
+                  )}
+                </div>
+
+                {folderIntention?.skipped ? (
+                  <p className="text-xs text-slate-500">
+                    Étape passée selon votre choix. Vos notes d’intention ne sont jamais transmises aux prestataires.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-1.5">
+                      {INTENTION_OPTIONS_FR.map((opt) => {
+                        const savedReasons =
+                          folderIntention?.reasons?.length
+                            ? folderIntention.reasons
+                            : folderIntention?.motivations || [];
+                        const currentList =
+                          selectedMotivations.length > 0
+                            ? selectedMotivations
+                            : savedReasons;
+                        const active = currentList.includes(opt);
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => {
+                              const next = active
+                                ? currentList.filter((x) => x !== opt)
+                                : [...currentList, opt];
+                              setSelectedMotivations(next);
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${
+                              active
+                                ? 'bg-[#0B192C] text-white border-[#0B192C]'
+                                : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      value={
+                        intentionNote ||
+                        folderIntention?.freeNote ||
+                        folderIntention?.personalNote ||
+                        ''
+                      }
+                      onChange={(e) => setIntentionNote(e.target.value)}
+                      placeholder="Ce qui compte vraiment pour vous durant ce séjour..."
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                    />
+                    {onSaveFolderIntention && (
+                      <button
+                        type="button"
+                        disabled={savingIntention}
+                        onClick={async () => {
+                          setSavingIntention(true);
+                          try {
+                            const savedReasons =
+                              folderIntention?.reasons?.length
+                                ? folderIntention.reasons
+                                : folderIntention?.motivations || [];
+                            await onSaveFolderIntention({
+                              motivations:
+                                selectedMotivations.length > 0
+                                  ? selectedMotivations
+                                  : savedReasons,
+                              personalNote:
+                                intentionNote ||
+                                folderIntention?.freeNote ||
+                                folderIntention?.personalNote ||
+                                '',
+                              skipped: false,
+                            });
+                          } finally {
+                            setSavingIntention(false);
+                          }
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#0B192C] text-white text-xs font-semibold"
+                      >
+                        {savingIntention ? 'Enregistrement...' : 'Enregistrer mon intention privée'}
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* Insurance & Regional Security Checklist (6.1 & 6.2) */}
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={insuranceChecked}
+                      onChange={(e) => setInsuranceChecked(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span className="text-slate-700 dark:text-slate-300">
+                      Checklist départ : j’ai vérifié mon{' '}
+                      <button
+                        type="button"
+                        onClick={() => onOpenLegalDoc?.('assurance_voyage')}
+                        className="underline font-semibold text-teal-700 dark:text-teal-400"
+                      >
+                        assurance voyage / rapatriement
+                      </button>{' '}
+                      et consulté les{' '}
+                      <button
+                        type="button"
+                        onClick={() => onOpenLegalDoc?.('avis_securite_regions')}
+                        className="underline font-semibold text-teal-700 dark:text-teal-400"
+                      >
+                        recommandations de sécurité par région
+                      </button>
+                      .
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Dossier Fee Gate & Balance Workflow (Bloc 2) */}
+              <div className="lg:col-span-7 p-4 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-300">
+                    Frais d’ouverture &amp; de coordination de dossier ({formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')})
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-amber-300 text-[11px] font-bold">
+                    Statut :{' '}
+                    {budgetBreakdown.effectiveFeeStatus === 'validated'
+                      ? 'Validé (déductible du total final)'
+                      : budgetBreakdown.effectiveFeeStatus === 'in_verification' ||
+                        budgetBreakdown.effectiveFeeStatus === 'declared'
+                      ? 'Déclaré · En vérification Admin'
+                      : budgetBreakdown.effectiveFeeStatus === 'refund_pending'
+                      ? 'Remboursement manuel dû'
+                      : budgetBreakdown.effectiveFeeStatus === 'refunded'
+                      ? 'Remboursé'
+                      : 'Non réglé'}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                  <strong>Règle transparente :</strong> l’exploration, l’agenda et l’assistant sont 100 % gratuits. Pour lancer les démarches réelles de réservation auprès des établissements, des frais de dossier de{' '}
+                  <strong>{formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')}</strong> sont demandés : ils sont{' '}
+                  <strong>intégralement déduits de votre facture finale</strong>, remboursés manuellement si AMARO n’obtient aucune prestation, et conservés uniquement si vous abandonnez le dossier après obtention des confirmations.
+                </p>
+
+                {countrySetting?.amaroMobileMoneyNumber && (
+                  <p className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    Coordonnées Mobile Money AMARO :{' '}
+                    <strong>{countrySetting.amaroMobileMoneyNumber}</strong> (Titulaire :{' '}
+                    {countrySetting.amaroMobileMoneyHolder || OWNER_PLACEHOLDER})
+                  </p>
+                )}
+
+                {['pending', 'not_required', 'rejected', 'unpaid'].includes(
+                  budgetBreakdown.effectiveFeeStatus
+                ) && (
+                  <form onSubmit={(e) => void handleDeclareDossierFee(e)} className="space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                      <select
+                        value={feePaymentMethod}
+                        onChange={(e) => setFeePaymentMethod(e.target.value)}
+                        className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      >
+                        <option value="MTN Mobile Money">MTN Mobile Money</option>
+                        <option value="Moov Money">Moov Money</option>
+                        <option value="Celtiis Cash">Celtiis Cash</option>
+                        <option value="Virement bancaire">Virement bancaire</option>
+                      </select>
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        value={feePayerName}
+                        onChange={(e) => setFeePayerName(e.target.value)}
+                        placeholder="Nom du titulaire payeur *"
+                        className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      />
+                      <input
+                        type="tel"
+                        required
+                        value={feePayerPhone}
+                        onChange={(e) => setFeePayerPhone(e.target.value)}
+                        placeholder="Téléphone émetteur (+229...)"
+                        className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                      <input
+                        type="text"
+                        required
+                        minLength={4}
+                        value={feeTxRef}
+                        onChange={(e) => setFeeTxRef(e.target.value)}
+                        placeholder="Référence transaction Mobile Money *"
+                        className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                    </div>
+                    <label className="flex items-start gap-2 text-[11px] text-slate-700 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={acceptedCgvForFee}
+                        onChange={(e) => setAcceptedCgvForFee(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        J’ai lu et j’accepte les{' '}
+                        <button
+                          type="button"
+                          onClick={() => onOpenLegalDoc?.('cgv_client')}
+                          className="underline font-bold"
+                        >
+                          CGV Client
+                        </button>{' '}
+                        et la{' '}
+                        <button
+                          type="button"
+                          onClick={() => onOpenLegalDoc?.('politique_annulation')}
+                          className="underline font-bold"
+                        >
+                          Politique d’annulation
+                        </button>{' '}
+                        avant tout versement.
+                      </span>
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={!acceptedCgvForFee || declaringFee}
+                      className="px-4 py-2 rounded-lg bg-[#0B192C] text-white text-xs font-bold disabled:opacity-50"
+                    >
+                      {declaringFee
+                        ? 'Transmission...'
+                        : 'Déclarer mon règlement des frais de dossier'}
+                    </button>
+                  </form>
+                )}
+
+                {(activeFolder.balanceDueAt || activeFolder.balanceDueDeadlineAt) && (
+                  <p className="text-xs font-semibold text-amber-900 dark:text-amber-300">
+                    Échéance règlement du solde (48 h après confirmation) :{' '}
+                    <span className="font-mono">
+                      {(activeFolder.balanceDueAt || activeFolder.balanceDueDeadlineAt || '')
+                        .replace('T', ' ')
+                        .slice(0, 16)}{' '}
+                      UTC
+                    </span>
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Phase 2: Pendant le voyage -> Imprévu & Dépenses réelles sur place */}
+          {lifecyclePhase === 'pendant' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="p-4 rounded-xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/50 space-y-2.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-rose-900 dark:text-rose-300">
+                  Signaler un imprévu sur place (retard, météo, fatigue, fermeture)
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  Décrivez l’imprévu ou ouvrez directement vos réservations pour demander jusqu’à 3 alternatives réelles dans la même ville sans pénalité arbitraire.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={incidentNote}
+                    onChange={(e) => setIncidentNote(e.target.value)}
+                    placeholder="Ex. : Retard pluie à Ouidah, besoin de décaler la visite..."
+                    className="flex-1 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubTab('reservations');
+                      if (onNotify && incidentNote.trim()) {
+                        onNotify(
+                          'Sélectionnez la prestation concernée ci-dessous pour afficher jusqu’à 3 alternatives réelles.'
+                        );
+                      }
+                    }}
+                    className="px-3.5 py-2 rounded-lg bg-rose-700 text-white text-xs font-bold shrink-0"
+                  >
+                    Trouver une alternative
+                  </button>
+                </div>
+              </div>
+
+              {onAddFolderExpense && (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!expLabel.trim()) return;
+                    await onAddFolderExpense({
+                      label: expLabel.trim(),
+                      category: expCategory,
+                      amount: Math.max(0, Number(expAmount) || 0),
+                      currency: activeFolder.currency,
+                      date: expDate,
+                    });
+                    setExpLabel('');
+                  }}
+                  className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
+                >
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                    Saisir une dépense réelle sur place ({folderExpenses.length} enregistrée(s))
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={expLabel}
+                      onChange={(e) => setExpLabel(e.target.value)}
+                      placeholder="Ex. : Déjeuner maquis"
+                      className="sm:col-span-2 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                    />
+                    <select
+                      value={expCategory}
+                      onChange={(e) => setExpCategory(e.target.value as ServiceCategory)}
+                      className="px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                    >
+                      {(Object.keys(t.categories) as ServiceCategory[]).map((cat) => (
+                        <option key={cat} value={cat}>
+                          {t.categories[cat]}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={0}
+                      value={expAmount}
+                      onChange={(e) => setExpAmount(Number(e.target.value))}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <input
+                      type="date"
+                      value={expDate}
+                      onChange={(e) => setExpDate(e.target.value)}
+                      className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3.5 py-1.5 rounded-lg bg-[#0B192C] text-white text-xs font-bold"
+                    >
+                      Ajouter aux dépenses réelles
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* Phase 3: Après le voyage -> Réutiliser comme modèle, Partage familial en lecture seule & Suggestion discrète (10.4) */}
+          {lifecyclePhase === 'apres' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                  Continuité &amp; Partage familial en lecture seule (10.4)
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {onDuplicateFolderAsTemplate && (
+                    <button
+                      type="button"
+                      onClick={() => void onDuplicateFolderAsTemplate(activeFolder)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#0B192C] text-white text-xs font-bold"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Réutiliser ce voyage comme modèle
+                    </button>
+                  )}
+                  {onCreateFolderShare && (
+                    <button
+                      type="button"
+                      onClick={() => void onCreateFolderShare(activeFolder.id)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-teal-700 text-white text-xs font-bold"
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                      Créer un lien famille (lecture seule)
+                    </button>
+                  )}
+                </div>
+
+                {folderShares.filter((s) => s.folderId === activeFolder.id && !s.revoked).map((sh) => {
+                  const shareToken = sh.shareToken || sh.id;
+                  const shareUrl = `${window.location.origin}/?share=${encodeURIComponent(shareToken)}`;
+                  return (
+                    <div
+                      key={sh.id}
+                      className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="font-mono truncate max-w-xs">{shareUrl}</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(shareUrl);
+                            onNotify?.('Lien de lecture seule copié.');
+                          }}
+                          className="underline font-semibold text-teal-700"
+                        >
+                          Copier
+                        </button>
+                        {onRevokeFolderShare && (
+                          <button
+                            type="button"
+                            onClick={() => void onRevokeFolderShare(sh.id)}
+                            className="underline font-semibold text-rose-700"
+                          >
+                            Révoquer
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {!dismissedNextTripHint && (
+                <div className="p-4 rounded-xl bg-teal-50/60 dark:bg-teal-950/20 border border-teal-200 dark:border-teal-800/60 flex items-start justify-between gap-3">
+                  <div className="space-y-1 text-xs">
+                    <p className="font-bold text-teal-900 dark:text-teal-200">
+                      Idée discrète pour un prochain séjour au Bénin
+                    </p>
+                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                      Après {activeFolder.primaryCityId}, de nombreux voyageurs découvrent à leur rythme{' '}
+                      <strong>
+                        {activeFolder.primaryCityId === 'cotonou' || activeFolder.primaryCityId === 'ouidah'
+                          ? 'Abomey (palais royaux) ou Natitingou (Tata Somba & Pendjari)'
+                          : 'Grand-Popo (embouchure du Mono) ou Ouidah'}
+                      </strong>
+                      .
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedNextTripHint(true)}
+                    className="text-xs text-slate-400 hover:text-slate-700"
+                    aria-label="Masquer cette suggestion"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       )}
 
       {/* Create New Journey Folder Form */}
@@ -996,7 +1957,7 @@ export function JourneyHubView({
                   <span>Amaro Budget Guardian · Transparence Financière Stricte</span>
                 </div>
                 <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                  Suivi Budgétaire en 6 États ({budgetBreakdown.targetCur})
+                  Suivi Budgétaire en 7 Indicateurs ({budgetBreakdown.targetCur})
                 </h2>
               </div>
 
@@ -1126,7 +2087,10 @@ export function JourneyHubView({
                 {
                   label: '7. Reste à payer',
                   val: budgetBreakdown.remainingToPay,
-                  sub: 'Accepté + confirmé dû',
+                  sub:
+                    budgetBreakdown.dossierFeeDeducted > 0
+                      ? 'Frais dossier déduits'
+                      : 'Accepté + confirmé dû',
                 },
               ].map((metric) => (
                 <div
@@ -1143,6 +2107,43 @@ export function JourneyHubView({
                 </div>
               ))}
             </div>
+
+            {budgetBreakdown.dossierFeeDeducted > 0 && (
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs font-mono text-emerald-900 dark:text-emerald-200">
+                <span className="font-sans font-semibold">
+                  Frais de dossier déduits du total final :
+                </span>
+                <strong>-{formatMoney(budgetBreakdown.dossierFeeDeducted, budgetBreakdown.targetCur)}</strong>
+              </div>
+            )}
+
+            {/* 3 Real Catalogue Budget Scenarios (5.3) */}
+            {realBudgetScenarios.length > 0 && (
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Repères budgétaires réels basés sur le catalogue Bénin ({activeFolder.primaryCityId}) :
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  {realBudgetScenarios.map((sc) => (
+                    <div
+                      key={sc.id}
+                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-0.5"
+                    >
+                      <span className="font-bold text-slate-900 dark:text-slate-100 block">
+                        {sc.label}
+                      </span>
+                      <span className="font-mono text-teal-700 dark:text-teal-400 font-bold block">
+                        {formatMoney(
+                          convertValue(sc.totalXof, 'XOF', budgetBreakdown.targetCur, rateInfo?.rates),
+                          budgetBreakdown.targetCur
+                        )}
+                      </span>
+                      <span className="text-[11px] text-slate-500 block truncate">{sc.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="space-y-4">
@@ -1152,7 +2153,7 @@ export function JourneyHubView({
                   Agenda Chronologique Intelligent (Amaro Journey Brain)
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Règles actives : aucune visite touristique sur 2 villes le même jour · journée dédiée aux changements de ville (transferts/installation autorisés) · jusqu’à 3 visites/jour dans la même ville · 1 prestataire transport principal + courses ponctuelles séparées.
+                  Règles harmonisées (5.1 &amp; 9.3) : max {countrySetting?.maxVisitsCityChangeDay ?? 1} visite un jour de changement de ville · max {countrySetting?.maxVisitsSameCityDay ?? 2} visites/jour sans changement de ville · 1 temps libre de respiration conseillé chaque jour · 1 transporteur principal + courses ponctuelles séparées.
                 </p>
               </div>
               {activeTransportProvider && (
@@ -1186,8 +2187,8 @@ export function JourneyHubView({
                       <span className="text-slate-500 dark:text-slate-400">
                         Villes : <strong className="capitalize">{day.cities.join(' → ')}</strong> ·{' '}
                         {day.involvesCityChange
-                          ? 'Journée de transfert / changement de ville'
-                          : `Même ville (${day.siteVisitsCount}/3 visites touristiques)`}
+                          ? `Changement de ville (${day.siteVisitsCount}/${countrySetting?.maxVisitsCityChangeDay ?? 1} visite max)`
+                          : `Même ville (${day.siteVisitsCount}/${countrySetting?.maxVisitsSameCityDay ?? 2} visites max · temps libre préservé)`}
                       </span>
                     </div>
 
@@ -1696,6 +2697,28 @@ export function JourneyHubView({
               Ajouter à mon Carnet de Voyage
             </button>
           </form>
+
+          {/* 4 Modifiable Post-Stay Reflection Questions (9.4) */}
+          <section className="no-print p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+            <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+              Questions de bilan personnel (facultatives, cliquez pour pré-remplir une note libre)
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {LOGBOOK_REFLECTION_QUESTIONS.map((q) => (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => {
+                    setCustomStepTitle(q.question);
+                    setCustomDate(activeFolder.endDate);
+                  }}
+                  className="text-left p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 text-xs font-medium text-slate-800 dark:text-slate-200"
+                >
+                  « {q.question} »
+                </button>
+              ))}
+            </div>
+          </section>
         </div>
       )}
 
@@ -1707,15 +2730,210 @@ export function JourneyHubView({
           <section className="lg:col-span-7 space-y-4">
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
-                Chronologie Contractuelle &amp; Reçus Électroniques Vérifiés
+                Chronologie Contractuelle · Statut Global : {dossierGlobalConfirmation.badge}
               </p>
               <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
                 Suivre mes réservations ({folderReservations.length})
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Suivi étape par étape : aucun débit sans disponibilité validée, aucune alternative imposée sans votre accord, et reçu électronique délivré exclusivement après confirmation réelle d’encaissement.
+                Confirmées : <strong>{dossierGlobalConfirmation.confirmedCount}</strong> · En attente :{' '}
+                <strong>{dossierGlobalConfirmation.pendingCount}</strong> · Indisponibles/Expirées :{' '}
+                <strong>{dossierGlobalConfirmation.failedCount}</strong>. Aucun débit sans disponibilité validée.
               </p>
             </div>
+
+            {/* Dependent Services & Partial Confirmation 3-Choice Banner (Lot 1.5 & Bloc 3) */}
+            {(dossierGlobalConfirmation.failedCount > 0 ||
+              dossierGlobalConfirmation.dependentWarnings.length > 0) && (
+              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 space-y-3 text-xs">
+                <p className="font-bold text-amber-950 dark:text-amber-200">
+                  Confirmation partielle détectée — Vous gardez le choix complet :
+                </p>
+                {dossierGlobalConfirmation.dependentWarnings.map((w, i) => (
+                  <p key={i} className="text-amber-900 dark:text-amber-300">
+                    • {w}
+                  </p>
+                ))}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const firstFailed = folderReservations.find(
+                        (r) => r.status === 'rejected' || r.dispatchStatus === 'expired'
+                      );
+                      if (firstFailed) void handleFetchSmartAlternatives(firstFailed, false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-[#0B192C] text-white font-bold"
+                  >
+                    1. Chercher une alternative disponible
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onNotify?.(
+                        'Vous avez choisi de conserver uniquement les prestations déjà confirmées de votre dossier.'
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 text-white font-bold"
+                  >
+                    2. Continuer avec ce qui est confirmé
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void onUpdateFolderStatus(activeFolder.id, 'cancelled_by_client')}
+                    className="px-3 py-1.5 rounded-lg bg-rose-100 text-rose-800 font-bold"
+                  >
+                    3. Abandonner le dossier
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Server Smart Alternatives Drawer + Before/After Recalculation Approval (Lot 1.3 & 1.4) */}
+            {altDrawerRes && (
+              <div className="p-5 rounded-2xl bg-teal-50/80 dark:bg-slate-900 border-2 border-teal-400 dark:border-teal-700 space-y-4 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-bold text-sm text-slate-900 dark:text-white">
+                      Alternatives réelles pour « {altDrawerRes.serviceTitle} » ({altDrawerRes.cityId})
+                    </p>
+                    <p className="text-slate-600 dark:text-slate-300">
+                      Jusqu’à 3 options compatibles (priorité aux Partenaires AMARO conventionnés et respect du transporteur principal unique).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAltDrawerRes(null);
+                      setRecalcPreview(null);
+                    }}
+                    className="p-1 text-slate-500"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {loadingAlts ? (
+                  <p className="text-slate-500">Recherche des disponibilités réelles du catalogue...</p>
+                ) : serverAlternatives.length === 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-amber-900 dark:text-amber-300 font-medium">
+                      {altEmptyReason ||
+                        'Aucune alternative exacte disponible dans cette ville et ce budget.'}
+                    </p>
+                    {!broadenAltSearch && (
+                      <button
+                        type="button"
+                        onClick={() => void handleFetchSmartAlternatives(altDrawerRes, true)}
+                        className="px-3.5 py-2 rounded-lg bg-[#0B192C] text-white font-bold"
+                      >
+                        Élargir la recherche (villes voisines / budget élargi)
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {serverAlternatives.map((alt) => (
+                      <div
+                        key={alt.id}
+                        className="p-3 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                      >
+                        <div>
+                          <strong className="text-slate-900 dark:text-white block">
+                            {alt.title}{' '}
+                            {alt.dataOrigin === 'verified_partner' ? '· Partenaire AMARO' : ''}
+                          </strong>
+                          <span className="text-slate-500 capitalize">
+                            {alt.cityId} ·{' '}
+                            {alt.priceKnown === false
+                              ? 'Tarif sur demande'
+                              : formatMoney(alt.priceAmount, alt.currency)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handlePreviewRecalculation(altDrawerRes, alt)}
+                          className="px-3.5 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold"
+                        >
+                          Vérifier l’impact avant/après
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {recalcPreview && (
+                  <div className="p-4 rounded-xl bg-white dark:bg-slate-950 border border-amber-300 dark:border-amber-700 space-y-2.5">
+                    <p className="font-bold text-slate-900 dark:text-white">
+                      Résumé Avant / Après (Amaro Journey Brain) :
+                    </p>
+                    <p className="text-slate-700 dark:text-slate-300">{recalcPreview.summaryFr}</p>
+                    <p className="font-mono">
+                      Avant : {formatMoney(recalcPreview.beforeTotalXof, 'XOF')} → Après :{' '}
+                      {formatMoney(recalcPreview.afterTotalXof, 'XOF')} (Différence :{' '}
+                      <strong>
+                        {recalcPreview.deltaXof >= 0 ? '+' : ''}
+                        {formatMoney(recalcPreview.deltaXof, 'XOF')}
+                      </strong>
+                      )
+                    </p>
+                    {recalcPreview.conflicts.map((c, idx) => (
+                      <p key={idx} className="text-rose-700 font-semibold">
+                        • Conflit horaire/règle : {c}
+                      </p>
+                    ))}
+                    {recalcPreview.warnings.map((w, idx) => (
+                      <p key={idx} className="text-amber-700">
+                        • Vigilance : {w}
+                      </p>
+                    ))}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={!recalcPreview.valid}
+                        onClick={async () => {
+                          if (activeFolder) {
+                            await authorizedFetch(
+                              `/api/amaro/folders/${encodeURIComponent(activeFolder.id)}/recalculate`,
+                              {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  confirmApply: true,
+                                  replacedServiceId: recalcPreview.forReservation.serviceId,
+                                  replacementServiceId: recalcPreview.candidate.id,
+                                  scheduledDate: recalcPreview.forReservation.scheduledDate,
+                                  scheduledTime: recalcPreview.forReservation.scheduledTime,
+                                  participants: recalcPreview.forReservation.participants,
+                                }),
+                              }
+                            ).catch(() => {});
+                          }
+                          await onRequestAlternativeItem(
+                            recalcPreview.candidate,
+                            recalcPreview.forReservation.scheduledDate,
+                            recalcPreview.forReservation.scheduledTime,
+                            recalcPreview.forReservation.participants
+                          );
+                          setAltDrawerRes(null);
+                          setRecalcPreview(null);
+                        }}
+                        className="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold"
+                      >
+                        Confirmer et demander cette alternative
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRecalcPreview(null)}
+                        className="px-3 py-2 rounded-lg border border-slate-300"
+                      >
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {folderReservations.length === 0 ? (
               <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500">
@@ -2105,7 +3323,113 @@ export function JourneyHubView({
                             <span>Annuler</span>
                           </button>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => void handleFetchSmartAlternatives(res, false)}
+                          className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-teal-800 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/40 rounded-xl"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Voir jusqu’à 3 alternatives</span>
+                        </button>
                       </div>
+
+                      {/* Post-Stay Verified Review (6.3) & Private Provider Thank-You (9.4) */}
+                      {(res.status === 'confirmed' || res.paymentStatus === 'succeeded') && (
+                        <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                          {onSubmitTravelerReview &&
+                            !travelerReviews.some((rv) => rv.reservationId === res.id) && (
+                              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 space-y-2">
+                                <p className="font-bold flex items-center gap-1">
+                                  <Star className="w-3.5 h-3.5 text-amber-500" />
+                                  Avis voyageur vérifié (après séjour)
+                                </p>
+                                <div className="flex gap-2">
+                                  <select
+                                    value={reviewRatingByRes[res.id] || 5}
+                                    onChange={(e) =>
+                                      setReviewRatingByRes((p) => ({
+                                        ...p,
+                                        [res.id]: Number(e.target.value),
+                                      }))
+                                    }
+                                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                  >
+                                    {[5, 4, 3, 2, 1].map((n) => (
+                                      <option key={n} value={n}>
+                                        {n}/5
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    type="text"
+                                    value={reviewTextByRes[res.id] || ''}
+                                    onChange={(e) =>
+                                      setReviewTextByRes((p) => ({
+                                        ...p,
+                                        [res.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="Votre retour honnête..."
+                                    className="flex-1 px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const txt = (reviewTextByRes[res.id] || '').trim();
+                                    if (!txt) return;
+                                    await onSubmitTravelerReview({
+                                      reservation: res,
+                                      rating: reviewRatingByRes[res.id] || 5,
+                                      comment: txt,
+                                    });
+                                    setReviewTextByRes((p) => ({ ...p, [res.id]: '' }));
+                                  }}
+                                  className="px-3 py-1 rounded bg-[#0B192C] text-white font-semibold"
+                                >
+                                  Soumettre mon avis vérifié
+                                </button>
+                              </div>
+                            )}
+
+                          {onSendProviderThankYou && res.providerOwnerId !== 'manual_concierge' && (
+                            <div className="p-3 rounded-xl bg-amber-50/50 dark:bg-slate-950 space-y-2">
+                              <p className="font-bold flex items-center gap-1">
+                                <Heart className="w-3.5 h-3.5 text-rose-600" />
+                                Remerciement privé au prestataire (non public)
+                              </p>
+                              <input
+                                type="text"
+                                value={thankYouTextByRes[res.id] || ''}
+                                onChange={(e) =>
+                                  setThankYouTextByRes((p) => ({
+                                    ...p,
+                                    [res.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Un mot personnel pour l’équipe..."
+                                className="w-full px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const msg = (thankYouTextByRes[res.id] || '').trim();
+                                  if (!msg) return;
+                                  await onSendProviderThankYou({
+                                    reservation: res,
+                                    message: msg,
+                                  });
+                                  setThankYouTextByRes((p) => ({ ...p, [res.id]: '' }));
+                                }}
+                                className="px-3 py-1 rounded bg-amber-600 text-white font-semibold"
+                              >
+                                Envoyer en privé
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </article>
                   );
                 })}

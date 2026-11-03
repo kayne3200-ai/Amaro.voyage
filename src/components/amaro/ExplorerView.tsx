@@ -19,20 +19,28 @@ import type {
   CulturalStoryDoc,
   CurrencyCode,
   DataOriginType,
+  EmergencyNumberEntry,
   LocaleCode,
   PilotStockDoc,
   ServiceCategory,
   StandingLevel,
   SystemSettingDoc,
+  TravelerReviewDoc,
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY, EDITORIAL_IMAGES } from '../../data/amaroRegistry';
-import { ACTIVATION_LEVEL_LABELS } from '../../data/pilotConventioningData';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { BeninExploreSection } from './BeninExploreSection';
 import {
   AccommodationComparatorModal,
   ServiceDetailModal,
 } from './ServiceDetailModal';
+import { ListingTrustBadge } from './ListingTrustBadge';
+import {
+  computeDynamicCatalogueCounts,
+  DEFAULT_EMERGENCY_NUMBERS_BJ,
+  isAmaroOwnAssistanceOffer,
+} from '../../data/amaroGovernanceDefaults';
+import type { LegalDocKey } from './LegalAndCharterModal';
 
 interface RateInfo {
   rates: Record<'EUR' | 'XOF' | 'USD', number>;
@@ -70,6 +78,10 @@ interface ExplorerViewProps {
     stockId?: string
   ) => Promise<void>;
   onSubmitCulturalStory: (cityId: string, title: string, story: string) => Promise<boolean>;
+  approvedReviews?: TravelerReviewDoc[];
+  emergencyNumbers?: EmergencyNumberEntry[];
+  realLocalContributionTotalXof?: number;
+  onOpenLegalDoc?: (docId: LegalDocKey) => void;
   externalJump?: {
     cityId?: string;
     category?: ServiceCategory;
@@ -143,9 +155,14 @@ export function ExplorerView({
   onAddServiceToJourney,
   onRequestReservation,
   onSubmitCulturalStory,
+  approvedReviews = [],
+  emergencyNumbers = DEFAULT_EMERGENCY_NUMBERS_BJ,
+  realLocalContributionTotalXof = 0,
+  onOpenLegalDoc,
   externalJump,
 }: ExplorerViewProps) {
   const t = TRANSLATIONS[locale];
+  const allowDemoData = Boolean(countrySetting?.includeDemoData);
 
   const [space, setSpace] = useState<ExplorerSpace>('overview');
   const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
@@ -228,7 +245,9 @@ export function ExplorerView({
   }, [space, selectedCategory]);
 
   const filteredItems = useMemo(() => {
-    return catalogue.filter((item) => {
+    const list = catalogue.filter((item) => {
+      // 5.8: Completely hide demo_test listings in production unless explicitly enabled by Admin
+      if (item.dataOrigin === 'demo_test' && !allowDemoData) return false;
       if (item.countryCode !== selectedCountryCode) return false;
       if (selectedCityId !== 'all' && item.cityId !== selectedCityId) return false;
 
@@ -246,9 +265,7 @@ export function ExplorerView({
         return false;
       }
 
-      if (standingFilter !== 'all' && item.standing !== standingFilter) {
-        return false;
-      }
+      if (standingFilter !== 'all' && item.standing !== standingFilter) return false;
 
       if (languageFilter !== 'all') {
         const langs = (item.languagesSpoken || []).map((l) => l.toLowerCase());
@@ -279,8 +296,25 @@ export function ExplorerView({
       }
       return true;
     });
+
+    // Bloc 1: At equal relevance, always display Partenaire AMARO before public directory listings
+    return list.sort((a, b) => {
+      const aPartner =
+        !isAmaroOwnAssistanceOffer(a) &&
+        (a.dataOrigin === 'verified_partner' || Boolean(a.pilotConventionSigned))
+          ? 1
+          : 0;
+      const bPartner =
+        !isAmaroOwnAssistanceOffer(b) &&
+        (b.dataOrigin === 'verified_partner' || Boolean(b.pilotConventionSigned))
+          ? 1
+          : 0;
+      if (bPartner !== aPartner) return bPartner - aPartner;
+      return 0;
+    });
   }, [
     catalogue,
+    allowDemoData,
     selectedCountryCode,
     selectedCityId,
     effectiveCategoryFilter,
@@ -366,33 +400,32 @@ export function ExplorerView({
     }
   };
 
-  const commissionPct = countrySetting?.commissionPercent ?? 0;
+  const partnerMarginPct =
+    countrySetting?.partnerMarginPercent ?? countrySetting?.commissionPercent ?? 10;
+  const directoryMarginPct = countrySetting?.directoryMarginPercent ?? 5;
   const flatFee = countrySetting?.serviceFeeFlat ?? 0;
 
-  // Real directory counts for transparency header
-  const realCount = useMemo(
-    () => catalogue.filter((c) => c.dataOrigin !== 'demo_test').length,
-    [catalogue]
+  const catalogueCounts = useMemo(
+    () => computeDynamicCatalogueCounts(catalogue, allowDemoData),
+    [catalogue, allowDemoData]
   );
-  const realAccommodationCount = useMemo(
-    () =>
-      catalogue.filter(
-        (c) => c.category === 'accommodation' && c.dataOrigin !== 'demo_test'
-      ).length,
-    [catalogue]
-  );
+  const realCount = catalogueCounts.thirdPartyCount;
+  const amaroAccompanimentCount = catalogueCounts.amaroAssistanceCount;
+  const realAccommodationCount = catalogueCounts.accommodationsCount;
 
   return (
     <div className="pb-24 md:pb-12">
-      {/* Contextual Locale / Currency & Rate Transparency Bar */}
+      {/* Contextual Locale / Currency & Rate Transparency Bar (6.7) */}
       <div className="bg-slate-900 text-slate-200 border-b border-slate-800 px-4 md:px-8 py-2">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2 text-slate-300 tabular-nums">
             <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>
               {rateInfo
-                ? `Taux : 1 EUR = 655,957 XOF · 1 EUR = ${rateInfo.rates.USD.toFixed(3)} USD`
-                : 'Taux BCEAO : 1 EUR = 655,957 XOF'}
+                ? `Conversion indicative (règlement en FCFA) · 1 EUR = 655,957 XOF · 1 EUR = ${rateInfo.rates.USD.toFixed(
+                    3
+                  )} USD · Source : ${rateInfo.source} (${rateInfo.updatedAt.slice(0, 10)})`
+                : 'Conversion indicative (règlement en FCFA) · Parité fixe BCEAO : 1 EUR = 655,957 XOF'}
             </span>
             {activeReferralCode && (
               <>
@@ -450,8 +483,8 @@ export function ExplorerView({
               id: 'overview' as ExplorerSpace,
               label:
                 locale === 'fr'
-                  ? `Tout le catalogue (${realCount})`
-                  : `All directory (${realCount})`,
+                  ? `Établissements & Sites (${realCount}) + ${amaroAccompanimentCount} offres AMARO`
+                  : `Directory (${realCount}) + ${amaroAccompanimentCount} AMARO offers`,
               icon: Compass,
             },
             { id: 'benin_guide' as ExplorerSpace, label: t.nav.discoverBenin, icon: BookOpen },
@@ -498,6 +531,7 @@ export function ExplorerView({
       {/* Dedicated Free Public Encyclopedia View */}
       {space === 'benin_guide' ? (
         <BeninExploreSection
+          emergencyNumbers={emergencyNumbers}
           onSelectCityFilter={(cityId) => {
             setSelectedCountryCode('BJ');
             setSelectedCityId(cityId);
@@ -508,13 +542,14 @@ export function ExplorerView({
         />
       ) : (
         <>
-          {/* Hero Section (Shown on Overview) */}
+          {/* Hero Section (Shown on Overview — zero duplicate header CTA) */}
           {space === 'overview' && (
             <section className="bg-[#0B192C] text-white border-b border-slate-800">
               <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 md:py-14 grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
                 <div className="lg:col-span-7 flex flex-col justify-center space-y-5">
                   <p className="text-xs md:text-sm font-medium text-teal-400">
-                    {t.hero.kicker} · {realCount} fiches documentées au Bénin
+                    {t.hero.kicker} · {realCount} établissements et sites tiers recensés +{' '}
+                    {amaroAccompanimentCount} offres d’accompagnement humain AMARO
                   </p>
                   <h1
                     className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-white leading-[1.12]"
@@ -682,16 +717,20 @@ export function ExplorerView({
               <select
                 value={originFilter}
                 onChange={(e) => setOriginFilter(e.target.value as any)}
-                aria-label="Filtrer par origine des données"
+                aria-label="Filtrer par statut de vérification"
                 className="min-h-[44px] px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl outline-none"
               >
                 <option value="real_only">
-                  Établissements &amp; Sites réels (Annuaire + Partenaires)
+                  Tous (Partenaires AMARO en priorité + Recensés)
                 </option>
-                <option value="public_directory">Annuaire touristique documenté</option>
-                <option value="verified_partner">Partenaires directs vérifiés</option>
-                <option value="all">Tout afficher (inclure fiches Démo Test)</option>
-                <option value="demo_test">Fiches Démo Test uniquement</option>
+                <option value="verified_partner">Partenaires AMARO uniquement</option>
+                <option value="public_directory">Recensés, non vérifiés (Annuaire public)</option>
+                {allowDemoData && (
+                  <>
+                    <option value="all">Mode test Admin : Tout afficher (avec Démo)</option>
+                    <option value="demo_test">Mode test Admin : Fiches Démo uniquement</option>
+                  </>
+                )}
               </select>
 
               {space === 'accommodations' || selectedCategory === 'accommodation' ? (
@@ -823,13 +862,23 @@ export function ExplorerView({
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                   {filteredItems.slice(0, visibleLimit).map((item) => {
-                    const originLabel = t.origins[item.dataOrigin];
                     const imgMeta =
                       EDITORIAL_IMAGES[item.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+                    const photoSrc = item.customPhotoUrl?.trim()
+                      ? item.customPhotoUrl.trim()
+                      : imgMeta.src;
+                    const isPhotoVerified = Boolean(
+                      item.photoVerified && item.customPhotoUrl?.trim()
+                    );
+                    const isAmaroAssistance = isAmaroOwnAssistanceOffer(item);
+                    const isPartnerVerified =
+                      !isAmaroAssistance &&
+                      (item.dataOrigin === 'verified_partner' ||
+                        Boolean(item.pilotConventionSigned));
+                    const effectiveMarginPct = isPartnerVerified
+                      ? partnerMarginPct
+                      : directoryMarginPct;
                     const isCompared = compareIds.includes(item.id);
-                    const verifLabel = item.verificationStatus
-                      ? t.verification[item.verificationStatus]
-                      : null;
 
                     return (
                       <article
@@ -837,11 +886,11 @@ export function ExplorerView({
                         className="rounded-2xl overflow-hidden bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col justify-between"
                       >
                         <div>
-                          {/* Visual Header on Sites & Featured Cards */}
+                          {/* Visual Header with honest photo status (5.4) */}
                           <div className="h-40 bg-slate-200 dark:bg-slate-800 relative overflow-hidden">
                             {!failedImages[item.id] ? (
                               <img
-                                src={imgMeta.src}
+                                src={photoSrc}
                                 alt={item.title}
                                 onError={() =>
                                   setFailedImages((p) => ({ ...p, [item.id]: true }))
@@ -851,6 +900,11 @@ export function ExplorerView({
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-slate-800 text-white text-xs px-4 text-center">
                                 {item.title}
+                              </div>
+                            )}
+                            {!isPhotoVerified && (
+                              <div className="absolute top-2.5 left-2.5">
+                                <ListingTrustBadge variant="non_contractual_photo" />
                               </div>
                             )}
                             <button
@@ -866,27 +920,23 @@ export function ExplorerView({
                           </div>
 
                           <div className="p-5 space-y-2.5">
-                            {/* Unboxed Metadata */}
-                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                              <span>{t.categories[item.category]}</span>
-                              <span aria-hidden="true">·</span>
-                              <span className="capitalize font-medium text-slate-700 dark:text-slate-300">
-                                {item.cityId}
+                            {/* Single Trust Badge (Précision 1 — zero duplicate status badge) */}
+                            <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                              <span>
+                                {t.categories[item.category]} ·{' '}
+                                <strong className="capitalize text-slate-700 dark:text-slate-300">
+                                  {item.cityId}
+                                </strong>
                               </span>
-                              <span aria-hidden="true">·</span>
-                              <span
-                                className={
-                                  item.dataOrigin === 'verified_partner'
-                                    ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
-                                    : item.dataOrigin === 'public_directory'
-                                    ? 'text-teal-700 dark:text-teal-400 font-medium'
-                                    : 'text-amber-700 dark:text-amber-400 font-medium'
+                              <ListingTrustBadge
+                                variant={
+                                  isAmaroAssistance
+                                    ? 'amaro_accompaniment'
+                                    : isPartnerVerified
+                                    ? 'partner_verified'
+                                    : 'directory_unverified'
                                 }
-                              >
-                                {item.activationLevel
-                                  ? ACTIVATION_LEVEL_LABELS[item.activationLevel].shortLabel
-                                  : originLabel}
-                              </span>
+                              />
                             </div>
 
                             <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100 leading-snug">
@@ -911,6 +961,11 @@ export function ExplorerView({
                                 Langues : {item.languagesSpoken.join(' · ')}
                               </p>
                             )}
+
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                              Source : {item.sourceName || 'Répertoire public'} · Vérifié :{' '}
+                              {item.verifiedAt ? item.verifiedAt.slice(0, 10) : 'à confirmer'}
+                            </p>
                           </div>
                         </div>
 
@@ -923,13 +978,17 @@ export function ExplorerView({
                               <span className="block text-[11px] text-slate-500 dark:text-slate-400">
                                 {item.priceRangeNote
                                   ? item.priceRangeNote
-                                  : `Commission Amaro : ${commissionPct}%${
+                                  : isPartnerVerified
+                                  ? `Marge Partenaire : ${effectiveMarginPct}%${
+                                      flatFee > 0 ? ` + ${flatFee} XOF` : ''
+                                    }`
+                                  : `Frais coordination annuaire : ${effectiveMarginPct}%${
                                       flatFee > 0 ? ` + ${flatFee} XOF` : ''
                                     }`}
                               </span>
                             </div>
                             <span className="text-[11px] text-slate-500 dark:text-slate-400 text-right">
-                              {verifLabel || `${item.capacity} pers. max`}
+                              {item.capacity} pers. max
                             </span>
                           </div>
 
@@ -1143,6 +1202,63 @@ export function ExplorerView({
               ))}
             </div>
           </section>
+
+          {/* Optional Local Heritage Contribution Counter — ONLY shown if > 0% and real amounts > 0 (9.6) */}
+          {(countrySetting?.localContributionPercent ?? 0) > 0 &&
+            realLocalContributionTotalXof > 0 && (
+              <section className="max-w-7xl mx-auto px-4 md:px-8 py-4">
+                <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-950 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    <strong>Contribution locale réelle engagée ({countrySetting?.localContributionPercent}% de la marge AMARO) :</strong>{' '}
+                    reversée à des initiatives locales ou patrimoniales au Bénin.
+                  </span>
+                  <strong className="font-mono text-sm">
+                    {realLocalContributionTotalXof.toLocaleString('fr-FR')} FCFA
+                  </strong>
+                </div>
+              </section>
+            )}
+
+          {/* Transparency, Charter & Legal Footer Links (Blocs 6, 8, 9, 10) */}
+          {onOpenLegalDoc && (
+            <footer className="max-w-7xl mx-auto px-4 md:px-8 pt-6 pb-4 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 space-y-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <button type="button" onClick={() => onOpenLegalDoc('vision_amaro')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                  Vision d’AMARO
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('charte_voyage_respectueux')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                  Charte du voyage respectueux
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('comment_amaro_verifie')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                  Comment AMARO vérifie
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('garanties_et_limites')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                  Ce qu’AMARO garantit et ne garantit pas
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('cgv_client')} className="hover:underline">
+                  CGV Client
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('politique_annulation')} className="hover:underline">
+                  Politique d’annulation
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('convention_prestataire')} className="hover:underline">
+                  Convention prestataire
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('mentions_legales')} className="hover:underline">
+                  Mentions légales
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('avis_securite_regions')} className="hover:underline">
+                  Sécurité par région
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('assurance_voyage')} className="hover:underline">
+                  Assurance voyage
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('partenaires_officiels')} className="hover:underline">
+                  Partenaires officiels
+                </button>
+              </div>
+            </footer>
+          )}
         </>
       )}
 
@@ -1153,6 +1269,7 @@ export function ExplorerView({
         displayCurrency={currency}
         formattedPrice={detailItem ? formatItemPrice(detailItem) : ''}
         activeStocks={pilotStocks}
+        approvedReviews={approvedReviews}
         onClose={() => setDetailItem(null)}
         onAddToJourney={(it) => setSelectedItemForAction({ item: it, mode: 'folder' })}
         onRequestBooking={(it) => setSelectedItemForAction({ item: it, mode: 'booking' })}

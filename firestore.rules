@@ -12,8 +12,18 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Supports Google verified accounts AND Email/Password accounts (Bloc 6.6)
+    // while strictly blocking any unverified claim on the owner admin address.
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        (
+          'firebase' in request.auth.token &&
+          'sign_in_provider' in request.auth.token.firebase &&
+          request.auth.token.firebase.sign_in_provider == 'password' &&
+          request.auth.token.email != 'kayne3200@gmail.com'
+        )
+      );
     }
 
     function incoming() {
@@ -30,14 +40,16 @@ service cloud.firestore {
 
     // Zero-DB-lookup admin check safe for list queries (Pillar 8 Cost-Optimization Clause)
     function isBootstrappedAdmin() {
-      return isVerifiedUser() && request.auth.token.email == 'kayne3200@gmail.com';
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'kayne3200@gmail.com';
     }
 
     // Full relational admin check for single-document operations
     function isAdmin() {
-      return isVerifiedUser() && (
+      return isSignedIn() && (
         isBootstrappedAdmin() ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        (request.auth.token.email_verified == true && exists(/databases/$(database)/documents/admins/$(request.auth.uid)))
       );
     }
 
@@ -49,7 +61,7 @@ service cloud.firestore {
       return cur is string && cur in ['XOF', 'EUR', 'USD'];
     }
 
-    // --- Validation Blueprints (Pillar 2) ---
+    // --- Validation Blueprints ---
     function isValidUserPublic(data) {
       return data.keys().hasAll(['uid', 'displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['uid', 'displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'createdAt', 'updatedAt'])
@@ -65,27 +77,63 @@ service cloud.firestore {
 
     function isValidUserPrivate(data) {
       return data.keys().hasAll(['uid', 'email', 'phone', 'emergencyContact', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'phone', 'emergencyContact', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'phoneVerified', 'emergencyContact', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && data.uid == request.auth.uid
         && data.email is string && data.email.size() <= 200
         && data.phone is string && data.phone.size() <= 40
+        && (!('phoneVerified' in data) || data.phoneVerified is bool)
         && data.emergencyContact is string && data.emergencyContact.size() <= 200
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserPreferences(data) {
+      return data.keys().hasAll([
+          'userId', 'consentEnabled', 'preferredStanding', 'travelPace',
+          'dietaryNotes', 'favoriteInterests', 'muteNonEssentialNotifications',
+          'phoneNumberDeclared', 'phoneVerified', 'updatedAtIso'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'consentEnabled', 'preferredStanding', 'travelPace',
+          'dietaryNotes', 'favoriteInterests', 'muteNonEssentialNotifications',
+          'phoneNumberDeclared', 'phoneVerified', 'updatedAtIso', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.consentEnabled is bool
+        && data.preferredStanding is string && data.preferredStanding.size() <= 80
+        && data.travelPace is string && data.travelPace.size() <= 80
+        && data.dietaryNotes is string && data.dietaryNotes.size() <= 500
+        && data.favoriteInterests is list && data.favoriteInterests.size() <= 25
+        && data.muteNonEssentialNotifications is bool
+        && data.phoneNumberDeclared is string && data.phoneNumberDeclared.size() <= 40
+        && data.phoneVerified is bool
+        && data.updatedAtIso is string && data.updatedAtIso.size() <= 40;
+    }
+
     function isValidAdminRecord(data) {
       return data.keys().hasAll(['uid', 'roleLevel', 'createdAt'])
-        && data.keys().hasOnly(['uid', 'roleLevel', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'roleLevel', 'email', 'role', 'addedBy', 'createdAt'])
         && isValidId(data.uid)
         && data.roleLevel is string && data.roleLevel in ['super_admin', 'moderator', 'finance_admin']
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('role' in data) || (data.role is string && data.role.size() <= 60))
+        && (!('addedBy' in data) || isValidId(data.addedBy))
         && data.createdAt is timestamp;
     }
 
     function isValidProviderProfile(data) {
       return data.keys().hasAll(['ownerId', 'businessName', 'category', 'countryCode', 'cityId', 'description', 'verificationStatus', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'businessName', 'category', 'countryCode', 'cityId', 'description', 'verificationStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'ownerId', 'businessName', 'companyName', 'category', 'countryCode', 'cityId',
+          'description', 'verificationStatus', 'contactName', 'phone', 'businessPhone',
+          'contactEmail', 'businessEmail', 'address', 'conventionAccepted', 'conventionVersion',
+          'conventionVersionAccepted', 'conventionAcceptedAt', 'registrationSource',
+          'linkedDirectoryServiceId', 'claimedDirectoryServiceId', 'adminConventionStage', 'agreedCommissionPercent',
+          'agreedResponseHours', 'agreedCancellationTerms', 'blockedDates', 'seasonalRatesSummary',
+          'createdAt', 'updatedAt'
+        ])
         && isValidId(data.ownerId)
         && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 140
         && isValidCategory(data.category)
@@ -118,8 +166,11 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
           'address', 'description', 'priceAmount', 'priceKnown', 'currency', 'durationMinutes',
-          'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'neighborhood', 'standing',
-          'activationLevel', 'pilotConventionSigned', 'cancellationPolicy',
+          'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'verifiedAt',
+          'neighborhood', 'standing', 'activationLevel', 'pilotConventionSigned', 'cancellationPolicy',
+          'customPhotoUrl', 'photoVerified', 'photoSource', 'photoUsageRights',
+          'isSacredOrCeremonial', 'sacredNotice', 'linkedDirectoryServiceId',
+          'seasonalTariffs', 'unitTariffs', 'blockedDates', 'providerResponseHours',
           'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.providerId)
@@ -136,8 +187,9 @@ service cloud.firestore {
         && data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 43200
         && data.capacity is int && data.capacity >= 1 && data.capacity <= 1000
         && data.dataOrigin is string && data.dataOrigin in ['verified_partner', 'pending_verification', 'public_directory', 'demo_test']
-        && (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus in ['verified', 'partially_verified', 'to_confirm']))
+        && (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus in ['verified', 'partially_verified', 'to_confirm', 'unverified']))
         && (!('sourceName' in data) || (data.sourceName is string && data.sourceName.size() <= 240))
+        && (!('verifiedAt' in data) || (data.verifiedAt is string && data.verifiedAt.size() <= 40))
         && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 140))
         && (!('standing' in data) || (data.standing is string && data.standing in [
           'international_5', 'upper_4', 'comfort_3', 'boutique_charm', 'eco_nature', 'residence_apart', 'budget_2',
@@ -146,6 +198,13 @@ service cloud.firestore {
         && (!('activationLevel' in data) || (data.activationLevel is string && data.activationLevel in ['directory_only', 'level_a_verified', 'level_b_validation', 'level_c_instant']))
         && (!('pilotConventionSigned' in data) || data.pilotConventionSigned is bool)
         && (!('cancellationPolicy' in data) || (data.cancellationPolicy is string && data.cancellationPolicy.size() <= 500))
+        && (!('customPhotoUrl' in data) || (data.customPhotoUrl is string && data.customPhotoUrl.size() <= 600))
+        && (!('photoVerified' in data) || data.photoVerified is bool)
+        && (!('isSacredOrCeremonial' in data) || data.isSacredOrCeremonial is bool)
+        && (!('sacredNotice' in data) || (data.sacredNotice is string && data.sacredNotice.size() <= 600))
+        && (!('linkedDirectoryServiceId' in data) || (data.linkedDirectoryServiceId is string && data.linkedDirectoryServiceId.size() <= 128))
+        && (!('blockedDates' in data) || (data.blockedDates is list && data.blockedDates.size() <= 366))
+        && (!('providerResponseHours' in data) || (data.providerResponseHours is int && data.providerResponseHours >= 1 && data.providerResponseHours <= 168))
         && data.status is string && data.status in ['draft', 'published', 'archived']
         && data.imageKey is string && data.imageKey.size() <= 100
         && data.imageLicense is string && data.imageLicense.size() <= 200
@@ -162,10 +221,14 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerId', 'title', 'countryCode', 'primaryCityId', 'startDate', 'endDate',
           'travelersCount', 'totalBudget', 'dailyBudget', 'currency', 'preferencesNotes',
-          'status', 'createdAt', 'updatedAt'
+          'status', 'dossierFeeStatus', 'dossierFeeAmountXof', 'dossierTxRef',
+          'dossierPayerName', 'dossierPayerPhone', 'dossierDeclaredAt', 'dossierVerifiedAt',
+          'dossierVerifiedBy', 'dossierRejectionReason', 'dossierFeeCredited',
+          'termsAcceptedVersion', 'termsAcceptedAt', 'balanceDueAt', 'balanceDueDeadlineAt',
+          'balanceReminderSentAt', 'manualRefundRequired', 'manualRefundReason',
+          'insuranceChecked', 'duplicatedFromFolderId', 'templateSourceFolderId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
         && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
         && isValidId(data.primaryCityId)
@@ -176,7 +239,17 @@ service cloud.firestore {
         && data.dailyBudget is number && data.dailyBudget >= 0 && data.dailyBudget <= 1000000000
         && isValidCurrency(data.currency)
         && data.preferencesNotes is string && data.preferencesNotes.size() <= 1000
-        && data.status is string && data.status in ['planning', 'active', 'completed', 'archived']
+        && data.status is string && data.status in [
+          'draft', 'planning', 'fees_pending', 'fees_in_verification', 'fees_validated',
+          'coordinating', 'requests_in_progress', 'partially_confirmed', 'to_replan',
+          'needs_rescheduling', 'confirmed', 'fully_confirmed', 'awaiting_balance',
+          'paid', 'active', 'completed', 'expired', 'cancelled', 'cancelled_by_client',
+          'archived', 'abandoned'
+        ]
+        && (!('dossierFeeStatus' in data) || (data.dossierFeeStatus is string && data.dossierFeeStatus in [
+          'not_required', 'not_requested', 'pending', 'declared', 'in_verification', 'validated', 'rejected', 'refund_pending', 'refunded'
+        ]))
+        && (!('templateSourceFolderId' in data) || (data.templateSourceFolderId is string && data.templateSourceFolderId.size() <= 128))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -190,11 +263,10 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'folderId', 'ownerId', 'serviceId', 'providerId', 'serviceTitle', 'category', 'cityId',
           'date', 'startTime', 'endTime', 'durationMinutes', 'estimatedCost',
-          'currency', 'stage', 'notes', 'createdAt', 'updatedAt'
+          'currency', 'stage', 'notes', 'isFreeTimeBlock', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.folderId)
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && isValidId(data.serviceId)
         && (!('providerId' in data) || data.providerId == '' || isValidId(data.providerId))
         && data.serviceTitle is string && data.serviceTitle.size() <= 160
@@ -208,6 +280,7 @@ service cloud.firestore {
         && isValidCurrency(data.currency)
         && data.stage is string && data.stage in ['envisaged', 'requested', 'accepted', 'confirmed']
         && data.notes is string && data.notes.size() <= 600
+        && (!('isFreeTimeBlock' in data) || data.isFreeTimeBlock is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -262,13 +335,49 @@ service cloud.firestore {
 
     function matchesCountrySettingFees(data, countryCode) {
       return exists(/databases/$(database)/documents/system_settings/$(countryCode))
-        ? matchesFeeBreakdown(
+        ? (
+          matchesFeeBreakdown(
             data,
             get(/databases/$(database)/documents/system_settings/$(countryCode)).data.commissionPercent,
             get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
             get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
           )
-        : matchesFeeBreakdown(data, 0, 0, 0);
+          || (
+            'partnerMarginPercent' in get(/databases/$(database)/documents/system_settings/$(countryCode)).data
+            && matchesFeeBreakdown(
+              data,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.partnerMarginPercent,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
+            )
+          )
+          || (
+            'directoryMarginPercent' in get(/databases/$(database)/documents/system_settings/$(countryCode)).data
+            && matchesFeeBreakdown(
+              data,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.directoryMarginPercent,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
+              get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
+            )
+          )
+          || matchesFeeBreakdown(
+            data,
+            5,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
+          )
+          || matchesFeeBreakdown(
+            data,
+            10,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.serviceFeeFlat,
+            get(/databases/$(database)/documents/system_settings/$(countryCode)).data.taxPercent
+          )
+        )
+        : (
+          matchesFeeBreakdown(data, 0, 0, 0)
+          || matchesFeeBreakdown(data, 5, 0, 0)
+          || matchesFeeBreakdown(data, 10, 0, 0)
+        );
     }
 
     function matchesPublishedCatalogService(data, svc) {
@@ -347,6 +456,8 @@ service cloud.firestore {
           'referralCode', 'providerSettled',
           'activationMode', 'allocatedStockId', 'allocatedUnits',
           'dispatchChannel', 'dispatchStatus', 'responseDeadlineAt', 'followUpCount',
+          'circuitType', 'coordinationStatus', 'coordinationContactedAt', 'coordinationOutcome',
+          'halfTimeReminderSentAt', 'balanceDeadlineAt', 'adminNotifyProviderTask', 'localContributionXof',
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
@@ -383,6 +494,9 @@ service cloud.firestore {
         && (!('dispatchStatus' in data) || (data.dispatchStatus is string && data.dispatchStatus in ['prepared', 'sent', 'send_failed', 'response_received', 'accepted', 'rejected', 'expired']))
         && (!('responseDeadlineAt' in data) || (data.responseDeadlineAt is string && data.responseDeadlineAt.size() <= 40))
         && (!('followUpCount' in data) || (data.followUpCount is int && data.followUpCount >= 0 && data.followUpCount <= 50))
+        && (!('circuitType' in data) || (data.circuitType is string && data.circuitType in ['circuit_a_directory', 'circuit_b_partner']))
+        && (!('coordinationStatus' in data) || (data.coordinationStatus is string && data.coordinationStatus in ['to_contact', 'contacted', 'confirmed', 'unavailable', 'quote_received']))
+        && (!('localContributionXof' in data) || (data.localContributionXof is number && data.localContributionXof >= 0))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -479,6 +593,15 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency',
           'partnerCommissionPercent', 'attributionWindowDays', 'attributionModel',
+          'partnerMarginPercent', 'directoryMarginPercent', 'dossierFeeXof', 'dossierFeeAmount',
+          'dossierVerificationHours', 'providerResponseHours', 'balancePaymentHours',
+          'maxPendingPaymentFolders', 'abandonmentRiskThreshold', 'alternativeBudgetTolerancePercent',
+          'maxVisitsCityChangeDay', 'maxVisitsSameCityDay', 'freeTimeBlocksPerDay',
+          'includeDossierFeeInAffiliateBase', 'localContributionPercent', 'localContributionLabel',
+          'amaroMobileMoneyNumber', 'amaroMobileMoneyHolder', 'amaroWhatsappNumber', 'supportWhatsappNumber',
+          'vaultKeyConfirmedByOwner', 'financialRetentionDuration', 'termsVersion', 'conventionVersion',
+          'includeDemoData', 'exchangeRateEurToXof', 'exchangeRateUsdToXof',
+          'exchangeRateSource', 'exchangeRateUpdatedAt',
           'updatedBy', 'createdAt', 'updatedAt'
         ])
         && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
@@ -486,9 +609,6 @@ service cloud.firestore {
         && data.serviceFeeFlat is number && data.serviceFeeFlat >= 0 && data.serviceFeeFlat <= 10000000
         && data.taxPercent is number && data.taxPercent >= 0 && data.taxPercent <= 100
         && isValidCurrency(data.currency)
-        && (!('partnerCommissionPercent' in data) || (data.partnerCommissionPercent is number && data.partnerCommissionPercent >= 0 && data.partnerCommissionPercent <= 100))
-        && (!('attributionWindowDays' in data) || (data.attributionWindowDays is int && data.attributionWindowDays >= 1 && data.attributionWindowDays <= 365))
-        && (!('attributionModel' in data) || (data.attributionModel is string && data.attributionModel in ['first_touch', 'last_touch']))
         && isValidId(data.updatedBy)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -496,10 +616,10 @@ service cloud.firestore {
 
     function isValidAuditLog(data) {
       return data.keys().hasAll(['actorId', 'action', 'targetId', 'summary', 'createdAt'])
-        && data.keys().hasOnly(['actorId', 'action', 'targetId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['actorId', 'action', 'targetType', 'targetId', 'summary', 'createdAt'])
         && isValidId(data.actorId)
-        && data.actorId == request.auth.uid
         && data.action is string && data.action.size() >= 2 && data.action.size() <= 120
+        && (!('targetType' in data) || (data.targetType is string && data.targetType.size() <= 60))
         && isValidId(data.targetId)
         && data.summary is string && data.summary.size() <= 600
         && data.createdAt is timestamp;
@@ -699,7 +819,7 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
-    // --- 1. Users & Isolated PII ---
+    // --- 1. Users & Isolated PII / Consented Preferences ---
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
       allow list: if isBootstrappedAdmin();
@@ -722,34 +842,45 @@ service cloud.firestore {
           || isAdmin()
         );
 
-      allow delete: if isAdmin() && isValidId(userId);
+      allow delete: if isValidId(userId) && ((isVerifiedUser() && request.auth.uid == userId) || isAdmin());
 
       match /private/{docId} {
-        allow get: if isSignedIn() && isValidId(userId) && docId == 'info' && (request.auth.uid == userId || isAdmin());
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && docId in ['info', 'preferences']
+          && (request.auth.uid == userId || isAdmin());
         allow list: if false;
 
         allow create: if isVerifiedUser()
           && isValidId(userId)
-          && docId == 'info'
           && request.auth.uid == userId
-          && isValidUserPrivate(incoming())
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time
-          && exists(/databases/$(database)/documents/users/$(userId));
+          && (
+            (docId == 'info'
+              && isValidUserPrivate(incoming())
+              && incoming().createdAt == request.time
+              && incoming().updatedAt == request.time
+              && exists(/databases/$(database)/documents/users/$(userId)))
+            || (docId == 'preferences' && isValidUserPreferences(incoming()))
+          );
 
         allow update: if isVerifiedUser()
           && isValidId(userId)
-          && docId == 'info'
-          && isValidUserPrivate(incoming())
-          && incoming().uid == existing().uid
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
           && (
-            (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'emergencyContact', 'updatedAt']))
-            || isAdmin()
+            (docId == 'info'
+              && isValidUserPrivate(incoming())
+              && incoming().uid == existing().uid
+              && incoming().createdAt == existing().createdAt
+              && incoming().updatedAt == request.time
+              && (
+                (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'phoneVerified', 'emergencyContact', 'updatedAt']))
+                || isAdmin()
+              ))
+            || (docId == 'preferences' && request.auth.uid == userId && isValidUserPreferences(incoming()))
           );
 
-        allow delete: if isAdmin() && isValidId(userId) && docId == 'info';
+        allow delete: if isValidId(userId)
+          && docId in ['info', 'preferences']
+          && ((isVerifiedUser() && request.auth.uid == userId) || isAdmin());
       }
     }
 
@@ -790,7 +921,11 @@ service cloud.firestore {
         && (
           (existing().ownerId == request.auth.uid
             && incoming().verificationStatus == existing().verificationStatus
-            && incoming().diff(existing()).affectedKeys().hasOnly(['businessName', 'category', 'countryCode', 'cityId', 'description', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'businessName', 'companyName', 'category', 'countryCode', 'cityId',
+              'description', 'contactName', 'phone', 'businessPhone', 'contactEmail',
+              'businessEmail', 'address', 'claimedDirectoryServiceId', 'blockedDates', 'seasonalRatesSummary', 'updatedAt'
+            ]))
           || isAdmin()
         );
 
@@ -847,6 +982,7 @@ service cloud.firestore {
           || (
             incoming().ownerId == request.auth.uid
             && incoming().dataOrigin == 'pending_verification'
+            && !('isSacredOrCeremonial' in incoming() && incoming().isSacredOrCeremonial == true)
             && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.ownerId == request.auth.uid
           )
         );
@@ -854,17 +990,19 @@ service cloud.firestore {
       allow update: if isVerifiedUser()
         && isValidId(serviceId)
         && isValidCatalogueService(incoming())
-        && incoming().ownerId == existing().ownerId
-        && incoming().providerId == existing().providerId
+        && (incoming().ownerId == existing().ownerId || isAdmin())
+        && (incoming().providerId == existing().providerId || isAdmin())
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
           (existing().ownerId == request.auth.uid
             && incoming().dataOrigin == existing().dataOrigin
+            && !('isSacredOrCeremonial' in incoming() && incoming().isSacredOrCeremonial == true && !('isSacredOrCeremonial' in existing() && existing().isSacredOrCeremonial == true))
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'category', 'address', 'description', 'priceAmount', 'priceKnown',
               'currency', 'durationMinutes', 'capacity', 'neighborhood', 'standing',
-              'status', 'imageKey', 'imageLicense', 'updatedAt'
+              'cancellationPolicy', 'blockedDates', 'seasonalTariffs', 'unitTariffs',
+              'providerResponseHours', 'verificationStatus', 'status', 'imageKey', 'imageLicense', 'updatedAt'
             ]))
           || isAdmin()
         );
@@ -872,7 +1010,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(serviceId);
     }
 
-    // --- 5. Amaro Journey Folders, Master-Gated Items & Electronic Travel Logbook ---
+    // --- 5. Amaro Journey Folders, Master-Gated Items, Intentions, Expenses & Logbook ---
     match /journey_folders/{folderId} {
       allow get: if isSignedIn() && isValidId(folderId) && (existing().ownerId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
@@ -893,10 +1031,14 @@ service cloud.firestore {
         && (
           (existing().ownerId == request.auth.uid
             && (existing().status != 'archived' || isAdmin())
+            && !('dossierVerifiedBy' in incoming().diff(existing()).affectedKeys())
+            && (!(incoming().dossierFeeStatus in ['validated', 'refunded']) || existing().dossierFeeStatus == incoming().dossierFeeStatus)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'countryCode', 'primaryCityId', 'startDate', 'endDate',
               'travelersCount', 'totalBudget', 'dailyBudget', 'currency',
-              'preferencesNotes', 'status', 'updatedAt'
+              'preferencesNotes', 'status', 'dossierFeeStatus', 'dossierFeeAmountXof',
+              'dossierTxRef', 'dossierPayerName', 'dossierPayerPhone', 'dossierDeclaredAt',
+              'termsAcceptedVersion', 'termsAcceptedAt', 'insuranceChecked', 'updatedAt'
             ]))
           || isAdmin()
         );
@@ -931,12 +1073,12 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
           && (
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'serviceTitle', 'providerId', 'category', 'cityId', 'date', 'startTime', 'endTime',
-              'durationMinutes', 'estimatedCost', 'stage', 'notes', 'updatedAt'
-            ])
+            (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'serviceTitle', 'providerId', 'category', 'cityId', 'date', 'startTime', 'endTime',
+                'durationMinutes', 'estimatedCost', 'stage', 'notes', 'isFreeTimeBlock', 'updatedAt'
+              ]))
             || isAdmin()
           );
 
@@ -947,6 +1089,65 @@ service cloud.firestore {
             get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
             || isAdmin()
           );
+      }
+
+      // Strictly private trip intention & post-trip reflection (NEVER readable by providers)
+      match /private/{docId} {
+        allow get: if isSignedIn()
+          && isValidId(folderId)
+          && docId == 'intention'
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+        allow list: if false;
+
+        allow create, update: if isVerifiedUser()
+          && isValidId(folderId)
+          && docId == 'intention'
+          && incoming().folderId == folderId
+          && incoming().ownerId == request.auth.uid
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(folderId)
+          && docId == 'intention'
+          && (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+
+      match /expenses/{expenseId} {
+        allow get: if isSignedIn()
+          && isValidId(folderId)
+          && isValidId(expenseId)
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+        allow create, update: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(expenseId)
+          && incoming().folderId == folderId
+          && incoming().ownerId == request.auth.uid
+          && isValidCategory(incoming().category)
+          && incoming().label is string && incoming().label.size() >= 1 && incoming().label.size() <= 160
+          && incoming().amount is number && incoming().amount >= 0 && incoming().amount <= 1000000000
+          && isValidCurrency(incoming().currency)
+          && get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(expenseId)
+          && (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+
+      match /change_history/{historyId} {
+        allow get: if isSignedIn()
+          && isValidId(folderId)
+          && isValidId(historyId)
+          && (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
+
+        allow create: if isVerifiedUser()
+          && isValidId(folderId)
+          && isValidId(historyId)
+          && (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid || isAdmin());
+        allow update, delete: if false;
       }
 
       match /journal/{entryId} {
@@ -1058,7 +1259,7 @@ service cloud.firestore {
           || (existing().clientId == request.auth.uid
             && incoming().status in ['awaiting_payment', 'cancelled']
             && incoming().paymentStatus == existing().paymentStatus
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'alternativeProposal', 'updatedAt']))
           || (existing().clientId == request.auth.uid
             && existing().status in ['accepted', 'awaiting_payment', 'confirmed']
             && incoming().status == 'awaiting_payment'
@@ -1146,7 +1347,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(referralId);
     }
 
-    // --- 8. Centralized Notifications ---
+    // --- 8. Centralized Notifications & Unified Dispatch Logs ---
     match /notifications/{notificationId} {
       allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (existing().recipientId == request.auth.uid || isBootstrappedAdmin());
@@ -1172,6 +1373,16 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    match /notification_dispatches/{dispatchId} {
+      allow get: if isAdmin() && isValidId(dispatchId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(dispatchId)
+        && incoming().channel in ['in_app', 'email', 'sms', 'whatsapp']
+        && incoming().status in ['created', 'sent', 'failed', 'channel_unconfigured'];
+      allow update, delete: if isAdmin() && isValidId(dispatchId);
     }
 
     // --- 9. Cultural Stories ---
@@ -1224,10 +1435,13 @@ service cloud.firestore {
       allow get: if isAdmin() && isValidId(logId);
       allow list: if isBootstrappedAdmin();
 
-      allow create: if isAdmin()
-        && isValidId(logId)
+      allow create: if isValidId(logId)
         && isValidAuditLog(incoming())
-        && incoming().createdAt == request.time;
+        && incoming().createdAt == request.time
+        && (
+          (isAdmin() && incoming().actorId == request.auth.uid)
+          || (isVerifiedUser() && incoming().action == 'CLIENT_ACCOUNT_DELETED_COMPLIANT')
+        );
 
       allow update, delete: if false;
     }
@@ -1281,9 +1495,8 @@ service cloud.firestore {
           || isAdmin()
         );
 
-      allow delete: if isAdmin() && isValidId(reservationId);
+      allow delete: if isValidId(reservationId) && ((isVerifiedUser() && existing().clientId == request.auth.uid) || isAdmin());
 
-      // Strictly private non-listable image vault: ONLY traveler owner or explicitly authorized reservation provider (Admin has NO read access to raw documents!)
       match /private_vault/{vaultId} {
         allow list: if false;
 
@@ -1327,7 +1540,6 @@ service cloud.firestore {
           );
       }
 
-      // Immutable traceability logs for identity access & governance
       match /access_logs/{logId} {
         allow get, list: if isSignedIn()
           && exists(/databases/$(database)/documents/identity_verifications/$(reservationId))
@@ -1423,6 +1635,122 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin() && isValidId(stockId);
+    }
+
+    // --- 15. Editable Legal, Charter, Emergency & Institutional Content ---
+    match /platform_content/{docId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin()
+        && isValidId(docId)
+        && incoming().slug is string && incoming().slug.size() <= 80
+        && incoming().title is string && incoming().title.size() <= 200
+        && incoming().version is string && incoming().version.size() <= 40
+        && incoming().body is string && incoming().body.size() <= 20000
+        && incoming().isProvisional is bool
+        && incoming().ownerValidated is bool
+        && incoming().updatedBy == request.auth.uid;
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    // --- 16. Client Account Governance (Abandonment Risk & Manual Block) ---
+    match /account_governance/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(userId);
+    }
+
+    // --- 17. Read-Only Revocable Folder Shares & Visitor Suggestions ---
+    match /folder_shares/{shareId} {
+      allow get: if isValidId(shareId)
+        && (existing().revoked == false || (isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin())));
+      allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(shareId)
+        && incoming().ownerId == request.auth.uid
+        && isValidId(incoming().folderId)
+        && incoming().folderTitle is string && incoming().folderTitle.size() <= 160
+        && incoming().snapshotSummary is string && incoming().snapshotSummary.size() <= 6000
+        && incoming().suggestions is list && incoming().suggestions.size() <= 50
+        && incoming().revoked == false;
+
+      allow update: if isValidId(shareId)
+        && incoming().folderId == existing().folderId
+        && incoming().ownerId == existing().ownerId
+        && (
+          (isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin()))
+          || (
+            existing().revoked == false
+            && incoming().revoked == false
+            && incoming().diff(existing()).affectedKeys().hasOnly(['suggestions', 'updatedAt'])
+            && incoming().suggestions is list
+            && incoming().suggestions.size() <= 50
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(shareId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    // --- 18. Verified Post-Stay Traveler Reviews ---
+    match /traveler_reviews/{reviewId} {
+      allow get: if isValidId(reviewId)
+        && (existing().moderationStatus == 'approved' || (isSignedIn() && (existing().clientId == request.auth.uid || isAdmin())));
+      allow list: if existing().moderationStatus == 'approved'
+        || (isSignedIn() && existing().clientId == request.auth.uid)
+        || isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(reviewId)
+        && incoming().clientId == request.auth.uid
+        && isValidId(incoming().reservationId)
+        && isValidId(incoming().serviceId)
+        && incoming().rating is int && incoming().rating >= 1 && incoming().rating <= 5
+        && incoming().comment is string && incoming().comment.size() >= 3 && incoming().comment.size() <= 2000
+        && incoming().moderationStatus == 'pending'
+        && exists(/databases/$(database)/documents/reservations/$(incoming().reservationId))
+        && get(/databases/$(database)/documents/reservations/$(incoming().reservationId)).data.clientId == request.auth.uid
+        && get(/databases/$(database)/documents/reservations/$(incoming().reservationId)).data.status == 'confirmed';
+
+      allow update, delete: if isAdmin() && isValidId(reviewId);
+    }
+
+    // --- 19. Private Post-Stay Thank-You Notes for Providers ---
+    match /provider_thank_yous/{thankYouId} {
+      allow get: if isSignedIn()
+        && isValidId(thankYouId)
+        && (
+          existing().clientId == request.auth.uid
+          || (existing().providerOwnerId == request.auth.uid && existing().status == 'transmitted_to_provider')
+          || isAdmin()
+        );
+      allow list: if isSignedIn()
+        && (
+          existing().clientId == request.auth.uid
+          || (existing().providerOwnerId == request.auth.uid && existing().status == 'transmitted_to_provider')
+          || isBootstrappedAdmin()
+        );
+
+      allow create: if isVerifiedUser()
+        && isValidId(thankYouId)
+        && incoming().clientId == request.auth.uid
+        && incoming().message is string && incoming().message.size() >= 3 && incoming().message.size() <= 1500
+        && incoming().status == 'pending_admin';
+
+      allow update, delete: if isAdmin() && isValidId(thankYouId);
+    }
+
+    // --- 20. Minimal Non-PII Financial Archives & Mobile Money TxRef Uniqueness Locks ---
+    match /financial_archives/{archiveId} {
+      allow get: if isAdmin() && isValidId(archiveId);
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(archiveId)
+        && incoming().recordKind in ['dossier_fee', 'reservation_payment']
+        && incoming().transactionRef is string && incoming().transactionRef.size() >= 3 && incoming().transactionRef.size() <= 100
+        && incoming().amount is number && incoming().amount >= 0;
+
+      allow update, delete: if isAdmin() && isValidId(archiveId);
     }
   }
 }

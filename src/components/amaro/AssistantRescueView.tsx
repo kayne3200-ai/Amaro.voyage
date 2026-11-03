@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Compass,
   FolderKanban,
   MapPin,
+  MessageCircle,
   PhoneCall,
   RotateCcw,
   Send,
@@ -13,14 +15,20 @@ import {
 } from 'lucide-react';
 import type {
   AssistantChatHistoryItem,
+  AssistantDraftItinerary,
   AssistantQuickAction,
   AssistantSuggestionItem,
+  EmergencyNumberEntry,
   JourneyFolderDoc,
   JourneyItemDoc,
   LocaleCode,
   ServiceCategory,
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
+import {
+  DEFAULT_EMERGENCY_NUMBERS_BJ,
+  OWNER_PLACEHOLDER,
+} from '../../data/amaroGovernanceDefaults';
 import { authorizedFetch } from '../../lib/apiClient';
 
 interface AssistantRescueViewProps {
@@ -29,9 +37,13 @@ interface AssistantRescueViewProps {
   activeFolder: JourneyFolderDoc | null;
   folderItems: JourneyItemDoc[];
   isSignedIn?: boolean;
+  clientDisplayName?: string;
+  emergencyNumbers?: EmergencyNumberEntry[];
+  supportWhatsappNumber?: string;
   onOpenExplorer?: (cityId?: string, category?: ServiceCategory, itemId?: string) => void;
   onOpenJourney?: () => void;
   onRequireSignIn?: () => void;
+  onApplyAssistantDraft?: (draft: AssistantDraftItinerary) => Promise<void>;
 }
 
 interface ChatTurn {
@@ -41,9 +53,12 @@ interface ChatTurn {
   timestamp: string;
   suggestedItems?: AssistantSuggestionItem[];
   suggestedActions?: AssistantQuickAction[];
+  draftItinerary?: AssistantDraftItinerary;
+  canOfferFolderGeneration?: boolean;
 }
 
 const SESSION_CHAT_KEY = 'amaro_assistant_chat_v2';
+export const PENDING_ASSISTANT_DRAFT_KEY = 'amaro_pending_assistant_draft_v1';
 
 function makeInitialWelcome(locale: LocaleCode): ChatTurn {
   return {
@@ -51,8 +66,8 @@ function makeInitialWelcome(locale: LocaleCode): ChatTurn {
     role: 'assistant',
     content:
       locale === 'en'
-        ? 'Hello and welcome to AMARO! Feel free to chat with me naturally—even a single word like "Ouidah", "Hotel", or "I don’t know Benin yet" is enough. How would you like to start?'
-        : 'Bonjour et bienvenue sur AMARO ! Écrivez-moi librement, comme à un conseiller de voyage — même un simple « Bonjour », « Ouidah », « Un hôtel » ou « Je ne connais rien du Bénin » suffit. Qu’est-ce qui vous ferait plaisir aujourd’hui ?',
+        ? 'Hello and welcome to AMARO! Tell me your destination, duration, travelers count, or budget—even a single word like "Ouidah" or "5 days in Benin" is enough.'
+        : 'Bonjour et bienvenue sur AMARO ! Écrivez-moi librement, comme à un conseiller humain : par exemple « 5 jours à Ouidah et Cotonou pour 2 personnes », « Un hôtel calme » ou « Je ne connais pas encore le Bénin ».',
     timestamp: new Date().toLocaleTimeString('fr-FR', {
       hour: '2-digit',
       minute: '2-digit',
@@ -65,13 +80,19 @@ export function AssistantRescueView({
   locale,
   activeFolder,
   folderItems,
+  isSignedIn,
+  clientDisplayName,
+  emergencyNumbers = DEFAULT_EMERGENCY_NUMBERS_BJ,
+  supportWhatsappNumber,
   onOpenExplorer,
   onOpenJourney,
   onRequireSignIn,
+  onApplyAssistantDraft,
 }: AssistantRescueViewProps) {
   const [shareFolderWithAi, setShareFolderWithAi] = useState<boolean>(true);
   const [inputPrompt, setInputPrompt] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [isApplyingDraft, setIsApplyingDraft] = useState<boolean>(false);
   const [messages, setMessages] = useState<ChatTurn[]>(() => {
     try {
       const saved = sessionStorage.getItem(SESSION_CHAT_KEY);
@@ -85,6 +106,27 @@ export function AssistantRescueView({
     return [makeInitialWelcome(locale)];
   });
 
+  // Dynamic Rescue incident form state
+  const [incidentType, setIncidentType] = useState<string>('retard_vol_transport');
+  const [incidentCity, setIncidentCity] = useState<string>(
+    activeFolder?.primaryCityId || 'cotonou'
+  );
+  const [incidentCategory, setIncidentCategory] = useState<ServiceCategory>('accommodation');
+  const [incidentNotes, setIncidentNotes] = useState<string>('');
+  const [incidentLoading, setIncidentLoading] = useState<boolean>(false);
+  const [incidentResult, setIncidentResult] = useState<{
+    guidance: string;
+    alternatives: Array<{
+      id: string;
+      title: string;
+      cityId: string;
+      category: ServiceCategory;
+      priceAmount: number;
+      priceKnown: boolean;
+      isPartnerVerified: boolean;
+    }>;
+  } | null>(null);
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -96,10 +138,22 @@ export function AssistantRescueView({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages]);
 
-  const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
-  const rescueCountry =
-    COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
-    COUNTRIES_REGISTRY[0];
+  const rescueCountry = COUNTRIES_REGISTRY[0];
+
+  const cleanWhatsappDigits = (supportWhatsappNumber || '')
+    .replace(/[^0-9]/g, '')
+    .trim();
+  const hasRealWhatsapp =
+    cleanWhatsappDigits.length >= 8 &&
+    supportWhatsappNumber !== OWNER_PLACEHOLDER;
+
+  const whatsappPrefilledHref = hasRealWhatsapp
+    ? `https://wa.me/${cleanWhatsappDigits}?text=${encodeURIComponent(
+        `Bonjour AMARO.VOYAGE, je suis ${clientDisplayName || 'voyageur'} · Dossier : ${
+          activeFolder?.id || 'en préparation'
+        } · Ville : ${activeFolder?.primaryCityId || incidentCity} · Besoin d'accompagnement.`
+      )}`
+    : '';
 
   const handleResetConversation = () => {
     const fresh = [makeInitialWelcome(locale)];
@@ -111,8 +165,51 @@ export function AssistantRescueView({
     }
   };
 
-  const handleTriggerQuickAction = (action: AssistantQuickAction) => {
-    if (action.kind === 'explore_benin') {
+  const handleGenerateOrApplyDraft = async (existingDraft?: AssistantDraftItinerary) => {
+    setIsApplyingDraft(true);
+    try {
+      let draft = existingDraft;
+      if (!draft) {
+        const res = await authorizedFetch('/api/amaro/assistant/generate-draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cityId: activeFolder?.primaryCityId || 'cotonou',
+            daysCount: 3,
+            travelersCount: activeFolder?.travelersCount || 2,
+          }),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          draft = body.draft as AssistantDraftItinerary;
+        }
+      }
+      if (!draft) return;
+
+      if (!isSignedIn) {
+        try {
+          sessionStorage.setItem(PENDING_ASSISTANT_DRAFT_KEY, JSON.stringify(draft));
+        } catch {
+          // ignore
+        }
+        onRequireSignIn?.();
+        return;
+      }
+
+      if (onApplyAssistantDraft) {
+        await onApplyAssistantDraft(draft);
+      } else {
+        onOpenJourney?.();
+      }
+    } finally {
+      setIsApplyingDraft(false);
+    }
+  };
+
+  const handleTriggerQuickAction = (action: AssistantQuickAction, turnDraft?: AssistantDraftItinerary) => {
+    if (action.kind === 'generate_draft_folder') {
+      void handleGenerateOrApplyDraft(turnDraft);
+    } else if (action.kind === 'explore_benin') {
       onOpenExplorer?.();
     } else if (action.kind === 'filter_city') {
       onOpenExplorer?.(action.cityId, action.category);
@@ -190,7 +287,6 @@ export function AssistantRescueView({
       }
 
       if (!res.ok || !data?.reply) {
-        // Polite human response ONLY — never expose technical, JSON, or server errors (Section 2.8)
         const politeFallback =
           res.status === 429
             ? 'Je reçois beaucoup de questions en ce moment. Laissez-moi quelques instants puis réécrivez-moi votre souhait, je vous répondrai avec plaisir.'
@@ -227,10 +323,11 @@ export function AssistantRescueView({
           suggestedActions: Array.isArray(data.suggestedActions)
             ? data.suggestedActions
             : undefined,
+          draftItinerary: data.draftItinerary || undefined,
+          canOfferFolderGeneration: Boolean(data.canOfferFolderGeneration),
         },
       ]);
     } catch {
-      // Seamless human fallback if offline or network interrupted
       setMessages((prev) => [
         ...prev,
         {
@@ -249,106 +346,211 @@ export function AssistantRescueView({
     }
   };
 
+  const handleReportIncident = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIncidentLoading(true);
+    try {
+      const res = await authorizedFetch('/api/amaro/rescue/incident', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          incidentType,
+          cityId: incidentCity,
+          category: incidentCategory,
+          folderId: activeFolder?.id,
+          description: incidentNotes,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIncidentResult({
+          guidance: String(data.guidance || ''),
+          alternatives: Array.isArray(data.alternatives) ? data.alternatives : [],
+        });
+      }
+    } finally {
+      setIncidentLoading(false);
+    }
+  };
+
   if (mode === 'rescue') {
     return (
       <div className="max-w-4xl mx-auto px-4 md:px-8 py-8 pb-24 md:pb-12 space-y-6">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-red-700 dark:text-red-400">
             <ShieldAlert className="w-4 h-4" />
-            <span>Amaro Rescue · Assistance &amp; Urgences Vérifiées</span>
+            <span>Amaro Rescue · Assistance Dynamique &amp; Numéros Officiels Unifiés</span>
           </div>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
-            Numéros d’urgence officiels et consignes en cas d’imprévu
+            Signaler un imprévu et accéder aux numéros d’urgence
           </h1>
           <p className="text-xs sm:text-sm text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-xl p-3.5">
-            Avertissement légal obligatoire : Amaro Rescue facilite l’accès rapide aux contacts vérifiés mais <strong>ne remplace jamais les services d’urgence officiels de l’État</strong>, les forces de sécurité ou un avis médical d’urgence.
+            Avertissement légal obligatoire : Amaro Rescue facilite la replanification et l’orientation rapide mais <strong>ne remplace jamais les services d’urgence officiels de l’État</strong>, les forces de sécurité ou un avis médical d’urgence.
           </p>
         </div>
 
-        {/* Country Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-            Pays de localisation :
-          </span>
-          {COUNTRIES_REGISTRY.map((c) => (
-            <button
-              key={c.code}
-              type="button"
-              onClick={() => setSelectedCountryCode(c.code)}
-              className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg ${
-                selectedCountryCode === c.code
-                  ? 'bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950'
-                  : 'bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-              }`}
-            >
-              {locale === 'fr' ? c.nameFr : c.nameEn}
-            </button>
-          ))}
-        </div>
-
-        {/* Direct Android Tap-to-Call Official Numbers */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {rescueCountry.emergencyNumbers.map((num) => (
-            <div
-              key={num.number}
-              className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col justify-between gap-4"
-            >
-              <div className="space-y-1">
-                <span className="text-xs text-slate-500 dark:text-slate-400 block">
-                  {num.sourceNote}
-                </span>
-                <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                  {locale === 'fr' ? num.serviceFr : num.serviceEn}
-                </h2>
-              </div>
-
-              <a
-                href={`tel:${num.number}`}
-                className="min-h-[48px] inline-flex items-center justify-center gap-2 px-4 py-2.5 text-base font-mono font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors tabular-nums"
+        {/* Unified Single Emergency Numbers List (5.5) */}
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {emergencyNumbers.map((num) => {
+            const isPlaceholder = num.number === OWNER_PLACEHOLDER;
+            return (
+              <div
+                key={num.id}
+                className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col justify-between gap-3"
               >
-                <PhoneCall className="w-4 h-4" />
-                <span>Appeler le {num.number}</span>
-              </a>
-            </div>
-          ))}
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center justify-between gap-1">
+                    <span className="text-[11px] text-slate-500">{num.zoneFr}</span>
+                    {!num.verifiedByOwner && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                        numéro à confirmer
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                    {num.labelFr}
+                  </h2>
+                </div>
+
+                {isPlaceholder ? (
+                  <div className="px-3 py-2 text-xs font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-xl text-center">
+                    {OWNER_PLACEHOLDER}
+                  </div>
+                ) : (
+                  <a
+                    href={`tel:${num.number}`}
+                    className="min-h-[44px] inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-mono font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors tabular-nums"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                    <span>Appeler le {num.number}</span>
+                  </a>
+                )}
+              </div>
+            );
+          })}
         </section>
 
-        {/* Practical Guidance: Operational Incidents, Lost Documents, Consular & Local Rules */}
+        {/* Dynamic Incident Replanning Tool + Human WhatsApp Handoff (6.5) */}
+        <section className="p-6 bg-white dark:bg-slate-900 border-2 border-amber-300 dark:border-amber-800 rounded-2xl space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                Signaler un imprévu sur mon voyage (recherche immédiate de solutions)
+              </h2>
+              <p className="text-xs text-slate-500">
+                Sélectionnez votre situation pour obtenir la marche à suivre et jusqu’à 3 alternatives réelles dans la même ville (Partenaires AMARO en priorité).
+              </p>
+            </div>
+
+            {hasRealWhatsapp ? (
+              <a
+                href={whatsappPrefilledHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>Contacter AMARO sur WhatsApp</span>
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                WhatsApp support : {OWNER_PLACEHOLDER}
+              </span>
+            )}
+          </div>
+
+          <form onSubmit={(e) => void handleReportIncident(e)} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <select
+              value={incidentType}
+              onChange={(e) => setIncidentType(e.target.value)}
+              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+            >
+              <option value="retard_vol_transport">Retard de vol ou de transport</option>
+              <option value="prestataire_injoignable">Prestataire injoignable / refus sur place</option>
+              <option value="meteo_acces">Intempéries ou route coupée</option>
+              <option value="perte_documents">Perte de passeport ou documents</option>
+              <option value="autre">Autre imprévu logistique</option>
+            </select>
+
+            <select
+              value={incidentCity}
+              onChange={(e) => setIncidentCity(e.target.value)}
+              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+            >
+              {rescueCountry.cities.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={incidentCategory}
+              onChange={(e) => setIncidentCategory(e.target.value as ServiceCategory)}
+              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+            >
+              <option value="accommodation">Chercher un hébergement alternatif</option>
+              <option value="transport">Chercher un transport alternatif</option>
+              <option value="site">Chercher une visite alternative</option>
+              <option value="restaurant">Chercher un restaurant alternatif</option>
+              <option value="translation">Chercher un interprète / accompagnateur</option>
+            </select>
+
+            <input
+              type="text"
+              value={incidentNotes}
+              onChange={(e) => setIncidentNotes(e.target.value)}
+              placeholder="Précisez l'heure ou le contexte (optionnel)..."
+              className="sm:col-span-2 min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+            />
+
+            <button
+              type="submit"
+              disabled={incidentLoading}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-[#0B192C] text-white text-xs font-bold hover:bg-slate-800"
+            >
+              {incidentLoading ? 'Recherche en cours...' : 'Trouver des solutions réelles'}
+            </button>
+          </form>
+
+          {incidentResult && (
+            <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-slate-950 border border-amber-200 dark:border-slate-800 space-y-3 text-xs">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                {incidentResult.guidance}
+              </p>
+              {incidentResult.alternatives.length === 0 ? (
+                <p className="text-slate-600 dark:text-slate-400">
+                  Aucune alternative exacte recensée dans cette ville pour cette catégorie. Vous pouvez élargir la recherche dans le catalogue ou contacter l’équipe humaine AMARO.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {incidentResult.alternatives.map((alt) => (
+                    <button
+                      key={alt.id}
+                      type="button"
+                      onClick={() => onOpenExplorer?.(alt.cityId, alt.category, alt.id)}
+                      className="text-left p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-500 space-y-1"
+                    >
+                      <span className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-400">
+                        {alt.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé, non vérifié'}
+                      </span>
+                      <strong className="block text-xs text-slate-900 dark:text-white">
+                        {alt.title}
+                      </strong>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {alt.priceKnown ? `${alt.priceAmount.toLocaleString('fr-FR')} FCFA` : 'Tarif sur demande'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Practical Guidance */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
-            <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-              Retard de vol / transport ou correspondance perturbée
-            </h3>
-            <ul className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside">
-              <li>
-                Ouvrez immédiatement votre <strong>Dossier de Voyage AMARO</strong> pour vérifier l’établissement ou le transporteur prévu ce jour.
-              </li>
-              <li>
-                Prévenez la réception de l’hôtel afin de maintenir votre chambre en arrivée tardive et décalez vos étapes du lendemain en un clic dans l’agenda.
-              </li>
-              <li>
-                À l’aéroport de Cotonou, privilégiez uniquement les navettes d’hôtels identifiées ou les applications VTC vérifiées (Gozem, Yango).
-              </li>
-            </ul>
-          </section>
-
-          <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
-            <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-              Annulation imprévue ou difficulté avec un prestataire
-            </h3>
-            <ul className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside">
-              <li>
-                Ne versez jamais de supplément en espèces non justifié en dehors du récapitulatif vérifié dans <strong>Suivre mes réservations</strong>.
-              </li>
-              <li>
-                En cas d’indisponibilité constatée sur place, consultez les <strong>alternatives réelles de même ville</strong> proposées automatiquement dans votre dossier.
-              </li>
-              <li>
-                Conservez votre numéro de réservation et votre reçu électronique AMARO pour toute demande de médiation ou de remboursement.
-              </li>
-            </ul>
-          </section>
-
           <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
             <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
               Procédure en cas de perte de passeport ou documents
@@ -358,7 +560,7 @@ export function AssistantRescueView({
                 Rendez-vous au commissariat de la <strong>Police Républicaine</strong> le plus proche pour établir une déclaration officielle de perte.
               </li>
               <li>
-                Présentez cette déclaration auprès de votre <strong>ambassade ou consulat</strong> à Cotonou pour obtenir un laissez-passer ou titre d’urgence.
+                Présentez cette déclaration auprès de votre <strong>ambassade ou consulat</strong> à Cotonou pour obtenir un laissez-passer.
               </li>
               <li>
                 Retrouvez vos références de séjour dans votre <strong>Dossier de Voyage AMARO</strong>.
@@ -371,10 +573,7 @@ export function AssistantRescueView({
               Règles locales vérifiées ({rescueCountry.nameFr})
             </h3>
             <ul className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2">
-              {(locale === 'fr'
-                ? rescueCountry.localRulesFr
-                : rescueCountry.localRulesEn
-              ).map((rule, idx) => (
+              {rescueCountry.localRulesFr.map((rule, idx) => (
                 <li key={idx} className="flex items-start gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                   <span>{rule}</span>
@@ -383,39 +582,6 @@ export function AssistantRescueView({
             </ul>
           </section>
         </div>
-
-        <section className="p-5 bg-[#0B192C] text-white rounded-2xl flex flex-wrap items-center justify-between gap-4">
-          <div className="space-y-1 max-w-2xl">
-            <p className="text-xs font-semibold text-teal-400">
-              Garantie Éthique AMARO : Orientation de sécurité 100 % gratuite
-            </p>
-            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-              Les repères d’urgence et d’orientation <strong>Amaro Rescue</strong> restent accessibles gratuitement à tout voyageur, sans condition d’abonnement. Pour une replanification logistique complète par un conseiller dédié hors urgence vitale, vous pouvez également consulter l’offre optionnelle <strong>AMARO Assistance Personnalisée</strong>.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {onOpenJourney && (
-              <button
-                type="button"
-                onClick={onOpenJourney}
-                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
-              >
-                Ouvrir mon Dossier de Voyage
-              </button>
-            )}
-            {onOpenExplorer && (
-              <button
-                type="button"
-                onClick={() =>
-                  onOpenExplorer('cotonou', 'translation', 'trad-amaro-conciergerie-sejour')
-                }
-                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl"
-              >
-                Voir AMARO Assistance Personnalisée
-              </button>
-            )}
-          </div>
-        </section>
       </div>
     );
   }
@@ -426,13 +592,13 @@ export function AssistantRescueView({
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-700 dark:text-teal-400">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Conseiller conversationnel AMARO · Connecté au répertoire national réel du Bénin</span>
+            <span>Assistant AMARO gratuit · Préparation rapide de dossier &amp; agenda réels</span>
           </div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Discuter avec AMARO
+            Construire mon séjour avec AMARO
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Dialogue naturel gratuit · Mémoire du fil de discussion · Aucune réservation sans votre confirmation
+            Gratuit et sans compte obligatoire pour explorer · Création automatique de votre dossier sur accord
           </p>
         </div>
 
@@ -444,7 +610,7 @@ export function AssistantRescueView({
               onChange={(e) => setShareFolderWithAi(e.target.checked)}
             />
             <span>
-              Relier mon dossier ({activeFolder ? activeFolder.title : 'aucun dossier actif'})
+              Relier mon dossier ({activeFolder ? activeFolder.title : 'nouveau dossier'})
             </span>
           </label>
 
@@ -460,15 +626,14 @@ export function AssistantRescueView({
         </div>
       </div>
 
-      {/* Natural Quick Starters (Greetings, Discovery, Short Words, Budget) */}
+      {/* Natural Quick Starters */}
       <div className="flex items-center gap-2 overflow-x-auto py-3">
         {[
-          'Bonjour !',
+          'Séjour 4 jours à Ouidah et Cotonou pour 2 personnes',
           'Je ne connais rien du Bénin',
-          'Ouidah',
-          'Un hôtel calme en famille',
+          'Un hôtel calme à Grand-Popo',
           'Transport avec chauffeur',
-          'Quel budget prévoir ?',
+          'Y a-t-il des restaurants référencés à Abomey ?',
         ].map((q) => (
           <button
             key={q}
@@ -503,6 +668,66 @@ export function AssistantRescueView({
               </span>
             </div>
 
+            {/* Draft Itinerary Card (Bloc 4 — 1-click real folder & agenda generation) */}
+            {m.role === 'assistant' && m.draftItinerary && (
+              <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-slate-900 border-2 border-amber-300 dark:border-amber-700 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
+                      Brouillon d’itinéraire réel prêt à enregistrer
+                    </span>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {m.draftItinerary.title} ({m.draftItinerary.daysCount}j ·{' '}
+                      {m.draftItinerary.travelersCount} voyageur(s))
+                    </h3>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-slate-900 dark:text-amber-300">
+                    Budget connu estimé :{' '}
+                    {m.draftItinerary.knownBudgetXof.toLocaleString('fr-FR')} FCFA
+                  </span>
+                </div>
+
+                <ul className="space-y-1 text-xs text-slate-700 dark:text-slate-300">
+                  {m.draftItinerary.steps.slice(0, 6).map((st, idx) => (
+                    <li key={idx} className="flex items-center justify-between gap-2">
+                      <span>
+                        J{st.dayIndex} ({st.date} {st.startTime}) ·{' '}
+                        <strong>{st.serviceTitle}</strong>
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        {st.dataOrigin === 'verified_partner'
+                          ? 'Partenaire AMARO'
+                          : st.isFreeTimeBlock
+                          ? 'Temps libre'
+                          : 'Recensé'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Exploration et création du dossier gratuites. L’envoi réel des demandes aux prestataires requiert ensuite les frais de dossier déductibles de{' '}
+                  {(m.draftItinerary.dossierFeeNextStepXof || 20000).toLocaleString('fr-FR')} FCFA.
+                </p>
+
+                <button
+                  type="button"
+                  disabled={isApplyingDraft}
+                  onClick={() => void handleGenerateOrApplyDraft(m.draftItinerary)}
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#0B192C] hover:bg-slate-800 text-white text-xs font-bold"
+                >
+                  <FolderKanban className="w-4 h-4 text-amber-400" />
+                  <span>
+                    {isApplyingDraft
+                      ? 'Création de votre dossier et agenda...'
+                      : isSignedIn
+                      ? 'Générer mon dossier de voyage et mon agenda maintenant'
+                      : 'Se connecter et générer mon dossier sans perdre cet itinéraire'}
+                  </span>
+                </button>
+              </div>
+            )}
+
             {/* Grounded Real Catalogue Cards */}
             {m.role === 'assistant' &&
               m.suggestedItems &&
@@ -517,7 +742,7 @@ export function AssistantRescueView({
                     >
                       <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
                         <MapPin className="w-3 h-3" />
-                        {item.cityId}
+                        {item.cityId} · {item.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé'}
                       </span>
                       <strong className="block text-xs font-bold text-slate-900 dark:text-slate-100 line-clamp-2">
                         {item.title}
@@ -543,10 +768,10 @@ export function AssistantRescueView({
                     <button
                       key={`${m.id}-act-${idx}`}
                       type="button"
-                      onClick={() => handleTriggerQuickAction(act)}
+                      onClick={() => handleTriggerQuickAction(act, m.draftItinerary)}
                       className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-teal-50 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-xl hover:bg-teal-100 dark:hover:bg-teal-900/50 transition-colors"
                     >
-                      {act.kind === 'open_journey' ? (
+                      {act.kind === 'open_journey' || act.kind === 'generate_draft_folder' ? (
                         <FolderKanban className="w-3.5 h-3.5" />
                       ) : (
                         <Compass className="w-3.5 h-3.5" />
@@ -562,7 +787,7 @@ export function AssistantRescueView({
 
         {isSending && (
           <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 max-w-xs">
-            AMARO vous répond...
+            AMARO prépare votre réponse...
           </div>
         )}
 
@@ -581,7 +806,7 @@ export function AssistantRescueView({
           type="text"
           value={inputPrompt}
           onChange={(e) => setInputPrompt(e.target.value)}
-          placeholder="Écrivez naturellement : Bonjour, Ouidah, un hôtel, combien, et après..."
+          placeholder="Ex. : 5 jours à Ouidah et Grand-Popo pour 2 adultes..."
           className="flex-1 min-h-[48px] px-4 py-2.5 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:border-[#0B192C]"
         />
         <button

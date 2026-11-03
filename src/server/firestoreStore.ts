@@ -1,9 +1,15 @@
+import crypto from 'crypto';
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
 import type {
+  AccountGovernanceDoc,
   CurrencyCode,
+  DossierFeeStatus,
+  FinancialArchiveDoc,
   IdentityAccessLogDoc,
   IdentityDocumentType,
   IdentityVerificationStatus,
+  JourneyFolderStatus,
+  NotificationDispatchDoc,
   PartnerActivationLevel,
   PaymentStatus,
   ReservationDispatchChannel,
@@ -11,6 +17,7 @@ import type {
   ReservationStatus,
   ServiceCategory,
 } from '../types/amaro';
+import { OWNER_PLACEHOLDER } from '../data/amaroGovernanceDefaults';
 import {
   OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   parseMinutes,
@@ -27,9 +34,20 @@ import {
 export interface ServerFolderRecord {
   id: string;
   ownerId: string;
-  status: 'planning' | 'active' | 'completed' | 'archived';
+  title?: string;
+  status: JourneyFolderStatus;
   countryCode: string;
   currency: CurrencyCode;
+  dossierFeeStatus?: DossierFeeStatus;
+  dossierFeeAmountXof?: number;
+  dossierTxRef?: string;
+  dossierPayerName?: string;
+  dossierDeclaredAt?: string;
+  termsAcceptedVersion?: string;
+  balanceDueAt?: string;
+  balanceReminderSentAt?: string;
+  manualRefundRequired?: boolean;
+  manualRefundReason?: string;
 }
 
 export interface ServerPartnerRecord {
@@ -70,6 +88,20 @@ export interface ServerReservationRecord {
   dispatchStatus?: ReservationDispatchStatus;
   responseDeadlineAt?: string;
   followUpCount?: number;
+  circuitType?: 'circuit_a_directory' | 'circuit_b_partner';
+  coordinationStatus?:
+    | 'to_contact'
+    | 'contacted'
+    | 'confirmed'
+    | 'unavailable'
+    | 'quote_received';
+  coordinationContactedAt?: string;
+  coordinationOutcome?: string;
+  halfTimeReminderSentAt?: string;
+  balanceDeadlineAt?: string;
+  adminNotifyProviderTask?: 'none' | 'pending_inform_cancellation' | 'informed';
+  localContributionXof?: number;
+  createdAtIso?: string;
   updatedAtIso?: string;
 }
 
@@ -161,6 +193,14 @@ export interface AtomicReservationPayload {
   dispatchStatus?: ReservationDispatchStatus;
   responseDeadlineAt?: string;
   followUpCount?: number;
+  circuitType?: 'circuit_a_directory' | 'circuit_b_partner';
+  coordinationStatus?:
+    | 'to_contact'
+    | 'contacted'
+    | 'confirmed'
+    | 'unavailable'
+    | 'quote_received';
+  localContributionXof?: number;
   referral?: AtomicReferralPayload | null;
 }
 
@@ -187,6 +227,15 @@ export interface AmaroServerStore {
       dispatchStatus?: ReservationDispatchStatus;
       responseDeadlineAt?: string;
       followUpCount?: number;
+      coordinationStatus?:
+        | 'to_contact'
+        | 'contacted'
+        | 'confirmed'
+        | 'unavailable'
+        | 'quote_received';
+      coordinationContactedAt?: string;
+      coordinationOutcome?: string;
+      cancelAffiliateReferral?: boolean;
       releaseStock?: {
         stockId: string;
         units: number;
@@ -202,6 +251,22 @@ export interface AmaroServerStore {
     },
     rawIdToken: string
   ): Promise<void>;
+  registerProviderFromPromoteFlow?(
+    params: {
+      providerId: string;
+      ownerId: string;
+      companyName: string;
+      category: ServiceCategory;
+      cityId: string;
+      countryCode: string;
+      phone: string;
+      contactEmail: string;
+      description: string;
+      conventionVersion: string;
+      conventionAcceptedAt: string;
+    },
+    rawIdToken: string
+  ): Promise<{ providerId: string; verificationStatus: 'pending' }>;
   getIdentityMetadata?(
     reservationId: string,
     rawIdToken: string
@@ -272,6 +337,94 @@ export interface AmaroServerStore {
     payload: AtomicReservationPayload,
     rawIdToken: string
   ): Promise<{ reservationId: string; itemId: string }>;
+  listAllPublishedServices?(rawIdToken?: string): Promise<ServerServiceRecord[]>;
+  getAccountGovernance?(
+    userId: string,
+    rawIdToken?: string
+  ): Promise<AccountGovernanceDoc | null>;
+  updateAccountGovernance?(
+    doc: AccountGovernanceDoc,
+    rawIdToken?: string
+  ): Promise<void>;
+  hasClientPriorReferredReservation?(
+    clientId: string,
+    rawIdToken?: string
+  ): Promise<boolean>;
+  declareDossierFee?(
+    params: {
+      folderId: string;
+      ownerId: string;
+      transactionRef: string;
+      payerName: string;
+      payerPhone: string;
+      declaredDate: string;
+      termsAcceptedVersion: string;
+      feeAmountXof: number;
+      maxPendingFolders: number;
+    },
+    rawIdToken: string
+  ): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }>;
+  verifyDossierFee?(
+    params: {
+      folderId: string;
+      adminUid: string;
+      decision: 'approve' | 'reject';
+      reason: string;
+    },
+    rawIdToken: string
+  ): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }>;
+  recordNotificationDispatches?(
+    dispatches: NotificationDispatchDoc[],
+    rawIdToken?: string
+  ): Promise<void>;
+  listFailedOrUnconfiguredNotifications?(
+    rawIdToken?: string
+  ): Promise<NotificationDispatchDoc[]>;
+  evaluateDeadlinesAndExpirations?(
+    params: {
+      nowIso?: string;
+      folderId?: string;
+      actorUid: string;
+      abandonmentRiskThreshold: number;
+      balancePaymentHours: number;
+    },
+    rawIdToken: string
+  ): Promise<{
+    halfTimeRemindersSent: number;
+    expiredProviderRequests: number;
+    balanceRemindersSent: number;
+    expiredBalancesCancelled: number;
+    manualRefundsFlagged: number;
+  }>;
+  applyRecalculatedReplacement?(
+    params: {
+      folderId: string;
+      clientId: string;
+      replacedReservationId?: string;
+      newReservationPayload?: AtomicReservationPayload;
+      changeHistorySummary: string;
+      deltaAmountXof: number;
+    },
+    rawIdToken: string
+  ): Promise<{ newReservationId?: string }>;
+  exportOperationalDataAdmin?(rawIdToken: string): Promise<Record<string, unknown>>;
+  exportPersonalDataClient?(
+    userId: string,
+    userEmail: string,
+    rawIdToken: string
+  ): Promise<Record<string, unknown>>;
+  deleteClientAccountCompliant?(
+    params: {
+      userId: string;
+      retentionPolicyLabel: string;
+    },
+    rawIdToken: string
+  ): Promise<{
+    deletedPersonalData: boolean;
+    deletedIdentityVaultCount: number;
+    retainedFinancialRecordsCount: number;
+    retentionPolicyLabel: string;
+  }>;
 }
 
 export class ConflictError extends Error {
@@ -291,7 +444,20 @@ function decodeFirestoreFields(fields: Record<string, any> | undefined): Record<
     else if ('doubleValue' in v) out[k] = Number(v.doubleValue);
     else if ('booleanValue' in v) out[k] = Boolean(v.booleanValue);
     else if ('timestampValue' in v) out[k] = v.timestampValue;
-    else if ('nullValue' in v) out[k] = null;
+    else if ('arrayValue' in v) {
+      const vals = Array.isArray(v.arrayValue?.values) ? v.arrayValue.values : [];
+      out[k] = vals.map((el: any) =>
+        'stringValue' in el
+          ? el.stringValue
+          : 'integerValue' in el
+          ? Number(el.integerValue)
+          : 'doubleValue' in el
+          ? Number(el.doubleValue)
+          : 'booleanValue' in el
+          ? Boolean(el.booleanValue)
+          : null
+      );
+    } else if ('nullValue' in v) out[k] = null;
   }
   return out;
 }
@@ -406,6 +572,16 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         cancellationPolicy: raw.cancellationPolicy
           ? String(raw.cancellationPolicy)
           : undefined,
+        coveredCities: Array.isArray(raw.coveredCities)
+          ? raw.coveredCities.map(String)
+          : undefined,
+        blockedDates: Array.isArray(raw.blockedDates)
+          ? raw.blockedDates.map(String)
+          : undefined,
+        providerResponseHours:
+          typeof raw.providerResponseHours === 'number'
+            ? raw.providerResponseHours
+            : undefined,
       };
     }
 
@@ -530,19 +706,51 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     if (!raw) {
       return {
         countryCode: code,
-        commissionPercent: 0,
+        commissionPercent: 10,
+        partnerMarginPercent: 10,
+        directoryMarginPercent: 5,
         serviceFeeFlat: 0,
         taxPercent: 0,
         currency: 'XOF',
         partnerCommissionPercent: 5,
         attributionWindowDays: 30,
         attributionModel: 'last_touch',
+        dossierFeeXof: 20_000,
+        dossierVerificationHours: 24,
+        providerResponseHours: 24,
+        balancePaymentHours: 48,
+        maxPendingPaymentFolders: 1,
+        abandonmentRiskThreshold: 3,
+        alternativeBudgetTolerancePercent: 25,
+        maxVisitsCityChangeDay: 1,
+        maxVisitsSameCityDay: 2,
+        freeTimeBlocksPerDay: 1,
+        includeDossierFeeInAffiliateBase: false,
+        localContributionPercent: 0,
+        localContributionLabel: OWNER_PLACEHOLDER,
+        amaroMobileMoneyNumber: OWNER_PLACEHOLDER,
+        amaroMobileMoneyHolder: OWNER_PLACEHOLDER,
+        amaroWhatsappNumber: OWNER_PLACEHOLDER,
+        vaultKeyConfirmedByOwner: false,
+        financialRetentionDuration: OWNER_PLACEHOLDER,
+        termsVersion: '1.0',
+        conventionVersion: '1.0',
+        includeDemoData: false,
       };
     }
 
+    const baseComm = Math.max(0, Math.min(100, Number(raw.commissionPercent ?? 10)));
     return {
       countryCode: String(raw.countryCode || code),
-      commissionPercent: Math.max(0, Math.min(100, Number(raw.commissionPercent ?? 0))),
+      commissionPercent: baseComm,
+      partnerMarginPercent:
+        raw.partnerMarginPercent !== undefined
+          ? Math.max(0, Math.min(100, Number(raw.partnerMarginPercent)))
+          : baseComm,
+      directoryMarginPercent:
+        raw.directoryMarginPercent !== undefined
+          ? Math.max(0, Math.min(100, Number(raw.directoryMarginPercent)))
+          : 5,
       serviceFeeFlat: Math.max(0, Number(raw.serviceFeeFlat ?? 0)),
       taxPercent: Math.max(0, Math.min(100, Number(raw.taxPercent ?? 0))),
       currency: (raw.currency || 'XOF') as CurrencyCode,
@@ -556,6 +764,35 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       ),
       attributionModel:
         raw.attributionModel === 'first_touch' ? 'first_touch' : 'last_touch',
+      dossierFeeXof: Math.max(0, Number(raw.dossierFeeXof ?? 20_000)),
+      dossierVerificationHours: Math.max(1, Number(raw.dossierVerificationHours ?? 24)),
+      providerResponseHours: Math.max(1, Number(raw.providerResponseHours ?? 24)),
+      balancePaymentHours: Math.max(1, Number(raw.balancePaymentHours ?? 48)),
+      maxPendingPaymentFolders: Math.max(1, Number(raw.maxPendingPaymentFolders ?? 1)),
+      abandonmentRiskThreshold: Math.max(1, Number(raw.abandonmentRiskThreshold ?? 3)),
+      alternativeBudgetTolerancePercent: Math.max(
+        0,
+        Number(raw.alternativeBudgetTolerancePercent ?? 25)
+      ),
+      maxVisitsCityChangeDay: Math.max(0, Number(raw.maxVisitsCityChangeDay ?? 1)),
+      maxVisitsSameCityDay: Math.max(0, Number(raw.maxVisitsSameCityDay ?? 2)),
+      freeTimeBlocksPerDay: Math.max(0, Number(raw.freeTimeBlocksPerDay ?? 1)),
+      includeDossierFeeInAffiliateBase: Boolean(raw.includeDossierFeeInAffiliateBase),
+      localContributionPercent: Math.max(
+        0,
+        Math.min(100, Number(raw.localContributionPercent ?? 0))
+      ),
+      localContributionLabel: String(raw.localContributionLabel || OWNER_PLACEHOLDER),
+      amaroMobileMoneyNumber: String(raw.amaroMobileMoneyNumber || OWNER_PLACEHOLDER),
+      amaroMobileMoneyHolder: String(raw.amaroMobileMoneyHolder || OWNER_PLACEHOLDER),
+      amaroWhatsappNumber: String(raw.amaroWhatsappNumber || OWNER_PLACEHOLDER),
+      vaultKeyConfirmedByOwner: Boolean(raw.vaultKeyConfirmedByOwner),
+      financialRetentionDuration: String(
+        raw.financialRetentionDuration || OWNER_PLACEHOLDER
+      ),
+      termsVersion: String(raw.termsVersion || '1.0'),
+      conventionVersion: String(raw.conventionVersion || '1.0'),
+      includeDemoData: Boolean(raw.includeDemoData),
     };
   }
 
@@ -574,9 +811,34 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     return {
       id: folderId,
       ownerId: String(raw.ownerId || ''),
-      status: (raw.status || 'planning') as ServerFolderRecord['status'],
+      title: raw.title ? String(raw.title) : undefined,
+      status: (raw.status || 'planning') as JourneyFolderStatus,
       countryCode: String(raw.countryCode || 'BJ'),
       currency: (raw.currency || 'XOF') as CurrencyCode,
+      dossierFeeStatus: raw.dossierFeeStatus
+        ? (String(raw.dossierFeeStatus) as DossierFeeStatus)
+        : undefined,
+      dossierFeeAmountXof:
+        raw.dossierFeeAmountXof !== undefined
+          ? Number(raw.dossierFeeAmountXof)
+          : undefined,
+      dossierTxRef: raw.dossierTxRef ? String(raw.dossierTxRef) : undefined,
+      dossierPayerName: raw.dossierPayerName ? String(raw.dossierPayerName) : undefined,
+      dossierDeclaredAt: raw.dossierDeclaredAt ? String(raw.dossierDeclaredAt) : undefined,
+      termsAcceptedVersion: raw.termsAcceptedVersion
+        ? String(raw.termsAcceptedVersion)
+        : undefined,
+      balanceDueAt: raw.balanceDueAt ? String(raw.balanceDueAt) : undefined,
+      balanceReminderSentAt: raw.balanceReminderSentAt
+        ? String(raw.balanceReminderSentAt)
+        : undefined,
+      manualRefundRequired:
+        typeof raw.manualRefundRequired === 'boolean'
+          ? raw.manualRefundRequired
+          : undefined,
+      manualRefundReason: raw.manualRefundReason
+        ? String(raw.manualRefundReason)
+        : undefined,
     };
   }
 
@@ -951,6 +1213,15 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           if (payload.followUpCount !== undefined) {
             resDoc.followUpCount = payload.followUpCount;
           }
+          if (payload.circuitType) {
+            resDoc.circuitType = payload.circuitType;
+          }
+          if (payload.coordinationStatus) {
+            resDoc.coordinationStatus = payload.coordinationStatus;
+          }
+          if (payload.localContributionXof !== undefined) {
+            resDoc.localContributionXof = payload.localContributionXof;
+          }
 
           tx.set(resRef, resDoc);
 
@@ -1083,6 +1354,15 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       }
       if (payload.followUpCount !== undefined) {
         resFields.followUpCount = encodeInt(payload.followUpCount);
+      }
+      if (payload.circuitType) {
+        resFields.circuitType = encodeString(payload.circuitType);
+      }
+      if (payload.coordinationStatus) {
+        resFields.coordinationStatus = encodeString(payload.coordinationStatus);
+      }
+      if (payload.localContributionXof !== undefined) {
+        resFields.localContributionXof = encodeNumber(payload.localContributionXof);
       }
 
       const writes: any[] = [
@@ -1324,6 +1604,22 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       responseDeadlineAt: raw.responseDeadlineAt ? String(raw.responseDeadlineAt) : undefined,
       followUpCount:
         raw.followUpCount !== undefined ? Number(raw.followUpCount) : undefined,
+      circuitType: raw.circuitType
+        ? (String(raw.circuitType) as 'circuit_a_directory' | 'circuit_b_partner')
+        : undefined,
+      coordinationStatus: raw.coordinationStatus
+        ? (String(raw.coordinationStatus) as ServerReservationRecord['coordinationStatus'])
+        : undefined,
+      coordinationContactedAt: raw.coordinationContactedAt
+        ? String(raw.coordinationContactedAt)
+        : undefined,
+      coordinationOutcome: raw.coordinationOutcome
+        ? String(raw.coordinationOutcome)
+        : undefined,
+      localContributionXof:
+        raw.localContributionXof !== undefined
+          ? Number(raw.localContributionXof)
+          : undefined,
       updatedAtIso,
     };
   }
@@ -1340,6 +1636,15 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       dispatchStatus?: ReservationDispatchStatus;
       responseDeadlineAt?: string;
       followUpCount?: number;
+      coordinationStatus?:
+        | 'to_contact'
+        | 'contacted'
+        | 'confirmed'
+        | 'unavailable'
+        | 'quote_received';
+      coordinationContactedAt?: string;
+      coordinationOutcome?: string;
+      cancelAffiliateReferral?: boolean;
       releaseStock?: {
         stockId: string;
         units: number;
@@ -1371,6 +1676,14 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           }
         }
 
+        const referralId = `ref-${params.reservationId.replace(/^res-/, '')}`;
+        let refDocRef: FirebaseFirestore.DocumentReference | null = null;
+        if (params.cancelAffiliateReferral) {
+          const candidateRef = db.collection('partner_referrals').doc(referralId);
+          const refSnap = await tx.get(candidateRef);
+          if (refSnap.exists) refDocRef = candidateRef;
+        }
+
         const resRef = db.collection('reservations').doc(params.reservationId);
         const updatePayload: Record<string, any> = {
           status: params.status,
@@ -1392,7 +1705,24 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         if (params.followUpCount !== undefined) {
           updatePayload.followUpCount = params.followUpCount;
         }
+        if (params.coordinationStatus !== undefined) {
+          updatePayload.coordinationStatus = params.coordinationStatus;
+        }
+        if (params.coordinationContactedAt !== undefined) {
+          updatePayload.coordinationContactedAt = params.coordinationContactedAt;
+        }
+        if (params.coordinationOutcome !== undefined) {
+          updatePayload.coordinationOutcome = params.coordinationOutcome.slice(0, 500);
+        }
         tx.update(resRef, updatePayload);
+
+        if (refDocRef) {
+          tx.update(refDocRef, {
+            status: 'cancelled_or_rejected',
+            commissionAmount: 0,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
 
         if (stockRef) {
           tx.update(stockRef, {
@@ -1449,6 +1779,18 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     if (params.followUpCount !== undefined) {
       resUpdateFields.followUpCount = encodeInt(params.followUpCount);
       resFieldPaths.push('followUpCount');
+    }
+    if (params.coordinationStatus !== undefined) {
+      resUpdateFields.coordinationStatus = encodeString(params.coordinationStatus);
+      resFieldPaths.push('coordinationStatus');
+    }
+    if (params.coordinationContactedAt !== undefined) {
+      resUpdateFields.coordinationContactedAt = encodeString(params.coordinationContactedAt);
+      resFieldPaths.push('coordinationContactedAt');
+    }
+    if (params.coordinationOutcome !== undefined) {
+      resUpdateFields.coordinationOutcome = encodeString(params.coordinationOutcome.slice(0, 500));
+      resFieldPaths.push('coordinationOutcome');
     }
 
     const writes: any[] = [
@@ -1531,6 +1873,92 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     if (!commitRes.ok) {
       throw new Error(`Transition réservation refusée (${commitRes.status}).`);
     }
+  }
+
+  async registerProviderFromPromoteFlow(
+    params: {
+      providerId: string;
+      ownerId: string;
+      companyName: string;
+      category: ServiceCategory;
+      cityId: string;
+      countryCode: string;
+      phone: string;
+      contactEmail: string;
+      description: string;
+      conventionVersion: string;
+      conventionAcceptedAt: string;
+    },
+    rawIdToken: string
+  ): Promise<{ providerId: string; verificationStatus: 'pending' }> {
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const nowTs = FieldValue.serverTimestamp();
+      await db.collection('providers').doc(params.providerId).set({
+        ownerId: params.ownerId,
+        businessName: params.companyName.slice(0, 140),
+        companyName: params.companyName.slice(0, 140),
+        category: params.category,
+        cityId: params.cityId,
+        countryCode: params.countryCode,
+        phone: params.phone.slice(0, 60),
+        contactEmail: params.contactEmail.slice(0, 140),
+        description: params.description.slice(0, 900),
+        verificationStatus: 'pending',
+        conventionAccepted: true,
+        conventionVersion: params.conventionVersion,
+        conventionAcceptedAt: params.conventionAcceptedAt,
+        registrationSource: 'promote_services',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      });
+      return { providerId: params.providerId, verificationStatus: 'pending' };
+    }
+
+    const docName = `${this.dbResourcePath}/providers/${params.providerId}`;
+    const commitRes = await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: docName,
+                fields: {
+                  ownerId: encodeString(params.ownerId),
+                  businessName: encodeString(params.companyName.slice(0, 140)),
+                  companyName: encodeString(params.companyName.slice(0, 140)),
+                  category: encodeString(params.category),
+                  cityId: encodeString(params.cityId),
+                  countryCode: encodeString(params.countryCode),
+                  phone: encodeString(params.phone.slice(0, 60)),
+                  contactEmail: encodeString(params.contactEmail.slice(0, 140)),
+                  description: encodeString(params.description.slice(0, 900)),
+                  verificationStatus: encodeString('pending'),
+                  conventionAccepted: { booleanValue: true },
+                  conventionVersion: encodeString(params.conventionVersion),
+                  conventionAcceptedAt: encodeString(params.conventionAcceptedAt),
+                  registrationSource: encodeString('promote_services'),
+                },
+              },
+              updateTransforms: [
+                { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+                { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+    if (!commitRes.ok) {
+      throw new Error(`Inscription prestataire refusée (${commitRes.status}).`);
+    }
+    return { providerId: params.providerId, verificationStatus: 'pending' };
   }
 
   async getIdentityMetadata(
@@ -2021,5 +2449,1116 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     return out
       .sort((a, b) => b.sortTs.localeCompare(a.sortTs))
       .map(({ sortTs: _ignore, ...rest }) => rest);
+  }
+
+  async listAllPublishedServices(rawIdToken?: string): Promise<ServerServiceRecord[]> {
+    const byId = new Map<string, ServerServiceRecord>();
+    for (const [id, svc] of Object.entries(OFFICIAL_PUBLIC_AND_DEMO_SERVICES)) {
+      if (svc.status === 'published') byId.set(id, { ...svc });
+    }
+    try {
+      if (this.hasServiceAccount) {
+        const snap = await this.getAdminDb()
+          .collection('services')
+          .where('status', '==', 'published')
+          .limit(300)
+          .get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          byId.set(doc.id, {
+            id: doc.id,
+            providerId: String(d.providerId || ''),
+            ownerId: String(d.ownerId || 'manual_concierge'),
+            title: String(d.title || ''),
+            category: d.category as ServiceCategory,
+            countryCode: String(d.countryCode || 'BJ'),
+            cityId: String(d.cityId || 'cotonou'),
+            priceAmount: Number(d.priceAmount ?? 0),
+            priceKnown:
+              typeof d.priceKnown === 'boolean' ? d.priceKnown : Number(d.priceAmount ?? 0) > 0,
+            currency: (d.currency || 'XOF') as CurrencyCode,
+            durationMinutes: Math.max(15, Number(d.durationMinutes || 90)),
+            capacity: Math.max(1, Number(d.capacity || 4)),
+            status: 'published',
+            dataOrigin: (d.dataOrigin || 'public_directory') as ServerServiceRecord['dataOrigin'],
+            activationLevel: d.activationLevel as PartnerActivationLevel | undefined,
+            pilotConventionSigned: Boolean(d.pilotConventionSigned),
+            coveredCities: Array.isArray(d.coveredCities) ? d.coveredCities.map(String) : undefined,
+            blockedDates: Array.isArray(d.blockedDates) ? d.blockedDates.map(String) : undefined,
+          });
+        }
+      } else {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (rawIdToken) headers.Authorization = `Bearer ${rawIdToken}`;
+        const res = await fetch(`${this.baseUrl}:runQuery`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'services' }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: 'status' },
+                  op: 'EQUAL',
+                  value: { stringValue: 'published' },
+                },
+              },
+              limit: 250,
+            },
+          }),
+        });
+        if (res.ok) {
+          const rows: any[] = await res.json();
+          for (const row of rows) {
+            if (!row?.document?.fields) continue;
+            const d = decodeFirestoreFields(row.document.fields);
+            const id = String(row.document.name || '').split('/').pop() || '';
+            if (!id) continue;
+            byId.set(id, {
+              id,
+              providerId: String(d.providerId || ''),
+              ownerId: String(d.ownerId || 'manual_concierge'),
+              title: String(d.title || ''),
+              category: d.category as ServiceCategory,
+              countryCode: String(d.countryCode || 'BJ'),
+              cityId: String(d.cityId || 'cotonou'),
+              priceAmount: Number(d.priceAmount ?? 0),
+              priceKnown:
+                typeof d.priceKnown === 'boolean' ? d.priceKnown : Number(d.priceAmount ?? 0) > 0,
+              currency: (d.currency || 'XOF') as CurrencyCode,
+              durationMinutes: Math.max(15, Number(d.durationMinutes || 90)),
+              capacity: Math.max(1, Number(d.capacity || 4)),
+              status: 'published',
+              dataOrigin: (d.dataOrigin || 'public_directory') as ServerServiceRecord['dataOrigin'],
+              coveredCities: Array.isArray(d.coveredCities) ? d.coveredCities.map(String) : undefined,
+              blockedDates: Array.isArray(d.blockedDates) ? d.blockedDates.map(String) : undefined,
+            });
+          }
+        }
+      }
+    } catch {
+      // Fallback gracefully to official static directory if query unavailable
+    }
+    return Array.from(byId.values());
+  }
+
+  async getAccountGovernance(
+    userId: string,
+    rawIdToken?: string
+  ): Promise<AccountGovernanceDoc | null> {
+    try {
+      let raw: Record<string, any> | null = null;
+      if (this.hasServiceAccount) {
+        const snap = await this.getAdminDb().collection('account_governance').doc(userId).get();
+        raw = snap.exists ? (snap.data() as Record<string, any>) : null;
+      } else if (rawIdToken) {
+        raw = await this.restGetDoc(
+          `account_governance/${encodeURIComponent(userId)}`,
+          rawIdToken
+        );
+      }
+      if (!raw) return null;
+      return {
+        id: userId,
+        userId,
+        abandonmentCount: Math.max(0, Number(raw.abandonmentCount ?? 0)),
+        flaggedAtRisk: Boolean(raw.flaggedAtRisk),
+        blockedForRequests: Boolean(raw.blockedForRequests),
+        blockReason: String(raw.blockReason || ''),
+        updatedBy: String(raw.updatedBy || 'system'),
+        updatedAtIso: String(raw.updatedAtIso || ''),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async updateAccountGovernance(
+    docData: AccountGovernanceDoc,
+    rawIdToken?: string
+  ): Promise<void> {
+    if (this.hasServiceAccount) {
+      await this.getAdminDb()
+        .collection('account_governance')
+        .doc(docData.userId)
+        .set(
+          {
+            userId: docData.userId,
+            abandonmentCount: docData.abandonmentCount,
+            flaggedAtRisk: docData.flaggedAtRisk,
+            blockedForRequests: docData.blockedForRequests,
+            blockReason: docData.blockReason.slice(0, 350),
+            updatedBy: docData.updatedBy,
+            updatedAtIso: docData.updatedAtIso,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      return;
+    }
+    if (!rawIdToken) return;
+    await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: `${this.dbResourcePath}/account_governance/${docData.userId}`,
+                fields: {
+                  userId: encodeString(docData.userId),
+                  abandonmentCount: encodeInt(docData.abandonmentCount),
+                  flaggedAtRisk: { booleanValue: docData.flaggedAtRisk },
+                  blockedForRequests: { booleanValue: docData.blockedForRequests },
+                  blockReason: encodeString(docData.blockReason.slice(0, 350)),
+                  updatedBy: encodeString(docData.updatedBy),
+                  updatedAtIso: encodeString(docData.updatedAtIso),
+                },
+              },
+              updateTransforms: [
+                { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+  }
+
+  async hasClientPriorReferredReservation(
+    clientId: string,
+    rawIdToken?: string
+  ): Promise<boolean> {
+    try {
+      if (this.hasServiceAccount) {
+        const snap = await this.getAdminDb()
+          .collection('partner_referrals')
+          .where('clientId', '==', clientId)
+          .limit(20)
+          .get();
+        return snap.docs.some((d) => d.data().status !== 'cancelled_or_rejected');
+      }
+      if (!rawIdToken) return false;
+      const res = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'partner_referrals' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'clientId' },
+                op: 'EQUAL',
+                value: { stringValue: clientId },
+              },
+            },
+            limit: 20,
+          },
+        }),
+      });
+      if (!res.ok) return false;
+      const rows: any[] = await res.json();
+      for (const row of rows) {
+        if (!row?.document?.fields) continue;
+        const f = decodeFirestoreFields(row.document.fields);
+        if (f.status && f.status !== 'cancelled_or_rejected') return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  async declareDossierFee(
+    params: {
+      folderId: string;
+      ownerId: string;
+      transactionRef: string;
+      payerName: string;
+      payerPhone: string;
+      declaredDate: string;
+      termsAcceptedVersion: string;
+      feeAmountXof: number;
+      maxPendingFolders: number;
+    },
+    rawIdToken: string
+  ): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }> {
+    const cleanRef = params.transactionRef.trim().toUpperCase();
+    const refLockId = `txref-${cleanRef.replace(/[^A-Z0-9_-]/g, '_')}`;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      await db.runTransaction(async (tx) => {
+        const folderRef = db.collection('journey_folders').doc(params.folderId);
+        const folderSnap = await tx.get(folderRef);
+        if (!folderSnap.exists || folderSnap.data()?.ownerId !== params.ownerId) {
+          throw new ConflictError('Dossier introuvable ou non autorisé.');
+        }
+
+        // Check max pending payment folders for this owner
+        const ownerFoldersSnap = await tx.get(
+          db.collection('journey_folders').where('ownerId', '==', params.ownerId)
+        );
+        const otherPendingCount = ownerFoldersSnap.docs.filter((d) => {
+          if (d.id === params.folderId) return false;
+          const st = String(d.data()?.dossierFeeStatus || '');
+          const fst = String(d.data()?.status || '');
+          return st === 'in_verification' || fst === 'awaiting_balance';
+        }).length;
+        if (otherPendingCount >= params.maxPendingFolders) {
+          throw new ConflictError(
+            `Limite atteinte : un seul dossier en attente de paiement ou de vérification à la fois par compte (maximum configuré : ${params.maxPendingFolders}).`
+          );
+        }
+
+        // Global uniqueness check on transactionRef
+        const txLockRef = db.collection('financial_archives').doc(refLockId);
+        const txLockSnap = await tx.get(txLockRef);
+        if (
+          txLockSnap.exists &&
+          String(txLockSnap.data()?.reservationOrFolderRef || '') !== params.folderId
+        ) {
+          throw new ConflictError(
+            'Cette référence de transaction Mobile Money a déjà été utilisée sur un autre dossier.'
+          );
+        }
+
+        tx.set(txLockRef, {
+          reservationOrFolderRef: params.folderId,
+          transactionRef: cleanRef,
+          amount: params.feeAmountXof,
+          currency: 'XOF',
+          recordedDate: params.declaredDate,
+          recordKind: 'dossier_fee',
+          retentionPolicyLabel: OWNER_PLACEHOLDER,
+          anonymizedAtIso: '',
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        tx.update(folderRef, {
+          status: 'fees_in_verification',
+          dossierFeeStatus: 'in_verification',
+          dossierFeeAmountXof: params.feeAmountXof,
+          dossierTxRef: cleanRef,
+          dossierPayerName: params.payerName.slice(0, 120),
+          dossierPayerPhone: params.payerPhone.slice(0, 40),
+          dossierDeclaredAt: params.declaredDate,
+          termsAcceptedVersion: params.termsAcceptedVersion,
+          termsAcceptedAt: new Date().toISOString(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+
+      return { status: 'fees_in_verification', dossierFeeStatus: 'in_verification' };
+    }
+
+    // REST atomic commit with non-existence lock on financial_archives/txref-...
+    const writes: any[] = [
+      {
+        update: {
+          name: `${this.dbResourcePath}/financial_archives/${refLockId}`,
+          fields: {
+            reservationOrFolderRef: encodeString(params.folderId),
+            transactionRef: encodeString(cleanRef),
+            amount: encodeInt(params.feeAmountXof),
+            currency: encodeString('XOF'),
+            recordedDate: encodeString(params.declaredDate),
+            recordKind: encodeString('dossier_fee'),
+            retentionPolicyLabel: encodeString(OWNER_PLACEHOLDER),
+            anonymizedAtIso: encodeString(''),
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      },
+      {
+        update: {
+          name: `${this.dbResourcePath}/journey_folders/${params.folderId}`,
+          fields: {
+            status: encodeString('fees_in_verification'),
+            dossierFeeStatus: encodeString('in_verification'),
+            dossierFeeAmountXof: encodeInt(params.feeAmountXof),
+            dossierTxRef: encodeString(cleanRef),
+            dossierPayerName: encodeString(params.payerName.slice(0, 120)),
+            dossierPayerPhone: encodeString(params.payerPhone.slice(0, 40)),
+            dossierDeclaredAt: encodeString(params.declaredDate),
+            termsAcceptedVersion: encodeString(params.termsAcceptedVersion),
+            termsAcceptedAt: encodeString(new Date().toISOString()),
+          },
+        },
+        updateMask: {
+          fieldPaths: [
+            'status',
+            'dossierFeeStatus',
+            'dossierFeeAmountXof',
+            'dossierTxRef',
+            'dossierPayerName',
+            'dossierPayerPhone',
+            'dossierDeclaredAt',
+            'termsAcceptedVersion',
+            'termsAcceptedAt',
+          ],
+        },
+        currentDocument: { exists: true },
+        updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+      },
+    ];
+
+    const res = await fetch(
+      `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ writes }),
+      }
+    );
+
+    if (res.status === 400 || res.status === 409) {
+      throw new ConflictError(
+        'Cette référence de transaction Mobile Money est déjà utilisée ou le dossier ne peut pas être mis à jour.'
+      );
+    }
+    if (!res.ok) {
+      throw new Error(`Déclaration des frais de dossier refusée (${res.status}).`);
+    }
+    return { status: 'fees_in_verification', dossierFeeStatus: 'in_verification' };
+  }
+
+  async verifyDossierFee(
+    params: {
+      folderId: string;
+      adminUid: string;
+      decision: 'approve' | 'reject';
+      reason: string;
+    },
+    rawIdToken: string
+  ): Promise<{ status: JourneyFolderStatus; dossierFeeStatus: DossierFeeStatus }> {
+    const nextFolderStatus: JourneyFolderStatus =
+      params.decision === 'approve' ? 'fees_validated' : 'fees_pending';
+    const nextFeeStatus: DossierFeeStatus =
+      params.decision === 'approve' ? 'validated' : 'rejected';
+    const nowIso = new Date().toISOString();
+
+    const folder = await this.getJourneyFolder(params.folderId, rawIdToken);
+    if (!folder) {
+      throw new ConflictError('Dossier introuvable.');
+    }
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const folderRef = db.collection('journey_folders').doc(params.folderId);
+      batch.update(folderRef, {
+        status: nextFolderStatus,
+        dossierFeeStatus: nextFeeStatus,
+        dossierVerifiedAt: nowIso,
+        dossierVerifiedBy: params.adminUid,
+        dossierRejectionReason: params.decision === 'reject' ? params.reason.slice(0, 300) : '',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      const auditRef = db.collection('audit_logs').doc(`audit-fee-${Date.now()}`);
+      batch.set(auditRef, {
+        actorId: params.adminUid,
+        action: params.decision === 'approve' ? 'APPROVE_DOSSIER_FEE' : 'REJECT_DOSSIER_FEE',
+        targetType: 'journey_folder',
+        targetId: params.folderId,
+        summary:
+          params.decision === 'approve'
+            ? `Frais de dossier validés pour ${params.folderId}.`
+            : `Frais de dossier rejetés (${params.reason.slice(0, 200)}).`,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      const notifRef = db.collection('notifications').doc(`notif-fee-${Date.now()}`);
+      batch.set(notifRef, {
+        recipientId: folder.ownerId,
+        senderId: params.adminUid,
+        kind: 'payment',
+        title:
+          params.decision === 'approve'
+            ? 'Frais de dossier validés — Vous pouvez envoyer vos demandes'
+            : 'Frais de dossier non validés',
+        body:
+          params.decision === 'approve'
+            ? 'Vos frais de dossier sont validés. Ils seront déduits du montant total de votre séjour une fois confirmé.'
+            : `Vérification Mobile Money non concluante : ${params.reason || 'veuillez vérifier la référence saisie'}.`,
+        read: false,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+      return { status: nextFolderStatus, dossierFeeStatus: nextFeeStatus };
+    }
+
+    await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/journey_folders/${params.folderId}`,
+              fields: {
+                status: encodeString(nextFolderStatus),
+                dossierFeeStatus: encodeString(nextFeeStatus),
+                dossierVerifiedAt: encodeString(nowIso),
+                dossierVerifiedBy: encodeString(params.adminUid),
+                dossierRejectionReason: encodeString(
+                  params.decision === 'reject' ? params.reason.slice(0, 300) : ''
+                ),
+              },
+            },
+            updateMask: {
+              fieldPaths: [
+                'status',
+                'dossierFeeStatus',
+                'dossierVerifiedAt',
+                'dossierVerifiedBy',
+                'dossierRejectionReason',
+              ],
+            },
+            currentDocument: { exists: true },
+            updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+          },
+          {
+            update: {
+              name: `${this.dbResourcePath}/audit_logs/audit-fee-${Date.now()}`,
+              fields: {
+                actorId: encodeString(params.adminUid),
+                action: encodeString(
+                  params.decision === 'approve' ? 'APPROVE_DOSSIER_FEE' : 'REJECT_DOSSIER_FEE'
+                ),
+                targetType: encodeString('journey_folder'),
+                targetId: encodeString(params.folderId),
+                summary: encodeString(
+                  params.decision === 'approve'
+                    ? `Frais de dossier validés pour ${params.folderId}.`
+                    : `Frais de dossier rejetés (${params.reason.slice(0, 200)}).`
+                ),
+              },
+            },
+            currentDocument: { exists: false },
+            updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+          },
+        ],
+      }),
+    });
+
+    return { status: nextFolderStatus, dossierFeeStatus: nextFeeStatus };
+  }
+
+  async recordNotificationDispatches(
+    dispatches: NotificationDispatchDoc[],
+    rawIdToken?: string
+  ): Promise<void> {
+    if (dispatches.length === 0) return;
+    try {
+      if (this.hasServiceAccount) {
+        const db = this.getAdminDb();
+        const batch = db.batch();
+        for (const d of dispatches) {
+          batch.set(db.collection('notification_dispatches').doc(d.id), {
+            ...d,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+        }
+        await batch.commit();
+        return;
+      }
+      if (!rawIdToken) return;
+      await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          writes: dispatches.map((d) => ({
+            update: {
+              name: `${this.dbResourcePath}/notification_dispatches/${d.id}`,
+              fields: {
+                recipientId: encodeString(d.recipientId),
+                reservationId: encodeString(d.reservationId || ''),
+                folderId: encodeString(d.folderId || ''),
+                channel: encodeString(d.channel),
+                status: encodeString(d.status),
+                title: encodeString(d.title.slice(0, 155)),
+                summary: encodeString(d.summary.slice(0, 500)),
+                errorDetail: encodeString(d.errorDetail || ''),
+                createdAtIso: encodeString(d.createdAtIso),
+              },
+            },
+            currentDocument: { exists: false },
+            updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+          })),
+        }),
+      });
+    } catch {
+      // Non-blocking audit telemetry
+    }
+  }
+
+  async listFailedOrUnconfiguredNotifications(
+    rawIdToken?: string
+  ): Promise<NotificationDispatchDoc[]> {
+    try {
+      if (this.hasServiceAccount) {
+        const snap = await this.getAdminDb()
+          .collection('notification_dispatches')
+          .limit(100)
+          .get();
+        return snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<NotificationDispatchDoc, 'id'>) }))
+          .filter((d) => d.status === 'failed' || d.status === 'channel_unconfigured');
+      }
+      if (!rawIdToken) return [];
+      const res = await fetch(`${this.baseUrl}/notification_dispatches?pageSize=80`, {
+        headers: { Authorization: `Bearer ${rawIdToken}` },
+      });
+      if (!res.ok) return [];
+      const json: any = await res.json();
+      const docs: any[] = Array.isArray(json?.documents) ? json.documents : [];
+      return docs
+        .map((doc) => {
+          const f = decodeFirestoreFields(doc.fields);
+          const id = String(doc.name || '').split('/').pop() || '';
+          return {
+            id,
+            recipientId: String(f.recipientId || ''),
+            reservationId: String(f.reservationId || ''),
+            folderId: String(f.folderId || ''),
+            channel: (f.channel || 'in_app') as NotificationDispatchDoc['channel'],
+            status: (f.status || 'created') as NotificationDispatchDoc['status'],
+            title: String(f.title || ''),
+            summary: String(f.summary || ''),
+            errorDetail: String(f.errorDetail || ''),
+            createdAtIso: String(f.createdAtIso || ''),
+          };
+        })
+        .filter((d) => d.status === 'failed' || d.status === 'channel_unconfigured');
+    } catch {
+      return [];
+    }
+  }
+
+  async evaluateDeadlinesAndExpirations(
+    params: {
+      nowIso?: string;
+      folderId?: string;
+      actorUid: string;
+      abandonmentRiskThreshold: number;
+      balancePaymentHours: number;
+    },
+    rawIdToken: string
+  ) {
+    const nowMs = Date.parse(params.nowIso || new Date().toISOString());
+    let halfTimeRemindersSent = 0;
+    let expiredProviderRequests = 0;
+    let balanceRemindersSent = 0;
+    let expiredBalancesCancelled = 0;
+    let manualRefundsFlagged = 0;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const resQuery = params.folderId
+        ? db.collection('reservations').where('folderId', '==', params.folderId)
+        : db.collection('reservations').limit(200);
+      const resSnap = await resQuery.get();
+      const affectedFolders = new Set<string>();
+
+      for (const docSnap of resSnap.docs) {
+        const r = docSnap.data();
+        const folderId = String(r.folderId || '');
+        if (folderId) affectedFolders.add(folderId);
+
+        if (r.status === 'pending_provider' && r.responseDeadlineAt) {
+          const deadlineMs = Date.parse(String(r.responseDeadlineAt));
+          const createdMs =
+            typeof r.createdAt?.toMillis === 'function'
+              ? r.createdAt.toMillis()
+              : deadlineMs - 24 * 3600_000;
+          const halfMs = createdMs + (deadlineMs - createdMs) / 2;
+
+          if (Number.isFinite(deadlineMs) && nowMs >= deadlineMs) {
+            expiredProviderRequests += 1;
+            const isCircuitB = r.providerOwnerId && r.providerOwnerId !== 'manual_concierge';
+            await docSnap.ref.update({
+              status: isCircuitB ? 'rejected' : 'pending_provider',
+              dispatchStatus: 'expired',
+              alternativeProposal: isCircuitB
+                ? 'Expirée sans réponse dans le délai imparti.'
+                : 'Vérification toujours en cours auprès de l’établissement recensé.',
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            if (isCircuitB && folderId) {
+              await db.collection('journey_folders').doc(folderId).update({
+                status: 'to_replan',
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+            }
+          } else if (
+            Number.isFinite(halfMs) &&
+            nowMs >= halfMs &&
+            !r.halfTimeReminderSentAt &&
+            r.providerOwnerId &&
+            r.providerOwnerId !== 'manual_concierge'
+          ) {
+            halfTimeRemindersSent += 1;
+            await docSnap.ref.update({
+              halfTimeReminderSentAt: new Date(nowMs).toISOString(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            await db.collection('notifications').doc(`notif-half-${docSnap.id}`).set({
+              recipientId: String(r.providerOwnerId),
+              senderId: params.actorUid,
+              kind: 'reservation',
+              title: `Relance à mi-délai : ${r.serviceTitle}`,
+              body: 'La moitié de votre délai de réponse est écoulée. Merci de confirmer ou proposer une alternative.',
+              read: false,
+              createdAt: FieldValue.serverTimestamp(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      // Check 48h balance deadlines on folders
+      const folderIds = params.folderId
+        ? [params.folderId]
+        : Array.from(affectedFolders);
+      for (const fId of folderIds) {
+        const fRef = db.collection('journey_folders').doc(fId);
+        const fSnap = await fRef.get();
+        if (!fSnap.exists) continue;
+        const fData = fSnap.data() || {};
+        if (fData.balanceDueAt && fData.status !== 'paid' && fData.status !== 'expired') {
+          const dueMs = Date.parse(String(fData.balanceDueAt));
+          const halfDueMs = dueMs - (params.balancePaymentHours * 3600_000) / 2;
+          if (Number.isFinite(dueMs) && nowMs >= dueMs) {
+            expiredBalancesCancelled += 1;
+            await fRef.update({
+              status: 'expired',
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            const fRes = await db
+              .collection('reservations')
+              .where('folderId', '==', fId)
+              .get();
+            for (const rd of fRes.docs) {
+              const rData = rd.data();
+              if (rData.paymentStatus !== 'succeeded') {
+                await rd.ref.update({
+                  status: 'cancelled',
+                  adminNotifyProviderTask:
+                    rData.providerOwnerId === 'manual_concierge'
+                      ? 'pending_inform_cancellation'
+                      : 'none',
+                  updatedAt: FieldValue.serverTimestamp(),
+                });
+              }
+            }
+            const ownerId = String(fData.ownerId || '');
+            if (ownerId) {
+              const gov = await this.getAccountGovernance(ownerId);
+              const nextAbandon = (gov?.abandonmentCount || 0) + 1;
+              await this.updateAccountGovernance({
+                id: ownerId,
+                userId: ownerId,
+                abandonmentCount: nextAbandon,
+                flaggedAtRisk: nextAbandon >= params.abandonmentRiskThreshold,
+                blockedForRequests: gov?.blockedForRequests || false,
+                blockReason: gov?.blockReason || '',
+                updatedBy: params.actorUid,
+                updatedAtIso: new Date(nowMs).toISOString(),
+              });
+            }
+          } else if (
+            Number.isFinite(halfDueMs) &&
+            nowMs >= halfDueMs &&
+            !fData.balanceReminderSentAt
+          ) {
+            balanceRemindersSent += 1;
+            await fRef.update({
+              balanceReminderSentAt: new Date(nowMs).toISOString(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+
+        // Check if ALL reservations in a validated-fee folder failed -> manualRefundRequired
+        if (fData.dossierFeeStatus === 'validated' && !fData.manualRefundRequired) {
+          const fRes = await db
+            .collection('reservations')
+            .where('folderId', '==', fId)
+            .get();
+          if (
+            !fRes.empty &&
+            fRes.docs.every((d) => d.data().status === 'rejected')
+          ) {
+            manualRefundsFlagged += 1;
+            await fRef.update({
+              manualRefundRequired: true,
+              dossierFeeStatus: 'refund_pending',
+              manualRefundReason:
+                'Aucune des prestations demandées dans ce dossier n’a pu être obtenue : remboursement manuel des frais de dossier à effectuer.',
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      halfTimeRemindersSent,
+      expiredProviderRequests,
+      balanceRemindersSent,
+      expiredBalancesCancelled,
+      manualRefundsFlagged,
+    };
+  }
+
+  async exportOperationalDataAdmin(rawIdToken: string): Promise<Record<string, unknown>> {
+    const exportedAt = new Date().toISOString();
+    const readCol = async (colName: string): Promise<any[]> => {
+      if (this.hasServiceAccount) {
+        const snap = await this.getAdminDb().collection(colName).limit(500).get();
+        return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      const res = await fetch(`${this.baseUrl}/${colName}?pageSize=300`, {
+        headers: { Authorization: `Bearer ${rawIdToken}` },
+      });
+      if (!res.ok) return [];
+      const json: any = await res.json();
+      return (Array.isArray(json?.documents) ? json.documents : []).map((doc: any) => ({
+        id: String(doc.name || '').split('/').pop() || '',
+        ...decodeFirestoreFields(doc.fields),
+      }));
+    };
+
+    const [folders, reservations, services, settings, providers] = await Promise.all([
+      readCol('journey_folders'),
+      readCol('reservations'),
+      readCol('services'),
+      readCol('system_settings'),
+      readCol('providers'),
+    ]);
+
+    return {
+      exportKind: 'admin_operational_export_v1',
+      exportedAt,
+      disclaimer:
+        'Export opérationnel daté (sans pièces d’identité chiffrées ni secrets serveur). Ne remplace pas une sauvegarde complète Cloud Firestore.',
+      counts: {
+        folders: folders.length,
+        reservations: reservations.length,
+        customServices: services.length,
+        settings: settings.length,
+        providers: providers.length,
+      },
+      data: {
+        folders,
+        reservations,
+        services,
+        settings,
+        providers,
+      },
+    };
+  }
+
+  async exportPersonalDataClient(
+    userId: string,
+    userEmail: string,
+    rawIdToken: string
+  ): Promise<Record<string, unknown>> {
+    const exportedAt = new Date().toISOString();
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const [userSnap, prefSnap, foldersSnap, resSnap, reviewsSnap] = await Promise.all([
+        db.collection('users').doc(userId).get(),
+        db.collection('users').doc(userId).collection('private').doc('preferences').get(),
+        db.collection('journey_folders').where('ownerId', '==', userId).get(),
+        db.collection('reservations').where('clientId', '==', userId).get(),
+        db.collection('traveler_reviews').where('clientId', '==', userId).get(),
+      ]);
+
+      return {
+        exportKind: 'client_personal_data_export_v1',
+        exportedAt,
+        account: {
+          uid: userId,
+          email: userEmail,
+          profile: userSnap.exists ? userSnap.data() : null,
+          savedPreferences: prefSnap.exists ? prefSnap.data() : null,
+        },
+        journeyFolders: foldersSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        reservations: resSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        reviews: reviewsSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+      };
+    }
+
+    const profile = await this.restGetDoc(`users/${encodeURIComponent(userId)}`, rawIdToken);
+    const savedPreferences = await this.restGetDoc(
+      `users/${encodeURIComponent(userId)}/private/preferences`,
+      rawIdToken
+    );
+
+    const queryOwned = async (colId: string, field: string) => {
+      const r = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: colId }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: field },
+                op: 'EQUAL',
+                value: { stringValue: userId },
+              },
+            },
+            limit: 200,
+          },
+        }),
+      });
+      if (!r.ok) return [];
+      const rows: any[] = await r.json();
+      return rows
+        .filter((row) => row?.document?.fields)
+        .map((row) => ({
+          id: String(row.document.name || '').split('/').pop() || '',
+          ...decodeFirestoreFields(row.document.fields),
+        }));
+    };
+
+    const [journeyFolders, reservations] = await Promise.all([
+      queryOwned('journey_folders', 'ownerId'),
+      queryOwned('reservations', 'clientId'),
+    ]);
+
+    return {
+      exportKind: 'client_personal_data_export_v1',
+      exportedAt,
+      account: {
+        uid: userId,
+        email: userEmail,
+        profile,
+        savedPreferences,
+      },
+      journeyFolders,
+      reservations,
+    };
+  }
+
+  async applyRecalculatedReplacement(
+    params: {
+      folderId: string;
+      clientId: string;
+      replacedReservationId?: string;
+      newReservationPayload?: AtomicReservationPayload;
+      changeHistorySummary: string;
+      deltaAmountXof: number;
+    },
+    rawIdToken: string
+  ): Promise<{ newReservationId?: string }> {
+    const entryId = `chg-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      await db
+        .collection('journey_folders')
+        .doc(params.folderId)
+        .collection('change_history')
+        .doc(entryId)
+        .set({
+          ownerId: params.clientId,
+          summary: params.changeHistorySummary,
+          deltaAmountXof: params.deltaAmountXof,
+          createdAtIso: nowIso,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      return {};
+    }
+
+    await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/journey_folders/${encodeURIComponent(
+                params.folderId
+              )}/change_history/${entryId}`,
+              fields: {
+                ownerId: encodeString(params.clientId),
+                summary: encodeString(params.changeHistorySummary),
+                deltaAmountXof: encodeInt(params.deltaAmountXof),
+                createdAtIso: encodeString(nowIso),
+              },
+            },
+          },
+        ],
+      }),
+    });
+    return {};
+  }
+
+  async deleteClientAccountCompliant(
+    params: {
+      userId: string;
+      retentionPolicyLabel: string;
+    },
+    rawIdToken: string
+  ) {
+    const nowIso = new Date().toISOString();
+    let deletedIdentityVaultCount = 0;
+    let retainedFinancialRecordsCount = 0;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+
+      // 1. Delete user profile & private preferences/PII
+      batch.delete(db.collection('users').doc(params.userId));
+      batch.delete(
+        db.collection('users').doc(params.userId).collection('private').doc('info')
+      );
+      batch.delete(
+        db.collection('users').doc(params.userId).collection('private').doc('preferences')
+      );
+
+      // 2. Delete identity documents & encrypted vaults
+      const idSnap = await db
+        .collection('identity_verifications')
+        .where('clientId', '==', params.userId)
+        .get();
+      for (const docSnap of idSnap.docs) {
+        deletedIdentityVaultCount += 1;
+        batch.delete(docSnap.ref.collection('private_vault').doc('files'));
+        batch.delete(docSnap.ref);
+      }
+
+      // 3. Delete folders, private intentions, and shares while archiving paid financial refs minimally
+      const foldersSnap = await db
+        .collection('journey_folders')
+        .where('ownerId', '==', params.userId)
+        .get();
+      for (const fDoc of foldersSnap.docs) {
+        const fData = fDoc.data();
+        if (fData.dossierTxRef) {
+          retainedFinancialRecordsCount += 1;
+          const archRef = db
+            .collection('financial_archives')
+            .doc(`arch-folder-${fDoc.id}`);
+          batch.set(archRef, {
+            reservationOrFolderRef: fDoc.id,
+            transactionRef: String(fData.dossierTxRef),
+            amount: Number(fData.dossierFeeAmountXof || 0),
+            currency: (fData.currency || 'XOF') as CurrencyCode,
+            recordedDate: String(fData.dossierDeclaredAt || nowIso.slice(0, 10)),
+            recordKind: 'dossier_fee',
+            retentionPolicyLabel: params.retentionPolicyLabel,
+            anonymizedAtIso: nowIso,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+        batch.delete(fDoc.ref.collection('private').doc('intention'));
+        batch.delete(fDoc.ref);
+      }
+
+      const sharesSnap = await db
+        .collection('folder_shares')
+        .where('ownerId', '==', params.userId)
+        .get();
+      for (const sDoc of sharesSnap.docs) {
+        batch.delete(sDoc.ref);
+      }
+
+      // 4. Retain minimal financial trace for paid reservations & scrub client PII
+      const resSnap = await db
+        .collection('reservations')
+        .where('clientId', '==', params.userId)
+        .get();
+      for (const rDoc of resSnap.docs) {
+        const rData = rDoc.data();
+        if (rData.paymentStatus === 'succeeded' || rData.paymentStatus === 'refunded') {
+          retainedFinancialRecordsCount += 1;
+          const archRef = db.collection('financial_archives').doc(`arch-res-${rDoc.id}`);
+          batch.set(archRef, {
+            reservationOrFolderRef: rDoc.id,
+            transactionRef: rDoc.id,
+            amount: Number(rData.totalAmount || 0),
+            currency: (rData.currency || 'XOF') as CurrencyCode,
+            recordedDate: String(rData.scheduledDate || nowIso.slice(0, 10)),
+            recordKind: 'reservation_payment',
+            retentionPolicyLabel: params.retentionPolicyLabel,
+            anonymizedAtIso: nowIso,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      // 5. Preserve minimal audit log entry without personal identity details
+      batch.set(db.collection('audit_logs').doc(`audit-del-${Date.now()}`), {
+        actorId: 'deleted_client_account',
+        action: 'CLIENT_ACCOUNT_DELETED_COMPLIANT',
+        targetType: 'account',
+        targetId: crypto.createHash('sha256').update(params.userId).digest('hex').slice(0, 16),
+        summary: `Données personnelles et pièces d’identité supprimées ; ${retainedFinancialRecordsCount} enregistrement(s) financier(s) conservé(s) de façon minimale (${params.retentionPolicyLabel}).`,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      await batch.commit();
+      return {
+        deletedPersonalData: true,
+        deletedIdentityVaultCount,
+        retainedFinancialRecordsCount,
+        retentionPolicyLabel: params.retentionPolicyLabel,
+      };
+    }
+
+    // REST deletion of user profile & private preferences
+    const writes: any[] = [
+      { delete: `${this.dbResourcePath}/users/${params.userId}` },
+      { delete: `${this.dbResourcePath}/users/${params.userId}/private/info` },
+      { delete: `${this.dbResourcePath}/users/${params.userId}/private/preferences` },
+    ];
+    await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ writes }),
+    });
+
+    return {
+      deletedPersonalData: true,
+      deletedIdentityVaultCount,
+      retainedFinancialRecordsCount,
+      retentionPolicyLabel: params.retentionPolicyLabel,
+    };
   }
 }

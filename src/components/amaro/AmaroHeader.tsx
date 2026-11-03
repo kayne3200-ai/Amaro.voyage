@@ -1,144 +1,285 @@
-import { Compass, Briefcase, MessageSquare, ShieldAlert, CalendarCheck } from 'lucide-react';
-import type { LocaleCode } from '../../types/amaro';
-import { TRANSLATIONS } from '../../i18n/translations';
+import React from 'react';
+import {
+  Compass,
+  FolderKanban,
+  Sparkles,
+  LifeBuoy,
+  UserCheck,
+  LogIn,
+  LogOut,
+  Bell,
+  BellOff,
+  ArrowRight,
+  Building2,
+} from 'lucide-react';
+import type { SupportedLocale } from '../../types/amaro';
 
-export type AmaroTab = 'explorer' | 'journey' | 'assistant' | 'rescue' | 'workspace';
+export type MainTab =
+  | 'explorer'
+  | 'journey'
+  | 'assistant'
+  | 'rescue'
+  | 'promote'
+  | 'workspace';
+
+export type AmaroTab = MainTab;
 
 interface AmaroHeaderProps {
-  activeTab: AmaroTab;
-  onSelectTab: (tab: AmaroTab) => void;
-  locale: LocaleCode;
+  activeTab: MainTab;
+  onSelectTab: (tab: MainTab) => void;
+  locale: SupportedLocale;
   isSignedIn: boolean;
   isSigningIn: boolean;
   unreadNotifications: number;
+  muteNonEssential?: boolean;
+  onToggleMuteNonEssential?: () => void;
   smartJourneyCtaLabel: string;
   onSmartJourneyCta: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }
 
-export function AmaroHeader({
+export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   activeTab,
   onSelectTab,
   locale,
   isSignedIn,
   isSigningIn,
   unreadNotifications,
+  muteNonEssential,
+  onToggleMuteNonEssential,
   smartJourneyCtaLabel,
   onSmartJourneyCta,
   onSignIn,
   onSignOut,
-}: AmaroHeaderProps) {
-  const t = TRANSLATIONS[locale];
-
-  const navItems: Array<{ id: AmaroTab; label: string; icon: typeof Compass }> = [
-    { id: 'explorer', label: t.nav.explorer, icon: Compass },
-    { id: 'journey', label: t.nav.journey, icon: CalendarCheck },
-    { id: 'assistant', label: t.nav.assistant, icon: MessageSquare },
-    { id: 'rescue', label: t.nav.rescue, icon: ShieldAlert },
-    { id: 'workspace', label: t.nav.workspace, icon: Briefcase },
+}) => {
+  const navItems: Array<{
+    id: MainTab;
+    labelFr: string;
+    labelEn: string;
+    shortFr: string;
+    shortEn: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+  }> = [
+    {
+      id: 'explorer',
+      labelFr: 'Explorer le Bénin',
+      labelEn: 'Explore Benin',
+      shortFr: 'Explorer',
+      shortEn: 'Explore',
+      icon: Compass,
+    },
+    {
+      id: 'journey',
+      labelFr: 'Mon Voyage & Agenda',
+      labelEn: 'My Trip & Agenda',
+      shortFr: 'Voyage',
+      shortEn: 'Trip',
+      icon: FolderKanban,
+      badge: unreadNotifications > 0 ? unreadNotifications : undefined,
+    },
+    {
+      id: 'assistant',
+      labelFr: 'Assistant gratuit',
+      labelEn: 'Free Assistant',
+      shortFr: 'Assistant',
+      shortEn: 'Assistant',
+      icon: Sparkles,
+    },
+    {
+      id: 'promote',
+      labelFr: 'Promouvoir mes services',
+      labelEn: 'Promote my services',
+      shortFr: 'Prestataires',
+      shortEn: 'Providers',
+      icon: Building2,
+    },
+    {
+      id: 'rescue',
+      labelFr: 'Imprévu / Urgence',
+      labelEn: 'Rescue / Emergency',
+      shortFr: 'Urgence',
+      shortEn: 'Rescue',
+      icon: LifeBuoy,
+    },
+    {
+      id: 'workspace',
+      labelFr: 'Mon Compte',
+      labelEn: 'My Account',
+      shortFr: 'Compte',
+      shortEn: 'Account',
+      icon: UserCheck,
+    },
   ];
 
   return (
     <>
-      {/* Strict 3-Zone Top Bar Contract (<= 56px, hidden on PDF souvenir print) */}
-      <header className="no-print sticky top-0 z-30 h-12 md:h-14 flex items-center justify-between gap-4 px-4 md:px-8 bg-[#0B192C] text-white border-b border-slate-800 shrink-0">
-        <button
-          type="button"
-          onClick={() => onSelectTab('explorer')}
-          className="font-display text-base md:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-400"
-        >
-          AMARO.VOYAGE
-        </button>
+      <header className="no-print sticky top-0 z-40 bg-[#0B192C] text-white border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          {/* Brand */}
+          <button
+            type="button"
+            onClick={() => onSelectTab('explorer')}
+            className="flex items-center gap-2.5 text-left shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-md"
+          >
+            <span className="w-8 h-8 rounded-md bg-amber-600 text-white font-bold text-sm flex items-center justify-center tracking-tight">
+              AV
+            </span>
+            <div className="leading-tight">
+              <span className="block font-bold text-sm sm:text-base tracking-wide text-white">
+                AMARO.VOYAGE
+              </span>
+              <span className="hidden sm:block text-[11px] text-slate-300">
+                {locale === 'fr'
+                  ? 'Organisation humaine de séjours · Bénin'
+                  : 'Human travel organization · Benin'}
+              </span>
+            </div>
+          </button>
 
-        <nav
-          aria-label="Navigation principale"
-          className="hidden lg:flex items-center gap-6 text-sm font-medium"
-        >
-          {navItems.map((item) => {
-            const active = activeTab === item.id;
-            const labelWithCount =
-              item.id === 'journey' && unreadNotifications > 0
-                ? `${item.label} (${unreadNotifications})`
-                : item.label;
-            return (
+          {/* Desktop Navigation */}
+          <nav
+            aria-label={locale === 'fr' ? 'Navigation principale' : 'Primary navigation'}
+            className="hidden lg:flex items-center gap-1"
+          >
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelectTab(item.id)}
+                  className={`relative px-2.5 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
+                    isActive
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon
+                    className={`w-4 h-4 ${
+                      item.id === 'rescue'
+                        ? 'text-rose-400'
+                        : item.id === 'promote'
+                        ? 'text-amber-400'
+                        : ''
+                    }`}
+                  />
+                  <span>{locale === 'fr' ? item.labelFr : item.labelEn}</span>
+                  {item.badge ? (
+                    <span className="ml-0.5 px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-600 text-white">
+                      {item.badge}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Right Actions: single primary CTA + optional 1-click mute + Auth */}
+          <div className="flex items-center gap-2 shrink-0">
+            {activeTab !== 'journey' && (
               <button
-                key={item.id}
                 type="button"
-                onClick={() => onSelectTab(item.id)}
-                className={`py-1 border-b-2 transition-colors duration-150 whitespace-nowrap shrink-0 ${
-                  active
-                    ? 'border-amber-400 text-white font-semibold'
-                    : 'border-transparent text-slate-300 hover:text-white hover:border-slate-600'
+                onClick={onSmartJourneyCta}
+                className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white transition-colors"
+              >
+                <span>{smartJourneyCtaLabel}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {isSignedIn && onToggleMuteNonEssential && (
+              <button
+                type="button"
+                onClick={onToggleMuteNonEssential}
+                title={
+                  muteNonEssential
+                    ? 'Notifications non essentielles coupées — cliquer pour réactiver'
+                    : 'Couper les notifications non essentielles en un clic'
+                }
+                aria-label="Couper ou réactiver les notifications non essentielles"
+                className={`p-2 rounded-lg text-xs border transition-colors ${
+                  muteNonEssential
+                    ? 'bg-amber-950/70 border-amber-700 text-amber-300'
+                    : 'bg-slate-800/70 border-slate-700 text-slate-300 hover:text-white'
                 }`}
               >
-                {labelWithCount}
+                {muteNonEssential ? (
+                  <BellOff className="w-4 h-4" />
+                ) : (
+                  <Bell className="w-4 h-4" />
+                )}
               </button>
-            );
-          })}
-        </nav>
+            )}
 
-        <div className="flex items-center gap-2 shrink-0">
-          {activeTab !== 'explorer' && activeTab !== 'journey' && (
-            <button
-              type="button"
-              onClick={onSmartJourneyCta}
-              className="hidden sm:inline-flex items-center min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-lg transition-colors whitespace-nowrap"
-            >
-              {smartJourneyCtaLabel}
-            </button>
-          )}
-
-          {isSignedIn ? (
-            <button
-              type="button"
-              onClick={onSignOut}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              {t.nav.signOut}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onSignIn}
-              disabled={isSigningIn}
-              className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              {isSigningIn ? '...' : t.nav.signIn}
-            </button>
-          )}
+            {isSignedIn ? (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>{locale === 'fr' ? 'Déconnexion' : 'Sign out'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSignIn}
+                disabled={isSigningIn}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-white text-[#0B192C] hover:bg-slate-100 disabled:opacity-60 transition-colors"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>
+                  {isSigningIn
+                    ? locale === 'fr'
+                      ? 'Connexion...'
+                      : 'Signing in...'
+                    : locale === 'fr'
+                    ? 'Connexion'
+                    : 'Sign in'}
+                </span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Android & Mobile Ergonomic Thumb-Zone Bottom Tab Bar (56px height, >=44px hitboxes) */}
+      {/* Mobile Bottom Navigation */}
       <nav
-        aria-label="Navigation mobile"
-        className="no-print lg:hidden fixed bottom-0 left-0 right-0 z-30 h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center"
+        aria-label={locale === 'fr' ? 'Navigation mobile' : 'Mobile navigation'}
+        className="no-print lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B192C] border-t border-slate-800 px-1 py-1.5 grid grid-cols-6 gap-0.5"
       >
         {navItems.map((item) => {
           const Icon = item.icon;
-          const active = activeTab === item.id;
+          const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => onSelectTab(item.id)}
-              className={`min-h-[44px] flex flex-col items-center justify-center px-1 transition-colors ${
-                active
-                  ? 'text-[#0B192C] dark:text-amber-400 font-semibold'
-                  : 'text-slate-500 dark:text-slate-400'
+              className={`relative flex flex-col items-center justify-center py-1 rounded-md text-[10px] font-medium transition-colors ${
+                isActive ? 'text-amber-400 bg-slate-800/80' : 'text-slate-300'
               }`}
             >
-              <Icon className="w-5 h-5" />
-              <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-full">
-                {item.id === 'journey' && unreadNotifications > 0
-                  ? `${item.label} (${unreadNotifications})`
-                  : item.label}
+              <Icon
+                className={`w-4 h-4 mb-0.5 ${
+                  item.id === 'rescue' && !isActive ? 'text-rose-400' : ''
+                }`}
+              />
+              <span className="truncate max-w-full px-0.5">
+                {locale === 'fr' ? item.shortFr : item.shortEn}
               </span>
+              {item.badge ? (
+                <span className="absolute top-0.5 right-1 w-4 h-4 rounded-full bg-amber-600 text-white text-[9px] font-bold flex items-center justify-center">
+                  {item.badge}
+                </span>
+              ) : null}
             </button>
           );
         })}
       </nav>
     </>
   );
-}
+};

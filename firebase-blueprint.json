@@ -17,17 +17,26 @@
     },
     "UserPrivate": {
       "title": "UserPrivate",
-      "description": "Isolated PII contact details for a user",
+      "description": "Isolated PII contact details and optional saved preferences for a user",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "maxLength": 200 },
         "phone": { "type": "string", "maxLength": 40 },
         "emergencyContact": { "type": "string", "maxLength": 200 },
+        "consentEnabled": { "type": "boolean" },
+        "preferredStanding": { "type": "string", "maxLength": 80 },
+        "travelPace": { "type": "string", "maxLength": 80 },
+        "dietaryNotes": { "type": "string", "maxLength": 500 },
+        "favoriteInterests": { "type": "array", "items": { "type": "string" } },
+        "muteNonEssentialNotifications": { "type": "boolean" },
+        "phoneNumberDeclared": { "type": "string", "maxLength": 40 },
+        "phoneVerified": { "type": "boolean" },
+        "updatedAtIso": { "type": "string", "maxLength": 40 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["uid", "email", "phone", "emergencyContact", "createdAt", "updatedAt"]
+      }
     },
     "AdminRecord": {
       "title": "AdminRecord",
@@ -42,11 +51,12 @@
     },
     "ProviderProfile": {
       "title": "ProviderProfile",
-      "description": "Tourism service provider profile subject to admin validation",
+      "description": "Tourism service provider profile subject to admin validation and promote_services entry flow",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "businessName": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "companyName": { "type": "string", "maxLength": 140 },
         "category": {
           "type": "string",
           "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
@@ -55,6 +65,24 @@
         "cityId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "description": { "type": "string", "minLength": 10, "maxLength": 1500 },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected"] },
+        "contactName": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 60 },
+        "businessPhone": { "type": "string", "maxLength": 60 },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "businessEmail": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 240 },
+        "conventionAccepted": { "type": "boolean" },
+        "conventionVersion": { "type": "string", "maxLength": 40 },
+        "conventionVersionAccepted": { "type": "string", "maxLength": 40 },
+        "conventionAcceptedAt": { "type": "string", "maxLength": 40 },
+        "registrationSource": { "type": "string", "maxLength": 40 },
+        "linkedDirectoryServiceId": { "type": "string", "maxLength": 128 },
+        "adminConventionStage": { "type": "string", "enum": ["non_contacte", "en_discussion", "signe"] },
+        "agreedCommissionPercent": { "type": "number" },
+        "agreedResponseHours": { "type": "number" },
+        "agreedCancellationTerms": { "type": "string", "maxLength": 600 },
+        "blockedDates": { "type": "array", "items": { "type": "string" } },
+        "seasonalRatesSummary": { "type": "string", "maxLength": 800 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -109,6 +137,7 @@
         "dataOrigin": { "type": "string", "enum": ["verified_partner", "pending_verification", "public_directory", "demo_test"] },
         "verificationStatus": { "type": "string", "enum": ["verified", "partially_verified", "to_confirm"] },
         "sourceName": { "type": "string", "maxLength": 240 },
+        "verifiedAt": { "type": "string", "maxLength": 40 },
         "neighborhood": { "type": "string", "maxLength": 140 },
         "standing": {
           "type": "string",
@@ -135,6 +164,15 @@
         },
         "pilotConventionSigned": { "type": "boolean" },
         "cancellationPolicy": { "type": "string", "maxLength": 500 },
+        "customPhotoUrl": { "type": "string", "maxLength": 600 },
+        "photoVerified": { "type": "boolean" },
+        "photoSource": { "type": "string", "maxLength": 240 },
+        "photoUsageRights": { "type": "string", "maxLength": 240 },
+        "isSacredOrCeremonial": { "type": "boolean" },
+        "sacredNotice": { "type": "string", "maxLength": 600 },
+        "linkedDirectoryServiceId": { "type": "string", "maxLength": 128 },
+        "blockedDates": { "type": "array", "items": { "type": "string" } },
+        "providerResponseHours": { "type": "integer" },
         "status": { "type": "string", "enum": ["draft", "published", "archived"] },
         "imageKey": { "type": "string", "maxLength": 100 },
         "imageLicense": { "type": "string", "maxLength": 200 },
@@ -164,7 +202,7 @@
     },
     "JourneyFolder": {
       "title": "JourneyFolder",
-      "description": "Central Amaro Journey Intelligence folder shared across modules",
+      "description": "Central Amaro Journey Intelligence folder shared across modules with deductible dossier fee lifecycle",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -178,7 +216,50 @@
         "dailyBudget": { "type": "number" },
         "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
         "preferencesNotes": { "type": "string", "maxLength": 1000 },
-        "status": { "type": "string", "enum": ["planning", "active", "completed", "archived"] },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "planning",
+            "fees_pending",
+            "fees_in_verification",
+            "fees_validated",
+            "coordinating",
+            "partially_confirmed",
+            "to_replan",
+            "confirmed",
+            "awaiting_balance",
+            "paid",
+            "active",
+            "completed",
+            "expired",
+            "cancelled",
+            "archived",
+            "abandoned"
+          ]
+        },
+        "dossierFeeStatus": {
+          "type": "string",
+          "enum": ["not_required", "pending", "in_verification", "validated", "rejected", "refund_pending", "refunded"]
+        },
+        "dossierFeeAmountXof": { "type": "number" },
+        "dossierTxRef": { "type": "string", "maxLength": 80 },
+        "dossierPayerName": { "type": "string", "maxLength": 140 },
+        "dossierPayerPhone": { "type": "string", "maxLength": 40 },
+        "dossierDeclaredAt": { "type": "string", "maxLength": 40 },
+        "dossierVerifiedAt": { "type": "string", "maxLength": 40 },
+        "dossierVerifiedBy": { "type": "string", "maxLength": 128 },
+        "dossierRejectionReason": { "type": "string", "maxLength": 400 },
+        "dossierFeeCredited": { "type": "boolean" },
+        "termsAcceptedVersion": { "type": "string", "maxLength": 40 },
+        "termsAcceptedAt": { "type": "string", "maxLength": 40 },
+        "balanceDueAt": { "type": "string", "maxLength": 40 },
+        "balanceDueDeadlineAt": { "type": "string", "maxLength": 40 },
+        "balanceReminderSentAt": { "type": "string", "maxLength": 40 },
+        "manualRefundRequired": { "type": "boolean" },
+        "manualRefundReason": { "type": "string", "maxLength": 500 },
+        "insuranceChecked": { "type": "boolean" },
+        "duplicatedFromFolderId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -222,6 +303,7 @@
         "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
         "stage": { "type": "string", "enum": ["envisaged", "requested", "accepted", "confirmed"] },
         "notes": { "type": "string", "maxLength": 600 },
+        "isFreeTimeBlock": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -243,6 +325,42 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "JourneyIntention": {
+      "title": "JourneyIntention",
+      "description": "Private personal trip intention and post-trip reflection answers never shared with providers",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "freeNote": { "type": "string", "maxLength": 1500 },
+        "skipped": { "type": "boolean" },
+        "reflectionAnswersJson": { "type": "string", "maxLength": 4000 },
+        "updatedAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["folderId", "ownerId", "reasons", "freeNote", "skipped", "updatedAtIso"]
+    },
+    "FolderExpense": {
+      "title": "FolderExpense",
+      "description": "On-site traveler personal expense entry scoped to a journey folder",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "label": { "type": "string", "maxLength": 160 },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "date": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["folderId", "ownerId", "category", "label", "amount", "currency", "date"]
     },
     "JournalEntry": {
       "title": "JournalEntry",
@@ -278,7 +396,7 @@
     },
     "Reservation": {
       "title": "Reservation",
-      "description": "Centralized state-machine tourism reservation",
+      "description": "Centralized state-machine tourism reservation across Circuit A and Circuit B",
       "type": "object",
       "properties": {
         "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -337,6 +455,20 @@
         },
         "responseDeadlineAt": { "type": "string", "maxLength": 40 },
         "followUpCount": { "type": "integer" },
+        "circuitType": { "type": "string", "enum": ["circuit_a_directory", "circuit_b_partner"] },
+        "coordinationStatus": {
+          "type": "string",
+          "enum": ["to_contact", "contacted", "confirmed", "unavailable", "quote_received"]
+        },
+        "coordinationContactedAt": { "type": "string", "maxLength": 40 },
+        "coordinationOutcome": { "type": "string", "maxLength": 500 },
+        "halfTimeReminderSentAt": { "type": "string", "maxLength": 40 },
+        "balanceDeadlineAt": { "type": "string", "maxLength": 40 },
+        "adminNotifyProviderTask": {
+          "type": "string",
+          "enum": ["none", "pending_inform_cancellation", "informed"]
+        },
+        "localContributionXof": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -469,6 +601,24 @@
       },
       "required": ["recipientId", "senderId", "kind", "title", "body", "read", "createdAt", "updatedAt"]
     },
+    "NotificationDispatch": {
+      "title": "NotificationDispatch",
+      "description": "Multi-channel notification dispatch log (in_app, email, sms, whatsapp) with honest delivery status",
+      "type": "object",
+      "properties": {
+        "recipientId": { "type": "string", "maxLength": 128 },
+        "reservationId": { "type": "string", "maxLength": 128 },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "channel": { "type": "string", "enum": ["in_app", "email", "sms", "whatsapp"] },
+        "status": { "type": "string", "enum": ["created", "sent", "failed", "channel_unconfigured"] },
+        "title": { "type": "string", "maxLength": 160 },
+        "summary": { "type": "string", "maxLength": 550 },
+        "errorDetail": { "type": "string", "maxLength": 400 },
+        "createdAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientId", "channel", "status", "title", "summary", "createdAtIso"]
+    },
     "CulturalStory": {
       "title": "CulturalStory",
       "description": "Moderated cultural heritage story or traveler testimony",
@@ -498,7 +648,7 @@
     },
     "SystemSetting": {
       "title": "SystemSetting",
-      "description": "Configurable country, commission, and platform rules",
+      "description": "Configurable country, Circuit A/B margins, dossier fees, deadlines, and platform governance rules",
       "type": "object",
       "properties": {
         "countryCode": { "type": "string", "maxLength": 4 },
@@ -509,6 +659,33 @@
         "partnerCommissionPercent": { "type": "number" },
         "attributionWindowDays": { "type": "integer" },
         "attributionModel": { "type": "string", "enum": ["first_touch", "last_touch"] },
+        "partnerMarginPercent": { "type": "number" },
+        "directoryMarginPercent": { "type": "number" },
+        "dossierFeeXof": { "type": "number" },
+        "dossierVerificationHours": { "type": "number" },
+        "providerResponseHours": { "type": "number" },
+        "balancePaymentHours": { "type": "number" },
+        "maxPendingPaymentFolders": { "type": "integer" },
+        "abandonmentRiskThreshold": { "type": "integer" },
+        "alternativeBudgetTolerancePercent": { "type": "number" },
+        "maxVisitsCityChangeDay": { "type": "integer" },
+        "maxVisitsSameCityDay": { "type": "integer" },
+        "freeTimeBlocksPerDay": { "type": "integer" },
+        "includeDossierFeeInAffiliateBase": { "type": "boolean" },
+        "localContributionPercent": { "type": "number" },
+        "localContributionLabel": { "type": "string", "maxLength": 200 },
+        "amaroMobileMoneyNumber": { "type": "string", "maxLength": 120 },
+        "amaroMobileMoneyHolder": { "type": "string", "maxLength": 140 },
+        "amaroWhatsappNumber": { "type": "string", "maxLength": 120 },
+        "vaultKeyConfirmedByOwner": { "type": "boolean" },
+        "financialRetentionDuration": { "type": "string", "maxLength": 160 },
+        "termsVersion": { "type": "string", "maxLength": 40 },
+        "conventionVersion": { "type": "string", "maxLength": 40 },
+        "includeDemoData": { "type": "boolean" },
+        "exchangeRateEurToXof": { "type": "number" },
+        "exchangeRateUsdToXof": { "type": "number" },
+        "exchangeRateSource": { "type": "string", "maxLength": 140 },
+        "exchangeRateUpdatedAt": { "type": "string", "maxLength": 40 },
         "updatedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -531,6 +708,7 @@
       "properties": {
         "actorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "action": { "type": "string", "maxLength": 120 },
+        "targetType": { "type": "string", "maxLength": 60 },
         "targetId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "summary": { "type": "string", "maxLength": 600 },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -817,6 +995,117 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "PlatformContent": {
+      "title": "PlatformContent",
+      "description": "Editable legal, charter, emergency, insurance, and institutional content documents",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "maxLength": 80 },
+        "title": { "type": "string", "maxLength": 200 },
+        "version": { "type": "string", "maxLength": 40 },
+        "body": { "type": "string", "maxLength": 20000 },
+        "structuredJson": { "type": "string", "maxLength": 20000 },
+        "isProvisional": { "type": "boolean" },
+        "ownerValidated": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAtIso": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["slug", "title", "version", "body", "isProvisional", "ownerValidated", "updatedBy", "updatedAtIso"]
+    },
+    "AccountGovernance": {
+      "title": "AccountGovernance",
+      "description": "Admin-managed risk and manual booking block state per client account",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "abandonmentCount": { "type": "integer" },
+        "flaggedAtRisk": { "type": "boolean" },
+        "blockedForRequests": { "type": "boolean" },
+        "blockReason": { "type": "string", "maxLength": 400 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAtIso": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "abandonmentCount", "flaggedAtRisk", "blockedForRequests", "blockReason", "updatedBy", "updatedAtIso"]
+    },
+    "FolderShare": {
+      "title": "FolderShare",
+      "description": "Read-only share snapshot of a journey folder with revocable token and visitor suggestions",
+      "type": "object",
+      "properties": {
+        "folderId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "folderTitle": { "type": "string", "maxLength": 160 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "snapshotSummary": { "type": "string", "maxLength": 6000 },
+        "suggestions": { "type": "array", "items": { "type": "object" } },
+        "revoked": { "type": "boolean" },
+        "createdAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["folderId", "ownerId", "folderTitle", "startDate", "endDate", "snapshotSummary", "suggestions", "revoked", "createdAtIso"]
+    },
+    "TravelerReview": {
+      "title": "TravelerReview",
+      "description": "Verified post-stay traveler review moderated by Admin",
+      "type": "object",
+      "properties": {
+        "reservationId": { "type": "string", "maxLength": 128 },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "serviceId": { "type": "string", "maxLength": 128 },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "authorDisplayName": { "type": "string", "maxLength": 100 },
+        "rating": { "type": "integer" },
+        "comment": { "type": "string", "maxLength": 2000 },
+        "moderationStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reservationId", "folderId", "serviceId", "serviceTitle", "clientId", "authorDisplayName", "rating", "comment", "moderationStatus", "createdAtIso"]
+    },
+    "ProviderThankYou": {
+      "title": "ProviderThankYou",
+      "description": "Private post-stay thank-you note from traveler to provider relayed by Admin",
+      "type": "object",
+      "properties": {
+        "reservationId": { "type": "string", "maxLength": 128 },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "providerId": { "type": "string", "maxLength": 128 },
+        "providerOwnerId": { "type": "string", "maxLength": 128 },
+        "serviceTitle": { "type": "string", "maxLength": 160 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientDisplayName": { "type": "string", "maxLength": 100 },
+        "message": { "type": "string", "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["pending_admin", "transmitted_to_provider", "archived"] },
+        "createdAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reservationId", "folderId", "providerId", "providerOwnerId", "serviceTitle", "clientId", "clientDisplayName", "message", "status", "createdAtIso"]
+    },
+    "FinancialArchive": {
+      "title": "FinancialArchive",
+      "description": "Minimal non-PII financial transaction reference retained for legal accounting and anti-duplicate Mobile Money ref locks",
+      "type": "object",
+      "properties": {
+        "reservationOrFolderRef": { "type": "string", "maxLength": 128 },
+        "transactionRef": { "type": "string", "maxLength": 100 },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "recordedDate": { "type": "string", "maxLength": 30 },
+        "recordKind": { "type": "string", "enum": ["dossier_fee", "reservation_payment"] },
+        "retentionPolicyLabel": { "type": "string", "maxLength": 200 },
+        "anonymizedAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reservationOrFolderRef", "transactionRef", "amount", "currency", "recordedDate", "recordKind", "retentionPolicyLabel", "anonymizedAtIso"]
     }
   },
   "firestore": {
@@ -826,7 +1115,7 @@
     },
     "/users/{userId}/private/{docId}": {
       "schema": { "$ref": "#/entities/UserPrivate" },
-      "description": "Strictly isolated PII contact data readable only by owner or admin"
+      "description": "Strictly isolated PII contact data and consented saved preferences readable only by owner or admin"
     },
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
@@ -852,6 +1141,14 @@
       "schema": { "$ref": "#/entities/JourneyItem" },
       "description": "Scheduled journey items synchronized via Master Gate to parent folder"
     },
+    "/journey_folders/{folderId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/JourneyIntention" },
+      "description": "Private trip intention and post-trip reflection answers strictly isolated to folder owner"
+    },
+    "/journey_folders/{folderId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/FolderExpense" },
+      "description": "On-site traveler personal expense entries scoped to parent folder"
+    },
     "/journey_folders/{folderId}/journal/{entryId}": {
       "schema": { "$ref": "#/entities/JournalEntry" },
       "description": "Electronic Travel Logbook checklist steps, souvenir notes, and progress tracking"
@@ -871,6 +1168,10 @@
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },
       "description": "Centralized user notifications scoped to recipientId"
+    },
+    "/notification_dispatches/{dispatchId}": {
+      "schema": { "$ref": "#/entities/NotificationDispatch" },
+      "description": "Unified multi-channel notification dispatch log for Admin monitoring"
     },
     "/cultural_stories/{storyId}": {
       "schema": { "$ref": "#/entities/CulturalStory" },
@@ -903,6 +1204,30 @@
     "/pilot_stocks/{stockId}": {
       "schema": { "$ref": "#/entities/PilotStock" },
       "description": "Confirmed room and vehicle stock records supporting Level C instant booking and anti-double-booking"
+    },
+    "/platform_content/{docId}": {
+      "schema": { "$ref": "#/entities/PlatformContent" },
+      "description": "Editable legal, charter, insurance, emergency, and institutional documents"
+    },
+    "/account_governance/{userId}": {
+      "schema": { "$ref": "#/entities/AccountGovernance" },
+      "description": "Admin-managed abandonment risk and booking block records"
+    },
+    "/folder_shares/{shareId}": {
+      "schema": { "$ref": "#/entities/FolderShare" },
+      "description": "Read-only revocable folder shares with visitor suggestions"
+    },
+    "/traveler_reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/TravelerReview" },
+      "description": "Moderated post-stay verified traveler reviews"
+    },
+    "/provider_thank_yous/{thankYouId}": {
+      "schema": { "$ref": "#/entities/ProviderThankYou" },
+      "description": "Private post-stay thank-you notes relayed to providers by Admin"
+    },
+    "/financial_archives/{archiveId}": {
+      "schema": { "$ref": "#/entities/FinancialArchive" },
+      "description": "Minimal non-PII financial records for Mobile Money reference uniqueness and legal accounting retention"
     }
   }
 }

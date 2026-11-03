@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { BookOpen, Compass, MapPin, Sparkles, Utensils, Calendar, ShieldCheck, ArrowRight, FileCheck2 } from 'lucide-react';
+import type { EmergencyNumberEntry } from '../../types/amaro';
 import {
   BENIN_12_DEPARTMENTS,
   BENIN_GENERAL_PROFILE,
   BENIN_THEMATIC_CIRCUITS,
 } from '../../data/beninEncyclopedia';
 import { COUNTRIES_REGISTRY, EDITORIAL_IMAGES } from '../../data/amaroRegistry';
+import { DEFAULT_EMERGENCY_NUMBERS_BJ } from '../../data/amaroGovernanceDefaults';
 
 interface BeninExploreSectionProps {
+  emergencyNumbers?: EmergencyNumberEntry[];
   onSelectCityFilter: (cityId: string) => void;
   onOpenJourneyCta: () => void;
   smartJourneyCtaLabel: string;
@@ -17,6 +20,7 @@ type EncyclopediaTab = 'portrait' | 'formalities' | 'departments' | 'culture' | 
 type NationalityProfile = 'ecowas' | 'africa_other' | 'international' | 'diaspora';
 
 export function BeninExploreSection({
+  emergencyNumbers = DEFAULT_EMERGENCY_NUMBERS_BJ,
   onSelectCityFilter,
   onOpenJourneyCta,
   smartJourneyCtaLabel,
@@ -155,10 +159,21 @@ export function BeninExploreSection({
               </strong>
             </div>
             <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <span className="text-xs text-slate-500 block">Indicatif &amp; Urgences</span>
-              <strong className="font-mono text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
-                +229 · 117 / 118
-              </strong>
+              <span className="text-xs text-slate-500 block">Indicatif &amp; Urgences (+229)</span>
+              <div className="mt-1 space-y-1 text-xs">
+                {emergencyNumbers.map((em) => (
+                  <div key={em.id} className="flex flex-wrap items-center justify-between gap-1">
+                    <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      {em.labelFr.split('(')[0].trim()} : {em.number}
+                    </span>
+                    {!em.verifiedByOwner && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold">
+                        numéro à confirmer
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 

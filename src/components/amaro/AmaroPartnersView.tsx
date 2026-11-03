@@ -99,24 +99,24 @@ export function AmaroPartnersView({
 
   return (
     <div className="space-y-8">
-      {/* Mandatory 4-Condition Commission Integrity Box */}
+      {/* Mandatory Harmonized Rule 5.2 Commission Integrity Box */}
       <section className="p-6 bg-[#0B192C] text-white border border-slate-800 rounded-2xl space-y-3">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-teal-400">
           <Award className="w-4 h-4" />
-          <span>Programme Officiel AMARO PARTNERS — Créateurs, Guides &amp; Ambassadeurs</span>
+          <span>Programme Officiel AMARO PARTNERS — Règle Unique Harmonisée</span>
         </div>
         <h2 className="font-display text-xl sm:text-2xl font-bold">
-          Règle Stricte d’Éligibilité des Commissions d’Apporteur
+          5 % du revenu d’organisation conservé par AMARO sur la 1re transaction finalisée
         </h2>
         <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-3xl">
-          Conformément à la charte financière AMARO.VOYAGE, <strong>aucune commission n’est jamais générée sur un simple clic, une visite ou une création de compte</strong>. Une commission devient <strong>Payable</strong> uniquement lorsque ces 4 conditions cumulatives sont vérifiées côté serveur et administration :
+          Conformément à la règle unique AMARO.VOYAGE, l’affilié perçoit <strong>5 % du revenu d’organisation effectivement conservé par AMARO</strong> sur la <strong>première transaction finalisée</strong> d’un nouveau client amené via son lien. Il n’existe <strong>aucune commission récurrente</strong> sur les réservations suivantes ni <strong>aucune prime au recrutement d’affiliés</strong> (zéro multi-niveaux).
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
           {[
-            '1. Lien ?ref=CODE actif hors auto-parrainage',
-            '2. Réservation réellement confirmée et non annulée',
-            '3. Paiement du voyageur intégralement encaissé',
-            '4. Règlement financier prestataire / commission réglé',
+            '1. Lien ?ref=CODE actif hors auto-parrainage (1re transaction uniquement)',
+            '2. 5 % calculés sur la marge nette conservée par AMARO',
+            '3. Commission annulée (0 FCFA) si réservation annulée ou remboursée',
+            '4. Validation et versement manuels par l’administrateur après encaissement',
           ].map((rule) => (
             <div
               key={rule}
@@ -278,12 +278,9 @@ export function AmaroPartnersView({
                 </strong>
               </div>
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                <span className="text-[11px] text-slate-500 block">Taux applicable</span>
+                <span className="text-[11px] text-slate-500 block">Règle unique (1re transaction)</span>
                 <strong className="font-mono text-lg font-bold">
-                  {myPartner.customCommissionRate > 0
-                    ? myPartner.customCommissionRate
-                    : countrySetting?.partnerCommissionPercent ?? 5}
-                  %
+                  {countrySetting?.partnerCommissionPercent ?? 5}% revenu AMARO
                 </strong>
               </div>
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
