@@ -137,7 +137,12 @@
         "dataOrigin": { "type": "string", "enum": ["verified_partner", "pending_verification", "public_directory", "demo_test"] },
         "verificationStatus": { "type": "string", "enum": ["verified", "partially_verified", "to_confirm"] },
         "sourceName": { "type": "string", "maxLength": 240 },
+        "sourceUrl": { "type": "string", "maxLength": 500 },
         "verifiedAt": { "type": "string", "maxLength": 40 },
+        "contactPhone": { "type": "string", "maxLength": 60 },
+        "contactWhatsapp": { "type": "string", "maxLength": 60 },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "publishedHours": { "type": "string", "maxLength": 240 },
         "neighborhood": { "type": "string", "maxLength": 140 },
         "standing": {
           "type": "string",
@@ -304,6 +309,11 @@
         "stage": { "type": "string", "enum": ["envisaged", "requested", "accepted", "confirmed"] },
         "notes": { "type": "string", "maxLength": 600 },
         "isFreeTimeBlock": { "type": "boolean" },
+        "selectedOffersJson": { "type": "string", "maxLength": 4000 },
+        "hasPriceToVerify": { "type": "boolean" },
+        "checkOutDate": { "type": "string", "maxLength": 20 },
+        "pickupLocation": { "type": "string", "maxLength": 200 },
+        "dropoffLocation": { "type": "string", "maxLength": 200 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -436,7 +446,7 @@
           "enum": ["unpaid", "initiated", "pending", "succeeded", "failed", "refunded"]
         },
         "alternativeProposal": { "type": "string", "maxLength": 800 },
-        "pricingSnapshot": { "type": "string", "minLength": 2, "maxLength": 600 },
+        "pricingSnapshot": { "type": "string", "minLength": 2, "maxLength": 1500 },
         "referralCode": { "type": "string", "maxLength": 40 },
         "providerSettled": { "type": "boolean" },
         "activationMode": {
@@ -469,6 +479,14 @@
           "enum": ["none", "pending_inform_cancellation", "informed"]
         },
         "localContributionXof": { "type": "number" },
+        "selectedOffersJson": { "type": "string", "maxLength": 4000 },
+        "hasPriceToVerify": { "type": "boolean" },
+        "checkOutDate": { "type": "string", "maxLength": 20 },
+        "pickupLocation": { "type": "string", "maxLength": 200 },
+        "dropoffLocation": { "type": "string", "maxLength": 200 },
+        "isPartialAcceptance": { "type": "boolean" },
+        "requestedUnitsTotal": { "type": "integer" },
+        "acceptedUnitsTotal": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -1106,6 +1124,63 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reservationOrFolderRef", "transactionRef", "amount", "currency", "recordedDate", "recordKind", "retentionPolicyLabel", "anonymizedAtIso"]
+    },
+    "ProviderOffer": {
+      "title": "ProviderOffer",
+      "description": "Structured room, vehicle, bus route, or service formula attached to a provider listing from one of the 3 authorized origins",
+      "type": "object",
+      "properties": {
+        "serviceId": { "type": "string", "maxLength": 128 },
+        "providerId": { "type": "string", "maxLength": 128 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "offerKind": {
+          "type": "string",
+          "enum": ["room", "vehicle", "bus_route", "menu_or_meal", "visit_formula", "guide_formula", "wellness_care", "craft_experience", "generic_fallback"]
+        },
+        "name": { "type": "string", "maxLength": 180 },
+        "shortDescription": { "type": "string", "maxLength": 800 },
+        "priceState": { "type": "string", "enum": ["displayed_price", "price_to_verify", "price_on_request"] },
+        "priceAmount": { "type": "number" },
+        "originalCurrency": { "type": "string", "enum": ["XOF", "EUR", "USD"] },
+        "priceUnit": { "type": "string", "maxLength": 80 },
+        "originSource": { "type": "string", "enum": ["web_census", "admin", "conventioned_provider"] },
+        "sourceName": { "type": "string", "maxLength": 240 },
+        "sourceUrl": { "type": "string", "maxLength": 500 },
+        "consultedAt": { "type": "string", "maxLength": 30 },
+        "confidenceLevel": { "type": "string", "enum": ["high", "medium", "low"] },
+        "updatedAtIso": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["serviceId", "providerId", "category", "offerKind", "name", "priceState", "priceAmount", "originalCurrency", "priceUnit", "originSource", "sourceName", "consultedAt"]
+    },
+    "CensusListing": {
+      "title": "CensusListing",
+      "description": "Admin-governed web census validation queue record for Benin providers, never published without explicit owner validation",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "maxLength": 180 },
+        "category": {
+          "type": "string",
+          "enum": ["accommodation", "transport", "restaurant", "site", "translation", "shopping", "wellness"]
+        },
+        "cityId": { "type": "string", "maxLength": 64 },
+        "cityName": { "type": "string", "maxLength": 120 },
+        "neighborhoodOrAddress": { "type": "string", "maxLength": 240 },
+        "shortDescription": { "type": "string", "maxLength": 1500 },
+        "contactPhone": { "type": "string", "maxLength": 60 },
+        "contactWhatsapp": { "type": "string", "maxLength": 60 },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "contactVerificationNote": { "type": "string", "maxLength": 60 },
+        "status": {
+          "type": "string",
+          "enum": ["to_validate", "incomplete", "possible_duplicate", "proposed_update", "published", "rejected"]
+        },
+        "confidenceLevel": { "type": "string", "enum": ["high", "medium", "low"] },
+        "updatedAtIso": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["businessName", "category", "cityId", "cityName", "status", "confidenceLevel", "updatedAtIso"]
     }
   },
   "firestore": {
@@ -1228,6 +1303,14 @@
     "/financial_archives/{archiveId}": {
       "schema": { "$ref": "#/entities/FinancialArchive" },
       "description": "Minimal non-PII financial records for Mobile Money reference uniqueness and legal accounting retention"
+    },
+    "/provider_offers/{offerId}": {
+      "schema": { "$ref": "#/entities/ProviderOffer" },
+      "description": "Structured room, vehicle, route, and service offers governed by the 3 authorized origins"
+    },
+    "/census_listings/{censusId}": {
+      "schema": { "$ref": "#/entities/CensusListing" },
+      "description": "Admin-only Benin web census validation queue"
     }
   }
 }

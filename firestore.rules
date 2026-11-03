@@ -166,7 +166,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'providerId', 'ownerId', 'title', 'category', 'countryCode', 'cityId',
           'address', 'description', 'priceAmount', 'priceKnown', 'currency', 'durationMinutes',
-          'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'verifiedAt',
+          'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'sourceUrl', 'verifiedAt',
+          'contactPhone', 'contactWhatsapp', 'contactEmail', 'publishedHours',
           'neighborhood', 'standing', 'activationLevel', 'pilotConventionSigned', 'cancellationPolicy',
           'customPhotoUrl', 'photoVerified', 'photoSource', 'photoUsageRights',
           'isSacredOrCeremonial', 'sacredNotice', 'linkedDirectoryServiceId',
@@ -189,7 +190,12 @@ service cloud.firestore {
         && data.dataOrigin is string && data.dataOrigin in ['verified_partner', 'pending_verification', 'public_directory', 'demo_test']
         && (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus in ['verified', 'partially_verified', 'to_confirm', 'unverified']))
         && (!('sourceName' in data) || (data.sourceName is string && data.sourceName.size() <= 240))
+        && (!('sourceUrl' in data) || (data.sourceUrl is string && data.sourceUrl.size() <= 500))
         && (!('verifiedAt' in data) || (data.verifiedAt is string && data.verifiedAt.size() <= 40))
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 60))
+        && (!('contactWhatsapp' in data) || (data.contactWhatsapp is string && data.contactWhatsapp.size() <= 60))
+        && (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 200))
+        && (!('publishedHours' in data) || (data.publishedHours is string && data.publishedHours.size() <= 240))
         && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 140))
         && (!('standing' in data) || (data.standing is string && data.standing in [
           'international_5', 'upper_4', 'comfort_3', 'boutique_charm', 'eco_nature', 'residence_apart', 'budget_2',
@@ -263,7 +269,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'folderId', 'ownerId', 'serviceId', 'providerId', 'serviceTitle', 'category', 'cityId',
           'date', 'startTime', 'endTime', 'durationMinutes', 'estimatedCost',
-          'currency', 'stage', 'notes', 'isFreeTimeBlock', 'createdAt', 'updatedAt'
+          'currency', 'stage', 'notes', 'isFreeTimeBlock',
+          'selectedOffersJson', 'hasPriceToVerify', 'checkOutDate', 'pickupLocation', 'dropoffLocation',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.folderId)
         && isValidId(data.ownerId)
@@ -281,6 +289,11 @@ service cloud.firestore {
         && data.stage is string && data.stage in ['envisaged', 'requested', 'accepted', 'confirmed']
         && data.notes is string && data.notes.size() <= 600
         && (!('isFreeTimeBlock' in data) || data.isFreeTimeBlock is bool)
+        && (!('selectedOffersJson' in data) || (data.selectedOffersJson is string && data.selectedOffersJson.size() <= 4000))
+        && (!('hasPriceToVerify' in data) || data.hasPriceToVerify is bool)
+        && (!('checkOutDate' in data) || (data.checkOutDate is string && data.checkOutDate.size() <= 20))
+        && (!('pickupLocation' in data) || (data.pickupLocation is string && data.pickupLocation.size() <= 200))
+        && (!('dropoffLocation' in data) || (data.dropoffLocation is string && data.dropoffLocation.size() <= 200))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -392,6 +405,7 @@ service cloud.firestore {
         && data.participants <= svc.capacity
         && (
           isWithinCurrencyTolerance(data.providerPrice, svc.priceAmount * data.participants, data.currency)
+          || ('selectedOffersJson' in data && data.pricingSnapshot.matches('.*"verifiedByServer":true.*'))
           || (
             'allocatedStockId' in data
             && isValidId(data.allocatedStockId)
@@ -458,6 +472,8 @@ service cloud.firestore {
           'dispatchChannel', 'dispatchStatus', 'responseDeadlineAt', 'followUpCount',
           'circuitType', 'coordinationStatus', 'coordinationContactedAt', 'coordinationOutcome',
           'halfTimeReminderSentAt', 'balanceDeadlineAt', 'adminNotifyProviderTask', 'localContributionXof',
+          'selectedOffersJson', 'hasPriceToVerify', 'checkOutDate', 'pickupLocation', 'dropoffLocation',
+          'isPartialAcceptance', 'requestedUnitsTotal', 'acceptedUnitsTotal',
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
@@ -484,7 +500,7 @@ service cloud.firestore {
           'unpaid', 'initiated', 'pending', 'succeeded', 'failed', 'refunded'
         ]
         && data.alternativeProposal is string && data.alternativeProposal.size() <= 800
-        && data.pricingSnapshot is string && data.pricingSnapshot.size() >= 2 && data.pricingSnapshot.size() <= 600
+        && data.pricingSnapshot is string && data.pricingSnapshot.size() >= 2 && data.pricingSnapshot.size() <= 1500
         && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() <= 40))
         && (!('providerSettled' in data) || data.providerSettled is bool)
         && (!('activationMode' in data) || (data.activationMode is string && data.activationMode in ['directory_concierge', 'level_b_validation', 'level_c_instant']))
@@ -497,6 +513,14 @@ service cloud.firestore {
         && (!('circuitType' in data) || (data.circuitType is string && data.circuitType in ['circuit_a_directory', 'circuit_b_partner']))
         && (!('coordinationStatus' in data) || (data.coordinationStatus is string && data.coordinationStatus in ['to_contact', 'contacted', 'confirmed', 'unavailable', 'quote_received']))
         && (!('localContributionXof' in data) || (data.localContributionXof is number && data.localContributionXof >= 0))
+        && (!('selectedOffersJson' in data) || (data.selectedOffersJson is string && data.selectedOffersJson.size() <= 4000))
+        && (!('hasPriceToVerify' in data) || data.hasPriceToVerify is bool)
+        && (!('checkOutDate' in data) || (data.checkOutDate is string && data.checkOutDate.size() <= 20))
+        && (!('pickupLocation' in data) || (data.pickupLocation is string && data.pickupLocation.size() <= 200))
+        && (!('dropoffLocation' in data) || (data.dropoffLocation is string && data.dropoffLocation.size() <= 200))
+        && (!('isPartialAcceptance' in data) || data.isPartialAcceptance is bool)
+        && (!('requestedUnitsTotal' in data) || (data.requestedUnitsTotal is int && data.requestedUnitsTotal >= 0 && data.requestedUnitsTotal <= 100))
+        && (!('acceptedUnitsTotal' in data) || (data.acceptedUnitsTotal is int && data.acceptedUnitsTotal >= 0 && data.acceptedUnitsTotal <= 100))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1077,7 +1101,9 @@ service cloud.firestore {
             (get(/databases/$(database)/documents/journey_folders/$(folderId)).data.ownerId == request.auth.uid
               && incoming().diff(existing()).affectedKeys().hasOnly([
                 'serviceTitle', 'providerId', 'category', 'cityId', 'date', 'startTime', 'endTime',
-                'durationMinutes', 'estimatedCost', 'stage', 'notes', 'isFreeTimeBlock', 'updatedAt'
+                'durationMinutes', 'estimatedCost', 'stage', 'notes', 'isFreeTimeBlock',
+                'selectedOffersJson', 'hasPriceToVerify', 'checkOutDate', 'pickupLocation', 'dropoffLocation',
+                'updatedAt'
               ]))
             || isAdmin()
           );
@@ -1751,6 +1777,48 @@ service cloud.firestore {
         && incoming().amount is number && incoming().amount >= 0;
 
       allow update, delete: if isAdmin() && isValidId(archiveId);
+    }
+
+    // --- 21. Structured Provider Offers (Rooms, Vehicles, Formulas — Strictly 3 Authorized Origins) ---
+    match /provider_offers/{offerId} {
+      allow get, list: if true;
+
+      allow create, update: if isVerifiedUser()
+        && isValidId(offerId)
+        && isValidId(incoming().serviceId)
+        && isValidId(incoming().providerId)
+        && isValidCategory(incoming().category)
+        && incoming().name is string && incoming().name.size() >= 2 && incoming().name.size() <= 180
+        && incoming().priceState in ['displayed_price', 'price_to_verify', 'price_on_request']
+        && incoming().priceAmount is number && incoming().priceAmount >= 0
+        && incoming().originSource in ['web_census', 'admin', 'conventioned_provider']
+        && (
+          isAdmin()
+          || (
+            incoming().originSource == 'conventioned_provider'
+            && exists(/databases/$(database)/documents/providers/$(incoming().providerId))
+            && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.ownerId == request.auth.uid
+            && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.verificationStatus == 'verified'
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(offerId)
+        && (
+          isAdmin()
+          || (
+            exists(/databases/$(database)/documents/providers/$(existing().providerId))
+            && get(/databases/$(database)/documents/providers/$(existing().providerId)).data.ownerId == request.auth.uid
+            && get(/databases/$(database)/documents/providers/$(existing().providerId)).data.verificationStatus == 'verified'
+          )
+        );
+    }
+
+    // --- 22. Benin Web Census Validation Queue (Strictly Admin-Only) ---
+    match /census_listings/{censusId} {
+      allow get: if isAdmin() && isValidId(censusId);
+      allow list: if isBootstrappedAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(censusId);
     }
   }
 }

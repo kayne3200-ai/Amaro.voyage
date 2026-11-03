@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type {
   CurrencyCode,
   PartnerActivationLevel,
+  ProviderOfferDoc,
   ServiceCategory,
 } from '../types/amaro';
 import { BENIN_ACCOMMODATIONS_DIRECTORY } from '../data/beninAccommodations';
@@ -20,8 +21,10 @@ export interface ServerServiceRecord {
   category: ServiceCategory;
   countryCode: string;
   cityId: string;
+  address?: string;
   priceAmount: number;
   priceKnown?: boolean;
+  priceRangeNote?: string;
   currency: CurrencyCode;
   durationMinutes: number;
   capacity: number;
@@ -33,6 +36,16 @@ export interface ServerServiceRecord {
   coveredCities?: string[];
   blockedDates?: string[];
   providerResponseHours?: number;
+  roomTypes?: string[];
+  amenities?: string[];
+  languagesSpoken?: string[];
+  unitTariffs?: Array<{ unitLabel: string; priceAmount: number; capacity?: number }>;
+  sourceName?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  websiteUrl?: string;
+  contactPhone?: string;
+  structuredOffers?: ProviderOfferDoc[];
 }
 
 export interface ServerPilotStockRecord {
@@ -108,6 +121,7 @@ export interface ScheduleSlot {
   startTime: string;
   endTime: string;
   durationMinutes: number;
+  checkOutDate?: string;
   isFreeTimeBlock?: boolean;
 }
 
@@ -245,14 +259,26 @@ for (const item of SERVER_BENIN_PUBLIC_DIRECTORY) {
     category: item.category,
     countryCode: item.countryCode || 'BJ',
     cityId: item.cityId,
+    address: item.address,
     priceAmount: item.priceKnown === false ? 0 : Number(item.priceAmount ?? 0),
     priceKnown: item.priceKnown !== false,
+    priceRangeNote: item.priceRangeNote,
     currency: item.currency || 'XOF',
     durationMinutes: Math.max(15, Number(item.durationMinutes || 90)),
     capacity: Math.max(1, Number(item.capacity || 4)),
     status: item.status || 'published',
     dataOrigin: item.dataOrigin || 'public_directory',
     coveredCities: item.coveredCities,
+    roomTypes: item.roomTypes,
+    amenities: item.amenities,
+    languagesSpoken: item.languagesSpoken,
+    unitTariffs: item.unitTariffs,
+    sourceName: item.sourceName,
+    sourceUrl: item.sourceUrl,
+    verifiedAt: item.verifiedAt,
+    websiteUrl: item.websiteUrl,
+    contactPhone: item.contactPhone,
+    structuredOffers: item.structuredOffers,
   };
 }
 
@@ -329,6 +355,9 @@ export function computeAuthoritativeQuote(params: {
   rateSource: string;
   rateStatus: string;
   quotedAt?: string;
+  overrideProviderSubtotal?: number;
+  hasPriceToVerify?: boolean;
+  selectedOffersCount?: number;
 }) {
   const {
     unitPrice,
@@ -341,14 +370,19 @@ export function computeAuthoritativeQuote(params: {
     rateSource,
     rateStatus,
   } = params;
-  const priceKnown = params.priceKnown !== false && unitPrice > 0;
+  const hasOverride = typeof params.overrideProviderSubtotal === 'number';
+  const priceKnown = hasOverride
+    ? params.priceKnown !== false && (params.overrideProviderSubtotal || 0) > 0
+    : params.priceKnown !== false && unitPrice > 0;
   const effectiveUnitPrice = params.priceKnown === false ? 0 : unitPrice;
   const quotedAt = params.quotedAt || new Date().toISOString();
   const effectiveMarginPercent = resolveEffectiveMarginPercent(setting, dataOrigin);
   const circuitType =
     dataOrigin === 'verified_partner' ? 'circuit_b_partner' : 'circuit_a_directory';
 
-  const rawSubtotal = effectiveUnitPrice * participants;
+  const rawSubtotal = hasOverride
+    ? Math.max(0, Number(params.overrideProviderSubtotal || 0))
+    : effectiveUnitPrice * participants;
   const providerPrice = roundCurrencyAmount(rawSubtotal, currency);
   const rawCommission =
     (providerPrice * effectiveMarginPercent) / 100 + setting.serviceFeeFlat;
@@ -363,9 +397,15 @@ export function computeAuthoritativeQuote(params: {
       ? roundCurrencyAmount((amaroFee * localContribPct) / 100, currency)
       : 0;
 
+  const hasPriceToVerify = Boolean(params.hasPriceToVerify || !priceKnown);
+
   const pricingSnapshotObj = {
     verifiedByServer: true,
     priceKnown,
+    hasPriceToVerify,
+    ...(typeof params.selectedOffersCount === 'number'
+      ? { selectedOffersCount: params.selectedOffersCount }
+      : {}),
     circuitType,
     unitPrice: roundCurrencyAmount(effectiveUnitPrice, currency),
     participants,
@@ -382,6 +422,7 @@ export function computeAuthoritativeQuote(params: {
   return {
     verifiedByServer: true,
     priceKnown,
+    hasPriceToVerify,
     circuitType,
     effectiveMarginPercent,
     localContributionAmount,
@@ -627,16 +668,22 @@ export function evaluateJourneyBrain(
     );
   }
 
-  // Partie 7 — Accommodation Coherence
+  // Partie 7 & B2 — Accommodation Coherence:
+  // Multiple rooms in the SAME establishment (same serviceId) on the same night are allowed;
+  // two DIFFERENT accommodation establishments on the same night (including multi-night stays [date, checkOutDate)) are strictly rejected.
   if (candidate.category === 'accommodation') {
-    const otherLodging = sameDayItems.find(
-      (it) =>
-        it.category === 'accommodation' &&
-        (!candidate.serviceId || it.serviceId !== candidate.serviceId)
-    );
-    if (otherLodging && !involvesCityChange) {
+    const otherLodging = existingItems.find((it) => {
+      if (it.category !== 'accommodation') return false;
+      if (candidate.serviceId && it.serviceId === candidate.serviceId) return false;
+      if (it.date === candidate.date) return true;
+      if (it.checkOutDate && it.checkOutDate > it.date) {
+        return candidate.date >= it.date && candidate.date < it.checkOutDate;
+      }
+      return false;
+    });
+    if (otherLodging) {
       conflicts.push(
-        `Règle Hébergement : Un autre établissement (« ${otherLodging.serviceTitle} ») est déjà prévu à cette date dans la même ville.`
+        `Règle Hébergement : Un autre établissement (« ${otherLodging.serviceTitle} ») est déjà prévu pour la même nuit (${candidate.date}). Vous pouvez réserver plusieurs chambres dans le même établissement, mais pas deux hébergements différents la même nuit.`
       );
     }
   }

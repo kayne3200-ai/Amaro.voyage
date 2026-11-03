@@ -15,6 +15,7 @@ import {
   Lock,
   MapPin,
   MessageCircle,
+  Minus,
   Plus,
   Printer,
   RefreshCw,
@@ -40,6 +41,7 @@ import type {
   LocaleCode,
   NotificationDoc,
   PlatformContentDoc,
+  ProviderOfferDoc,
   ReservationDoc,
   ServiceCategory,
   SystemSettingDoc,
@@ -54,6 +56,11 @@ import {
 } from '../../data/amaroGovernanceDefaults';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { authorizedFetch } from '../../lib/apiClient';
+import {
+  OFFER_PRICE_STATE_LABELS,
+  parseSelectedOffersJson,
+  resolveServiceOffers,
+} from '../../lib/offerEngine';
 import {
   IDENTITY_STATUS_META,
   IdentityVerificationModal,
@@ -201,6 +208,17 @@ interface JourneyHubViewProps {
     message: string;
   }) => Promise<void>;
   onRefreshFolderState?: () => void;
+  providerOffers?: ProviderOfferDoc[];
+  onClientUpdateReservationOffers?: (
+    reservationId: string,
+    payload: {
+      participants: number;
+      checkOutDate?: string;
+      pickupLocation?: string;
+      dropoffLocation?: string;
+      selectedOffers: Array<{ offerId: string; quantity: number }>;
+    }
+  ) => Promise<void>;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
@@ -226,7 +244,10 @@ function formatMoney(amount: number, cur: CurrencyCode): string {
 
 function isPriceOnRequestSnapshot(pricingSnapshot: string | undefined): boolean {
   if (!pricingSnapshot) return false;
-  return pricingSnapshot.includes('"priceKnown":false');
+  return (
+    pricingSnapshot.includes('"priceKnown":false') ||
+    pricingSnapshot.includes('"hasPriceToVerify":true')
+  );
 }
 
 const FOLDER_STATUS_LABELS: Record<JourneyFolderDoc['status'], string> =
@@ -296,6 +317,8 @@ export function JourneyHubView({
   travelerReviews = [],
   onSubmitTravelerReview,
   onSendProviderThankYou,
+  providerOffers = [],
+  onClientUpdateReservationOffers,
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale];
 
@@ -383,6 +406,13 @@ export function JourneyHubView({
   const [stepEditTime, setStepEditTime] = useState<string>('');
   const [stepEditNotes, setStepEditNotes] = useState<string>('');
   const [savingStepEdit, setSavingStepEdit] = useState<boolean>(false);
+
+  // Unconfirmed Reservation Offer Modification (Partie B6)
+  const [editingOffersResId, setEditingOffersResId] = useState<string | null>(null);
+  const [editOfferQuantities, setEditOfferQuantities] = useState<Record<string, number>>({});
+  const [editOfferParticipants, setEditOfferParticipants] = useState<number>(2);
+  const [editOfferCheckOutDate, setEditOfferCheckOutDate] = useState<string>('');
+  const [savingOfferEdit, setSavingOfferEdit] = useState<boolean>(false);
 
   // Electronic Logbook (Carnet de Voyage Électronique) local draft states
   const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
@@ -541,6 +571,14 @@ export function JourneyHubView({
     const cap = activeFolder?.totalBudget || 0;
     const overrun = cap > 0 && cumulativeProjected > cap ? cumulativeProjected - cap : 0;
 
+    const hasEstimationItems =
+      folderItems.some((it) => Boolean(it.hasPriceToVerify) || it.estimatedCost === 0) ||
+      folderReservations.some(
+        (r) =>
+          !['cancelled', 'rejected', 'refunded'].includes(r.status) &&
+          (Boolean(r.hasPriceToVerify) || isPriceOnRequestSnapshot(r.pricingSnapshot))
+      );
+
     return {
       targetCur,
       estimated,
@@ -558,6 +596,7 @@ export function JourneyHubView({
       cumulativeProjected,
       cap,
       overrun,
+      hasEstimationItems,
     };
   }, [
     activeFolder,
@@ -2042,6 +2081,12 @@ export function JourneyHubView({
               </form>
             )}
 
+            {budgetBreakdown.hasEstimationItems && (
+              <div className="p-3.5 bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-900 rounded-xl text-xs text-amber-950 dark:text-amber-200">
+                <strong>Estimation :</strong> ce dossier inclut au moins une offre « Prix à vérifier » ou « Tarif sur demande ». Le total affiché reste une estimation jusqu’à confirmation écrite du tarif exact.
+              </div>
+            )}
+
             {budgetBreakdown.overrun > 0 && (
               <div className="p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl text-xs text-red-800 dark:text-red-300 font-medium tabular-nums">
                 Alerte dépassement budgétaire : le cumul engagé et estimé dépasse votre plafond global de{' '}
@@ -2218,6 +2263,38 @@ export function JourneyHubView({
                                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                                   {it.serviceTitle}
                                 </h3>
+                                {(() => {
+                                  const selLines = parseSelectedOffersJson(it.selectedOffersJson);
+                                  if (selLines.length === 0 && !it.checkOutDate && !it.pickupLocation) {
+                                    return null;
+                                  }
+                                  return (
+                                    <div className="text-xs text-slate-600 dark:text-slate-300 space-y-0.5 tabular-nums">
+                                      {selLines.length > 0 && (
+                                        <p>
+                                          Offres sélectionnées :{' '}
+                                          <strong>
+                                            {selLines
+                                              .map((l) => `${l.quantity}× ${l.offerName}`)
+                                              .join(' · ')}
+                                          </strong>
+                                        </p>
+                                      )}
+                                      {it.checkOutDate && (
+                                        <p>
+                                          Séjour : du <span className="font-mono">{it.date}</span> au{' '}
+                                          <span className="font-mono">{it.checkOutDate}</span>
+                                        </p>
+                                      )}
+                                      {(it.pickupLocation || it.dropoffLocation) && (
+                                        <p>
+                                          Trajet : {it.pickupLocation || 'Non précisé'} →{' '}
+                                          {it.dropoffLocation || 'Non précisé'}
+                                        </p>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                                 {it.notes && (
                                   <p className="text-xs text-slate-600 dark:text-slate-400">
                                     Note : {it.notes}
@@ -2225,7 +2302,7 @@ export function JourneyHubView({
                                 )}
                                 <p className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
                                   {it.estimatedCost > 0
-                                    ? `Coût estimé : ${formatMoney(it.estimatedCost, it.currency)}`
+                                    ? `Coût ${it.hasPriceToVerify ? 'estimé (à vérifier)' : 'estimé'} : ${formatMoney(it.estimatedCost, it.currency)}`
                                     : 'Tarif sur demande / à confirmer'}{' '}
                                   · Statut agenda : <strong>{it.stage}</strong>
                                 </p>
@@ -3007,9 +3084,93 @@ export function JourneyHubView({
                         )}
                       </div>
 
-                      <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                        {res.serviceTitle}
-                      </h3>
+                      <div className="space-y-1">
+                        <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                          {res.serviceTitle}
+                        </h3>
+                        {(() => {
+                          const selLines = parseSelectedOffersJson(res.selectedOffersJson);
+                          return (
+                            <div className="text-xs text-slate-600 dark:text-slate-300 space-y-0.5 tabular-nums">
+                              {selLines.length > 0 && (
+                                <p>
+                                  Offres demandées :{' '}
+                                  <strong>
+                                    {selLines
+                                      .map((ln) =>
+                                        typeof ln.acceptedQuantity === 'number' &&
+                                        ln.acceptedQuantity !== ln.quantity
+                                          ? `${ln.acceptedQuantity}/${ln.quantity}× ${ln.offerName}`
+                                          : `${ln.quantity}× ${ln.offerName}`
+                                      )
+                                      .join(' · ')}
+                                  </strong>
+                                  {res.hasPriceToVerify ? ' · Estimation (prix à vérifier)' : ''}
+                                </p>
+                              )}
+                              {res.checkOutDate && (
+                                <p>
+                                  Nuits : arrivée <span className="font-mono">{res.scheduledDate}</span>{' '}
+                                  → départ <span className="font-mono">{res.checkOutDate}</span>
+                                </p>
+                              )}
+                              {(res.pickupLocation || res.dropoffLocation) && (
+                                <p>
+                                  Prise en charge : {res.pickupLocation || 'À préciser'} →{' '}
+                                  {res.dropoffLocation || 'À préciser'}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Partial Offer Confirmation Notice (Partie B6) */}
+                      {res.isPartialAcceptance && (
+                        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-800 space-y-2 text-xs text-amber-950 dark:text-amber-200 tabular-nums">
+                          <p className="font-semibold">
+                            Disponibilité partielle confirmée :{' '}
+                            <strong>
+                              {res.acceptedUnitsTotal ?? 1} unité
+                              {(res.acceptedUnitsTotal ?? 1) > 1 ? 's' : ''} disponible
+                              {(res.acceptedUnitsTotal ?? 1) > 1 ? 's' : ''} sur{' '}
+                              {res.requestedUnitsTotal ?? 1} demandée
+                              {(res.requestedUnitsTotal ?? 1) > 1 ? 's' : ''}
+                            </strong>
+                            . Le total a été recalculé automatiquement à{' '}
+                            <strong className="font-mono">
+                              {formatMoney(res.totalAmount, res.currency)}
+                            </strong>
+                            .
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {res.status === 'alternative_proposed' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={async () => {
+                                  setBusyReservationId(res.id);
+                                  try {
+                                    await onClientValidateReservation(res);
+                                  } finally {
+                                    setBusyReservationId(null);
+                                  }
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold"
+                              >
+                                Accepter les unités disponibles ({res.acceptedUnitsTotal ?? 1})
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleFetchSmartAlternatives(res, false)}
+                              className="px-3 py-1.5 rounded-lg bg-[#0B192C] text-white font-semibold"
+                            >
+                              Chercher un second établissement / véhicule complémentaire
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Visual Chronology Progress Bar (Partie 13) */}
                       {stepIdx > 0 && (
@@ -3324,6 +3485,49 @@ export function JourneyHubView({
                           </button>
                         )}
 
+                        {onClientUpdateReservationOffers &&
+                          !['confirmed', 'cancelled', 'refunded', 'rejected'].includes(
+                            res.status
+                          ) &&
+                          res.paymentStatus !== 'succeeded' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (editingOffersResId === res.id) {
+                                  setEditingOffersResId(null);
+                                  return;
+                                }
+                                const svc = catalogue.find((c) => c.id === res.serviceId);
+                                const resolved = svc
+                                  ? resolveServiceOffers(svc, providerOffers)
+                                  : [];
+                                const existingLines = parseSelectedOffersJson(
+                                  res.selectedOffersJson
+                                );
+                                const nextQty: Record<string, number> = {};
+                                if (existingLines.length > 0) {
+                                  for (const ln of existingLines) {
+                                    nextQty[ln.offerId] = ln.quantity;
+                                  }
+                                } else if (resolved[0]) {
+                                  nextQty[resolved[0].id] = 1;
+                                }
+                                setEditOfferQuantities(nextQty);
+                                setEditOfferParticipants(res.participants || 2);
+                                setEditOfferCheckOutDate(res.checkOutDate || '');
+                                setEditingOffersResId(res.id);
+                              }}
+                              className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-xl"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>
+                                {editingOffersResId === res.id
+                                  ? 'Fermer l’édition'
+                                  : 'Modifier offres / quantités'}
+                              </span>
+                            </button>
+                          )}
+
                         <button
                           type="button"
                           onClick={() => void handleFetchSmartAlternatives(res, false)}
@@ -3333,6 +3537,158 @@ export function JourneyHubView({
                           <span>Voir jusqu’à 3 alternatives</span>
                         </button>
                       </div>
+
+                      {/* Inline Unconfirmed Offer Selection Editor (Partie B6) */}
+                      {editingOffersResId === res.id &&
+                        onClientUpdateReservationOffers &&
+                        (() => {
+                          const svc = catalogue.find((c) => c.id === res.serviceId);
+                          const availOffers = svc
+                            ? resolveServiceOffers(svc, providerOffers)
+                            : [];
+                          const payloadOffers = Object.entries(editOfferQuantities)
+                            .filter(([, q]) => q > 0)
+                            .map(([offerId, quantity]) => ({ offerId, quantity }));
+
+                          return (
+                            <form
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                if (payloadOffers.length === 0) return;
+                                setSavingOfferEdit(true);
+                                try {
+                                  await onClientUpdateReservationOffers(res.id, {
+                                    participants: editOfferParticipants,
+                                    checkOutDate: editOfferCheckOutDate || undefined,
+                                    pickupLocation: res.pickupLocation,
+                                    dropoffLocation: res.dropoffLocation,
+                                    selectedOffers: payloadOffers,
+                                  });
+                                  setEditingOffersResId(null);
+                                } finally {
+                                  setSavingOfferEdit(false);
+                                }
+                              }}
+                              className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3 text-xs"
+                            >
+                              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                                Ajuster les offres et quantités demandées (tant que la demande n’est pas confirmée)
+                              </p>
+                              <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900">
+                                {availOffers.map((off) => {
+                                  const q = editOfferQuantities[off.id] || 0;
+                                  return (
+                                    <div
+                                      key={off.id}
+                                      className="p-2.5 flex items-center justify-between gap-2"
+                                    >
+                                      <div>
+                                        <strong className="block text-slate-900 dark:text-slate-100">
+                                          {off.name}
+                                        </strong>
+                                        <span className="text-[11px] text-slate-500 tabular-nums">
+                                          {off.priceState === 'price_on_request' ||
+                                          off.priceAmount <= 0
+                                            ? OFFER_PRICE_STATE_LABELS.price_on_request
+                                            : `${off.priceAmount.toLocaleString('fr-FR')} ${
+                                                off.originalCurrency === 'XOF'
+                                                  ? 'FCFA'
+                                                  : off.originalCurrency
+                                              } · ${off.priceUnit}`}
+                                        </span>
+                                      </div>
+                                      <div className="inline-flex items-center gap-1.5 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5">
+                                        <button
+                                          type="button"
+                                          disabled={q === 0}
+                                          onClick={() =>
+                                            setEditOfferQuantities((prev) => {
+                                              const next = Math.max(0, (prev[off.id] || 0) - 1);
+                                              const copy = { ...prev };
+                                              if (next === 0) delete copy[off.id];
+                                              else copy[off.id] = next;
+                                              return copy;
+                                            })
+                                          }
+                                          className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center disabled:opacity-35"
+                                        >
+                                          <Minus className="w-3 h-3" />
+                                        </button>
+                                        <span className="w-5 text-center font-mono tabular-nums font-bold">
+                                          {q}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setEditOfferQuantities((prev) => ({
+                                              ...prev,
+                                              [off.id]: Math.min(20, (prev[off.id] || 0) + 1),
+                                            }))
+                                          }
+                                          className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center"
+                                        >
+                                          <Plus className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-[11px] font-medium mb-1">
+                                    Nombre de voyageurs
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={50}
+                                    value={editOfferParticipants}
+                                    onChange={(e) =>
+                                      setEditOfferParticipants(
+                                        Math.max(1, Number(e.target.value) || 1)
+                                      )
+                                    }
+                                    className="w-full min-h-[38px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                  />
+                                </div>
+                                {res.category === 'accommodation' && (
+                                  <div>
+                                    <label className="block text-[11px] font-medium mb-1">
+                                      Date de départ
+                                    </label>
+                                    <input
+                                      type="date"
+                                      value={editOfferCheckOutDate}
+                                      onChange={(e) => setEditOfferCheckOutDate(e.target.value)}
+                                      className="w-full min-h-[38px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={savingOfferEdit || payloadOffers.length === 0}
+                                  className="min-h-[38px] px-4 py-1.5 font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 disabled:opacity-45 rounded-lg"
+                                >
+                                  {savingOfferEdit
+                                    ? 'Mise à jour...'
+                                    : 'Enregistrer et recalculer'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingOffersResId(null)}
+                                  className="min-h-[38px] px-3 py-1.5 text-slate-500"
+                                >
+                                  Annuler
+                                </button>
+                              </div>
+                            </form>
+                          );
+                        })()}
 
                       {/* Post-Stay Verified Review (6.3) & Private Provider Thank-You (9.4) */}
                       {(res.status === 'confirmed' || res.paymentStatus === 'succeeded') && (

@@ -33,14 +33,21 @@ import {
   redactSecrets,
   type TokenVerifierFn,
 } from '../src/server/securityMiddleware';
+import { INITIAL_BENIN_WEB_CENSUS_RECORDS } from '../src/data/beninWebCensusSeed';
+import {
+  CIRCUIT_A_HONEST_AVAILABILITY_TEXT,
+  GENERIC_FALLBACK_ROOM_LABEL,
+} from '../src/lib/offerEngine';
 import type {
   AccountGovernanceDoc,
+  CensusListingDoc,
   DossierFeeStatus,
   FinancialArchiveDoc,
   IdentityAccessLogDoc,
   JourneyFolderStatus,
   NotificationDispatchDoc,
   PaymentStatus,
+  ProviderOfferDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ReservationStatus,
@@ -89,6 +96,12 @@ class InMemoryTestStore implements AmaroServerStore {
   readonly financialArchives = new Map<string, FinancialArchiveDoc>();
   readonly deletedUsers = new Set<string>();
   readonly usedDossierTxRefs = new Set<string>();
+  readonly providerOffers = new Map<string, ProviderOfferDoc>();
+  readonly censusListings = new Map<string, CensusListingDoc>();
+  readonly verifiedProviders = new Map<
+    string,
+    { ownerId: string; verificationStatus: 'pending' | 'verified' | 'rejected' }
+  >();
   private readonly inFlight = new Set<string>();
   artificialCommitDelayMs = 0;
 
@@ -115,8 +128,19 @@ class InMemoryTestStore implements AmaroServerStore {
     this.financialArchives.clear();
     this.deletedUsers.clear();
     this.usedDossierTxRefs.clear();
+    this.providerOffers.clear();
+    this.censusListings.clear();
+    this.verifiedProviders.clear();
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
+
+    this.verifiedProviders.set('prov-cotonou-1', {
+      ownerId: 'provider-owner-uid',
+      verificationStatus: 'verified',
+    });
+    for (const rec of INITIAL_BENIN_WEB_CENSUS_RECORDS) {
+      this.censusListings.set(rec.id, structuredClone(rec));
+    }
 
     // Seed all 168 Benin public directory items + 7 official demo items in memory only
     for (const [id, svc] of Object.entries(OFFICIAL_PUBLIC_AND_DEMO_SERVICES)) {
@@ -308,6 +332,18 @@ class InMemoryTestStore implements AmaroServerStore {
       dispatchStatus: r.dispatchStatus,
       responseDeadlineAt: r.responseDeadlineAt,
       followUpCount: r.followUpCount,
+      circuitType: r.circuitType,
+      coordinationStatus: r.coordinationStatus,
+      coordinationContactedAt: (r as any).coordinationContactedAt,
+      coordinationOutcome: (r as any).coordinationOutcome,
+      selectedOffersJson: r.selectedOffersJson,
+      hasPriceToVerify: r.hasPriceToVerify,
+      checkOutDate: r.checkOutDate,
+      pickupLocation: r.pickupLocation,
+      dropoffLocation: r.dropoffLocation,
+      isPartialAcceptance: (r as any).isPartialAcceptance,
+      requestedUnitsTotal: r.requestedUnitsTotal,
+      acceptedUnitsTotal: (r as any).acceptedUnitsTotal,
       updatedAtIso: r.updatedAtIso,
     };
   }
@@ -323,6 +359,24 @@ class InMemoryTestStore implements AmaroServerStore {
     dispatchStatus?: ReservationDispatchStatus;
     responseDeadlineAt?: string;
     followUpCount?: number;
+    coordinationStatus?:
+      | 'to_contact'
+      | 'contacted'
+      | 'confirmed'
+      | 'unavailable'
+      | 'quote_received';
+    coordinationContactedAt?: string;
+    coordinationOutcome?: string;
+    providerPrice?: number;
+    amaroFee?: number;
+    taxAmount?: number;
+    totalAmount?: number;
+    pricingSnapshot?: string;
+    selectedOffersJson?: string;
+    isPartialAcceptance?: boolean;
+    requestedUnitsTotal?: number;
+    acceptedUnitsTotal?: number;
+    folderIdToMarkPartiallyConfirmed?: string;
     releaseStock?: {
       stockId: string;
       units: number;
@@ -343,6 +397,16 @@ class InMemoryTestStore implements AmaroServerStore {
       }
     }
 
+    if (params.folderIdToMarkPartiallyConfirmed) {
+      const folder = this.folders.get(params.folderIdToMarkPartiallyConfirmed);
+      if (folder) {
+        this.folders.set(folder.id, {
+          ...folder,
+          status: 'partially_confirmed',
+        });
+      }
+    }
+
     this.reservations.set(params.reservationId, {
       ...existing,
       status: params.status,
@@ -356,9 +420,31 @@ class InMemoryTestStore implements AmaroServerStore {
       ...(typeof params.followUpCount === 'number'
         ? { followUpCount: params.followUpCount }
         : {}),
+      ...(params.coordinationStatus ? { coordinationStatus: params.coordinationStatus } : {}),
+      ...(params.coordinationContactedAt
+        ? { coordinationContactedAt: params.coordinationContactedAt }
+        : {}),
+      ...(params.coordinationOutcome ? { coordinationOutcome: params.coordinationOutcome } : {}),
+      ...(params.providerPrice !== undefined ? { providerPrice: params.providerPrice } : {}),
+      ...(params.amaroFee !== undefined ? { amaroFee: params.amaroFee } : {}),
+      ...(params.taxAmount !== undefined ? { taxAmount: params.taxAmount } : {}),
+      ...(params.totalAmount !== undefined ? { totalAmount: params.totalAmount } : {}),
+      ...(params.pricingSnapshot !== undefined ? { pricingSnapshot: params.pricingSnapshot } : {}),
+      ...(params.selectedOffersJson !== undefined
+        ? { selectedOffersJson: params.selectedOffersJson }
+        : {}),
+      ...(params.isPartialAcceptance !== undefined
+        ? { isPartialAcceptance: params.isPartialAcceptance }
+        : {}),
+      ...(params.requestedUnitsTotal !== undefined
+        ? { requestedUnitsTotal: params.requestedUnitsTotal }
+        : {}),
+      ...(params.acceptedUnitsTotal !== undefined
+        ? { acceptedUnitsTotal: params.acceptedUnitsTotal }
+        : {}),
       ...(params.releaseStock ? { allocatedUnits: 0 } : {}),
       updatedAtIso: new Date().toISOString(),
-    });
+    } as any);
   }
 
   async getIdentityMetadata(
@@ -536,6 +622,7 @@ class InMemoryTestStore implements AmaroServerStore {
         startTime: payload.scheduledTime,
         endTime: payload.computedEndTime,
         durationMinutes: payload.durationMinutes,
+        ...(payload.checkOutDate ? { checkOutDate: payload.checkOutDate } : {}),
       });
       this.itemsByFolder.set(payload.folderId, currentItems);
 
@@ -865,6 +952,189 @@ class InMemoryTestStore implements AmaroServerStore {
       retainedFinancialRecordsCount,
       retentionPolicyLabel: params.retentionPolicyLabel,
     };
+  }
+
+  async isVerifiedProviderOwner(providerId: string, uid: string): Promise<boolean> {
+    const p = this.verifiedProviders.get(providerId);
+    return Boolean(p && p.ownerId === uid && p.verificationStatus === 'verified');
+  }
+
+  async listProviderOffers(serviceId?: string): Promise<ProviderOfferDoc[]> {
+    const out: ProviderOfferDoc[] = [];
+    for (const off of this.providerOffers.values()) {
+      if (!serviceId || off.serviceId === serviceId) {
+        out.push(structuredClone(off));
+      }
+    }
+    return out;
+  }
+
+  async upsertProviderOffer(offer: ProviderOfferDoc): Promise<ProviderOfferDoc> {
+    const copy = structuredClone(offer);
+    this.providerOffers.set(copy.id, copy);
+    return structuredClone(copy);
+  }
+
+  async deleteProviderOffer(offerId: string): Promise<void> {
+    this.providerOffers.delete(offerId);
+  }
+
+  async updateUnconfirmedReservationOffers(params: {
+    reservationId: string;
+    folderId: string;
+    itemId: string;
+    participants: number;
+    providerPrice: number;
+    amaroFee: number;
+    taxAmount: number;
+    totalAmount: number;
+    pricingSnapshot: string;
+    selectedOffersJson: string;
+    hasPriceToVerify: boolean;
+    requestedUnitsTotal: number;
+    checkOutDate?: string;
+    pickupLocation?: string;
+    dropoffLocation?: string;
+  }): Promise<void> {
+    const existing = this.reservations.get(params.reservationId);
+    if (!existing) throw new ConflictError('Réservation introuvable.');
+    this.reservations.set(params.reservationId, {
+      ...existing,
+      participants: params.participants,
+      providerPrice: params.providerPrice,
+      amaroFee: params.amaroFee,
+      taxAmount: params.taxAmount,
+      totalAmount: params.totalAmount,
+      pricingSnapshot: params.pricingSnapshot,
+      selectedOffersJson: params.selectedOffersJson,
+      hasPriceToVerify: params.hasPriceToVerify,
+      requestedUnitsTotal: params.requestedUnitsTotal,
+      ...(params.checkOutDate !== undefined ? { checkOutDate: params.checkOutDate } : {}),
+      ...(params.pickupLocation !== undefined ? { pickupLocation: params.pickupLocation } : {}),
+      ...(params.dropoffLocation !== undefined ? { dropoffLocation: params.dropoffLocation } : {}),
+      updatedAtIso: new Date().toISOString(),
+    });
+  }
+
+  async listCensusListings(): Promise<CensusListingDoc[]> {
+    return Array.from(this.censusListings.values()).map((c) => structuredClone(c));
+  }
+
+  async upsertCensusListing(doc: CensusListingDoc): Promise<CensusListingDoc> {
+    const copy = structuredClone(doc);
+    this.censusListings.set(copy.id, copy);
+    return structuredClone(copy);
+  }
+
+  async publishCensusListingToCircuitA(params: {
+    censusDoc: CensusListingDoc;
+    serviceId: string;
+    providerId: string;
+    adminUid: string;
+  }): Promise<{ serviceId: string }> {
+    const { censusDoc, serviceId, providerId, adminUid } = params;
+    const nowIso = new Date().toISOString();
+    const priceKnown =
+      censusDoc.priceState !== 'price_on_request' && Number(censusDoc.priceAmount || 0) > 0;
+    const primarySource = censusDoc.sources[0];
+    const maxCap = Math.max(
+      2,
+      ...censusDoc.offers.map((o) => Number(o.maxGuests || o.seats || 2))
+    );
+
+    this.services.set(serviceId, {
+      id: serviceId,
+      providerId,
+      ownerId: 'manual_concierge',
+      title: censusDoc.businessName,
+      category: censusDoc.category,
+      countryCode: 'BJ',
+      cityId: censusDoc.cityId,
+      address: `${censusDoc.neighborhoodOrAddress}, ${censusDoc.department}, Bénin`,
+      priceAmount: priceKnown ? censusDoc.priceAmount : 0,
+      priceKnown,
+      priceRangeNote: censusDoc.priceVerifyReason || censusDoc.priceUnit,
+      currency: 'XOF',
+      durationMinutes: censusDoc.category === 'accommodation' ? 720 : 180,
+      capacity: maxCap,
+      status: 'published',
+      dataOrigin: 'public_directory',
+      sourceName: primarySource?.label || 'Recensement web Bénin',
+      sourceUrl: primarySource?.url || '',
+      verifiedAt: primarySource?.consultedAt || nowIso.slice(0, 10),
+      websiteUrl:
+        censusDoc.officialWebsite !== 'non précisé' ? censusDoc.officialWebsite : undefined,
+      contactPhone:
+        censusDoc.contactPhone !== 'non précisé' ? censusDoc.contactPhone : undefined,
+    });
+
+    for (const off of censusDoc.offers) {
+      this.providerOffers.set(off.id, {
+        ...structuredClone(off),
+        serviceId,
+        providerId,
+        originSource: 'web_census',
+        needsConfirmationFromProvider: true,
+      });
+    }
+
+    this.censusListings.set(censusDoc.id, {
+      ...structuredClone(censusDoc),
+      status: 'published',
+      publishedServiceId: serviceId,
+      updatedAtIso: nowIso,
+      history: [
+        ...(censusDoc.history || []),
+        {
+          atIso: nowIso,
+          actorId: adminUid,
+          action: 'VALIDATED_AND_PUBLISHED_CIRCUIT_A',
+          note: `Publiée en Circuit A (${serviceId})`,
+        },
+      ],
+    });
+
+    return { serviceId };
+  }
+
+  async applyCensusProposedUpdate(params: {
+    censusDoc: CensusListingDoc;
+    targetServiceId: string;
+    adminUid: string;
+  }): Promise<{ serviceId: string; offersSaved: number }> {
+    const { censusDoc, targetServiceId, adminUid } = params;
+    const nowIso = new Date().toISOString();
+    const existingSvc = await this.getService(targetServiceId);
+    const providerId = existingSvc?.providerId || `dir-${targetServiceId}`;
+
+    let offersSaved = 0;
+    for (const off of censusDoc.offers) {
+      this.providerOffers.set(off.id, {
+        ...structuredClone(off),
+        serviceId: targetServiceId,
+        providerId,
+        originSource: 'web_census',
+        needsConfirmationFromProvider: true,
+      });
+      offersSaved += 1;
+    }
+
+    this.censusListings.set(censusDoc.id, {
+      ...structuredClone(censusDoc),
+      status: 'published',
+      publishedServiceId: targetServiceId,
+      updatedAtIso: nowIso,
+      history: [
+        ...(censusDoc.history || []),
+        {
+          atIso: nowIso,
+          actorId: adminUid,
+          action: 'APPLIED_PROPOSED_UPDATE',
+          note: `${offersSaved} offre(s) rattachée(s) sans écrasement.`,
+        },
+      ],
+    });
+    return { serviceId: targetServiceId, offersSaved };
   }
 }
 
@@ -3215,5 +3485,654 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(store.identityVaults.has(reservationId), false);
     assert.equal(store.folders.has('folder-traveler-1'), false);
     assert.equal(store.financialArchives.size, 1);
+  });
+
+  it('24. Recensement A6 (Test obligatoire #1) — Une fiche recensée arrive en « à valider » (jamais publiée directement) et devient visible en Circuit A avec ses offres uniquement après validation propriétaire', async () => {
+    store.reset();
+
+    // Even if an import payload tries to force status: 'published', server MUST classify it as 'to_validate' with directlyPublishedCount === 0
+    const importRes = await fetch(`${baseUrl}/api/amaro/admin/census/import`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        candidates: [
+          {
+            id: 'cens-test-new-lodge-ouidah',
+            status: 'published', // Attempted bypass
+            businessName: 'Villa Côtière Test Recensée Ouidah',
+            category: 'accommodation',
+            subCategory: 'Maison d’hôtes',
+            cityId: 'ouidah',
+            department: 'Atlantique',
+            neighborhoodOrAddress: 'Quartier Brésil, Ouidah',
+            officialWebsite: 'https://exemple-villa-ouidah.bj',
+            factualDescription: 'Établissement testé pour vérifier la non-publication directe.',
+            priceState: 'price_to_verify',
+            priceAmount: 28000,
+            originalCurrency: 'XOF',
+            priceUnit: 'par nuit',
+            sources: [
+              {
+                label: 'Site test consulté',
+                url: 'https://exemple-villa-ouidah.bj/tarifs',
+                consultedAt: '2026-11-03',
+              },
+            ],
+            offers: [
+              {
+                id: 'off-test-villa-chambre-1',
+                offerKind: 'room',
+                name: 'Chambre Jardin Climatisée',
+                priceState: 'price_to_verify',
+                priceAmount: 28000,
+                originalCurrency: 'XOF',
+                priceUnit: 'par nuit',
+                maxGuests: 2,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(importRes.status, 201);
+    const importBody: any = await importRes.json();
+    assert.equal(importBody.directlyPublishedCount, 0);
+    assert.equal(importBody.records[0].status, 'to_validate');
+
+    // Public catalogue MUST NOT contain this service before owner validation
+    const expectedSvcId = 'dir-web-test-new-lodge-ouidah';
+    const beforePubOffers = await fetch(`${baseUrl}/api/amaro/services/${expectedSvcId}/offers`);
+    assert.equal(beforePubOffers.status, 404);
+
+    // Owner validates & publishes to Circuit A
+    const validateRes = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        censusId: 'cens-test-new-lodge-ouidah',
+        action: 'validate_publish_circuit_a',
+      }),
+    });
+    assert.equal(validateRes.status, 200);
+    const valBody: any = await validateRes.json();
+    assert.equal(valBody.processed[0].status, 'published');
+    assert.equal(valBody.processed[0].serviceId, expectedSvcId);
+
+    // Now visible in Circuit A ('public_directory') with its structured room offer
+    const afterPubOffers = await fetch(`${baseUrl}/api/amaro/services/${expectedSvcId}/offers`);
+    assert.equal(afterPubOffers.status, 200);
+    const offersBody: any = await afterPubOffers.json();
+    assert.equal(offersBody.dataOrigin, 'public_directory');
+    assert.equal(offersBody.circuit, 'A');
+    assert.equal(offersBody.offers.length, 1);
+    assert.equal(offersBody.offers[0].name, 'Chambre Jardin Climatisée');
+  });
+
+  it('25. Recensement A4/A6 (Test obligatoire #2) — Dédoublonnage strict : une fiche déjà au catalogue est classée « mise à jour proposée » sans jamais écraser les champs existants', async () => {
+    store.reset();
+
+    // Check existing catalogue sheet before import (Hôtel Maison Rouge Cotonou)
+    const beforeSvc = await store.getService('acc-hotel-maison-rouge-cotonou');
+    assert.ok(beforeSvc);
+    const originalTitle = beforeSvc!.title;
+    const originalPrice = beforeSvc!.priceAmount;
+
+    // Seed record 'cens-bj-acc-maison-rouge-update' must already be classified as 'proposed_update'
+    const adminCensusRes = await fetch(
+      `${baseUrl}/api/amaro/admin/census?status=proposed_update`,
+      {
+        headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+      }
+    );
+    assert.equal(adminCensusRes.status, 200);
+    const censusData: any = await adminCensusRes.json();
+    const maisonRougeUpdate = censusData.records.find(
+      (r: any) => r.id === 'cens-bj-acc-maison-rouge-update'
+    );
+    assert.ok(maisonRougeUpdate, 'Hôtel Maison Rouge doit être détecté en mise à jour proposée');
+    assert.equal(maisonRougeUpdate.matchedExistingServiceId, 'acc-hotel-maison-rouge-cotonou');
+
+    // Apply proposed update: attaches the 2 sourced room offers WITHOUT overwriting title or base priceAmount
+    const applyRes = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        censusId: 'cens-bj-acc-maison-rouge-update',
+        action: 'apply_proposed_update',
+      }),
+    });
+    assert.equal(applyRes.status, 200);
+
+    const afterSvc = await store.getService('acc-hotel-maison-rouge-cotonou');
+    assert.equal(afterSvc!.title, originalTitle);
+    assert.equal(afterSvc!.priceAmount, originalPrice);
+
+    const offersRes = await fetch(
+      `${baseUrl}/api/amaro/services/acc-hotel-maison-rouge-cotonou/offers`
+    );
+    const offersBody: any = await offersRes.json();
+    assert.equal(offersBody.offers.length, 2);
+    assert.equal(offersBody.offers[0].originSource, 'web_census');
+  });
+
+  it('26. Recensement A6 (Test obligatoire #3) — Une fiche incomplète (sans adresse ou sans source datée) est stockée en « incomplete », bloquée à la publication et invisible au public', async () => {
+    store.reset();
+
+    // Seed record 'cens-bj-incomplete-nikki-relais' has neighborhoodOrAddress: 'non précisé' -> status 'incomplete'
+    const tryPublishIncomplete = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        censusId: 'cens-bj-incomplete-nikki-relais',
+        action: 'validate_publish_circuit_a',
+      }),
+    });
+    assert.equal(tryPublishIncomplete.status, 400);
+
+    // Also test importing a candidate with NO source URL -> automatically marked 'incomplete'
+    const noSourceImport = await fetch(`${baseUrl}/api/amaro/admin/census/import`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        candidates: [
+          {
+            id: 'cens-no-source-test',
+            businessName: 'Prestataire Sans Source Web',
+            category: 'restaurant',
+            cityId: 'cotonou',
+            neighborhoodOrAddress: 'Haie Vive, Cotonou',
+            sources: [],
+          },
+        ],
+      }),
+    });
+    assert.equal(noSourceImport.status, 201);
+    const noSourceBody: any = await noSourceImport.json();
+    assert.equal(noSourceBody.records[0].status, 'incomplete');
+  });
+
+  it('27. Partie B2 (Test obligatoire #4) — Un hébergement sans chambres détaillées connues affiche une seule offre générique honnête « Chambre (type à préciser auprès du prestataire) »', async () => {
+    store.reset();
+
+    // 'srv-published-hotel' has no roomTypes and no custom ProviderOfferDoc
+    const res = await fetch(`${baseUrl}/api/amaro/services/srv-published-hotel/offers`);
+    assert.equal(res.status, 200);
+    const body: any = await res.json();
+    assert.equal(body.offers.length, 1);
+    assert.equal(body.offers[0].name, GENERIC_FALLBACK_ROOM_LABEL);
+    assert.equal(body.offers[0].isFallbackGenericRoom, true);
+  });
+
+  it('28. Partie B2 (Test obligatoire #5) — Sélection multi-chambres dans le même hôtel autorisée et blocage strict si le nombre de voyageurs dépasse la capacité cumulée des chambres', async () => {
+    store.reset();
+
+    // Add 2 distinct real room offers to 'srv-published-hotel' via Admin (capacity 2 each)
+    await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'off-hotel-std-2p',
+        serviceId: 'srv-published-hotel',
+        offerKind: 'room',
+        name: 'Chambre Standard Lagune',
+        priceState: 'displayed_price',
+        priceAmount: 45000,
+        originalCurrency: 'XOF',
+        priceUnit: 'par nuit',
+        maxGuests: 2,
+      }),
+    });
+    await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'off-hotel-sup-2p',
+        serviceId: 'srv-published-hotel',
+        offerKind: 'room',
+        name: 'Chambre Supérieure Vue Mer',
+        priceState: 'displayed_price',
+        priceAmount: 65000,
+        originalCurrency: 'XOF',
+        priceUnit: 'par nuit',
+        maxGuests: 2,
+      }),
+    });
+
+    // 28a. 5 travelers for 2 rooms of maxGuests=2 (cumulative capacity = 4) -> MUST fail with 400
+    const overCapRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-10',
+        checkOutDate: '2026-12-12', // 2 nights
+        scheduledTime: '14:00',
+        participants: 5,
+        selectedOffers: [
+          { offerId: 'off-hotel-std-2p', quantity: 1, travelersCount: 2 },
+          { offerId: 'off-hotel-sup-2p', quantity: 1, travelersCount: 3 },
+        ],
+      }),
+    });
+    assert.equal(overCapRes.status, 400);
+    const overCapErr: any = await overCapRes.json();
+    assert.match(overCapErr.error, /capacit/i);
+
+    // 28b. 4 travelers for 2 rooms (1 Standard + 1 Supérieure) over 2 nights -> succeeds (201)
+    // Expected provider subtotal = (45 000 + 65 000) * 2 nights = 220 000 FCFA
+    const okMultiRoom = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-10',
+        checkOutDate: '2026-12-12',
+        scheduledTime: '14:00',
+        participants: 4,
+        selectedOffers: [
+          { offerId: 'off-hotel-std-2p', quantity: 1, travelersCount: 2 },
+          { offerId: 'off-hotel-sup-2p', quantity: 1, travelersCount: 2 },
+        ],
+      }),
+    });
+    assert.equal(okMultiRoom.status, 201);
+    const okBody: any = await okMultiRoom.json();
+    assert.equal(okBody.breakdown.providerPrice, 220_000);
+    assert.equal(okBody.requestedUnitsTotal, 2);
+  });
+
+  it('29. Partie B2 (Test obligatoire #6) — Blocage par Amaro Journey Brain de deux hôtels différents sur la même nuit (y compris séjour multi-nuits), tout en autorisant plusieurs chambres dans le même hôtel', async () => {
+    store.reset();
+
+    // First hotel booked for 2 nights: 2026-12-15 to 2026-12-17 (covers nights of Dec 15 and Dec 16)
+    const firstHotel = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-15',
+        checkOutDate: '2026-12-17',
+        scheduledTime: '14:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(firstHotel.status, 201);
+
+    // Second DIFFERENT hotel ('acc-hotel-maison-rouge-cotonou') on night 2026-12-16 -> MUST be blocked (409)
+    const secondDifferentHotel = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'acc-hotel-maison-rouge-cotonou',
+        scheduledDate: '2026-12-16',
+        checkOutDate: '2026-12-17',
+        scheduledTime: '15:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(secondDifferentHotel.status, 409);
+    const conflictBody: any = await secondDifferentHotel.json();
+    assert.match(conflictBody.error, /Règle Hébergement/i);
+
+    // Additional room in the SAME hotel ('srv-published-hotel') on 2026-12-16 -> ALLOWED (201)
+    const sameHotelExtraRoom = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-16',
+        checkOutDate: '2026-12-17',
+        scheduledTime: '15:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(sameHotelExtraRoom.status, 201);
+  });
+
+  it('30. Partie B3 (Test obligatoire #7) — Plusieurs véhicules chez le même loueur autorisés, mais blocage d’un second prestataire de transport principal dans le même dossier (hors VTC urbain ponctuel)', async () => {
+    store.reset();
+
+    // Publish 'cens-bj-trans-louecars-cotonou' (3 vehicle offers: Citadine, SUV 4x4, Minibus)
+    const pubLoue = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        censusId: 'cens-bj-trans-louecars-cotonou',
+        action: 'validate_publish_circuit_a',
+      }),
+    });
+    assert.equal(pubLoue.status, 200);
+    const loueServiceId = 'dir-web-trans-louecars-cotonou';
+
+    // Select 2 vehicles simultaneously from the SAME rental company (LoueCars Bénin) -> ALLOWED (201)
+    const multiVehicleSameAgency = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: loueServiceId,
+        scheduledDate: '2026-12-18',
+        scheduledTime: '08:00',
+        participants: 6,
+        pickupLocation: 'Aéroport de Cotonou',
+        dropoffLocation: 'Hôtel Ouidah',
+        selectedOffers: [
+          { offerId: 'off-cens-louecars-citadine', quantity: 1, durationUnits: 2 },
+          { offerId: 'off-cens-louecars-suv4x4', quantity: 1, durationUnits: 2 },
+        ],
+      }),
+    });
+    assert.equal(multiVehicleSameAgency.status, 201);
+    const mvBody: any = await multiVehicleSameAgency.json();
+    assert.equal(mvBody.requestedUnitsTotal, 2);
+    // SUV is price_on_request -> hasPriceToVerify MUST be true (Estimation)
+    assert.equal(mvBody.hasPriceToVerify, true);
+
+    // Attempt to book a SECOND principal transport provider ('srv-avis-second-vehicle' -> 'dir-trans-avis-benin') in the same folder -> BLOCKED (409)
+    const secondPrincipalTransport = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-avis-second-vehicle',
+        scheduledDate: '2026-12-19',
+        scheduledTime: '09:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(secondPrincipalTransport.status, 409);
+    const trErr: any = await secondPrincipalTransport.json();
+    assert.match(trErr.error, /Règle Transport Amaro/i);
+
+    // Punctual urban VTC ('trans-gozem-voiture-clim-cotonou') in the same folder -> ALLOWED (201)
+    const punctualVtc = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'trans-gozem-voiture-clim-cotonou',
+        scheduledDate: '2026-12-19',
+        scheduledTime: '20:00',
+        participants: 2,
+      }),
+    });
+    assert.equal(punctualVtc.status, 201);
+  });
+
+  it('31. Partie B6 (Test obligatoire #8) — Modification des offres par le client tant que non confirmée et gestion de la confirmation partielle (2 chambres disponibles sur 3 demandées + recalcul)', async () => {
+    store.reset();
+
+    await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'off-lagune-chambre-2p',
+        serviceId: 'srv-published-hotel',
+        offerKind: 'room',
+        name: 'Chambre Lagune Confort',
+        priceState: 'displayed_price',
+        priceAmount: 50000,
+        originalCurrency: 'XOF',
+        priceUnit: 'par nuit',
+        maxGuests: 2,
+      }),
+    });
+
+    // Step 1: Client initially requests 2 rooms (4 travelers) -> 100 000 FCFA provider subtotal
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: 'folder-traveler-1',
+        serviceId: 'srv-published-hotel',
+        scheduledDate: '2026-12-22',
+        checkOutDate: '2026-12-23',
+        scheduledTime: '14:00',
+        participants: 4,
+        selectedOffers: [{ offerId: 'off-lagune-chambre-2p', quantity: 2, travelersCount: 4 }],
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const { reservationId }: any = await createRes.json();
+
+    // Step 2: While status is 'pending_provider' (not confirmed), client modifies selection to 3 rooms (6 travelers) -> 150 000 FCFA
+    const patchOffers = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/offers`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: 'Bearer valid-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          participants: 6,
+          selectedOffers: [{ offerId: 'off-lagune-chambre-2p', quantity: 3, travelersCount: 6 }],
+        }),
+      }
+    );
+    assert.equal(patchOffers.status, 200);
+    const patchBody: any = await patchOffers.json();
+    assert.equal(patchBody.requestedUnitsTotal, 3);
+    assert.equal(patchBody.breakdown.providerPrice, 150_000);
+
+    // Step 3: Provider responds with PARTIAL CONFIRMATION: 2 rooms available out of 3 requested
+    const partialRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${reservationId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-provider-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'provider_partial_accept',
+          acceptedUnits: 2,
+          alternativeProposal: '2 chambres disponibles immédiatement sur les 3 demandées.',
+        }),
+      }
+    );
+    assert.equal(partialRes.status, 200);
+    const partialBody: any = await partialRes.json();
+    assert.equal(partialBody.isPartialAcceptance, true);
+    assert.equal(partialBody.requestedUnitsTotal, 3);
+    assert.equal(partialBody.acceptedUnitsTotal, 2);
+    assert.equal(partialBody.status, 'alternative_proposed');
+    // Recalculated proportionally to the 2 available rooms -> 100 000 FCFA provider subtotal
+    assert.equal(partialBody.breakdown.providerPrice, 100_000);
+    assert.equal(store.folders.get('folder-traveler-1')?.status, 'partially_confirmed');
+  });
+
+  it('32. Partie B5 & B6 (Test obligatoire #9) — Honnêteté stricte en Circuit A : aucun compteur d’unités inventé, mention exacte de disponibilité et mention « Estimation » sur prix à vérifier', async () => {
+    store.reset();
+
+    // Publish 'cens-bj-acc-hotel-le-prince-cotonou' (Circuit A, priceState = 'price_to_verify')
+    await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        censusId: 'cens-bj-acc-hotel-le-prince-cotonou',
+        action: 'validate_publish_circuit_a',
+      }),
+    });
+    const princeServiceId = 'dir-web-acc-hotel-le-prince-cotonou';
+
+    const offersRes = await fetch(`${baseUrl}/api/amaro/services/${princeServiceId}/offers`);
+    assert.equal(offersRes.status, 200);
+    const offersBody: any = await offersRes.json();
+    assert.equal(offersBody.circuit, 'A');
+    assert.equal(offersBody.availability.unitCountVisible, false);
+    assert.equal(offersBody.availability.availableUnits, undefined);
+    assert.equal(offersBody.availability.availabilityLabel, CIRCUIT_A_HONEST_AVAILABILITY_TEXT);
+
+    // Request quote on 'off-cens-le-prince-standard' (price_to_verify = 23 800 XOF) -> hasPriceToVerify MUST be true
+    const quoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: princeServiceId,
+        participants: 2,
+        displayCurrency: 'XOF',
+        selectedOffers: [{ offerId: 'off-cens-le-prince-standard', quantity: 1 }],
+      }),
+    });
+    assert.equal(quoteRes.status, 200);
+    const quoteBody: any = await quoteRes.json();
+    assert.equal(quoteBody.hasPriceToVerify, true);
+    assert.equal(quoteBody.breakdown.providerPrice, 23_800);
+  });
+
+  it('33. Partie B7 (Test obligatoire #10) — Gouvernance stricte à 3 sources : blocage (403) de tout ajout/modification d’offre hors recensement validé, administrateur ou prestataire conventionné titulaire', async () => {
+    store.reset();
+
+    // 33a. Traveler attempts to create an offer -> 403 Forbidden
+    const travAttempt = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: 'srv-published-hotel',
+        name: 'Offre Pirate Voyageur',
+        priceAmount: 1000,
+      }),
+    });
+    assert.equal(travAttempt.status, 403);
+
+    // 33b. Another non-owner / unverified provider attempts to create an offer on 'srv-published-hotel' -> 403 Forbidden
+    const otherProvAttempt = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: 'srv-published-hotel',
+        name: 'Offre Prestataire Non Titulaire',
+        priceAmount: 25000,
+      }),
+    });
+    assert.equal(otherProvAttempt.status, 403);
+
+    // 33c. Even a verified provider CANNOT attach offers to a Circuit A ('public_directory') sheet -> 403 Forbidden
+    const provOnCircuitA = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: 'acc-hotel-maison-rouge-cotonou',
+        name: 'Tentative sur fiche Circuit A',
+        priceAmount: 50000,
+      }),
+    });
+    assert.equal(provOnCircuitA.status, 403);
+
+    // 33d. Verified conventioned owner provider ('valid-provider-jwt') on their own 'srv-published-hotel' -> 201 Created + history recorded
+    const ownerProvOk = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'off-gov-prov-1',
+        serviceId: 'srv-published-hotel',
+        offerKind: 'room',
+        name: 'Suite Lagune Conventionnée',
+        priceState: 'displayed_price',
+        priceAmount: 85000,
+        maxGuests: 3,
+      }),
+    });
+    assert.equal(ownerProvOk.status, 201);
+    const provBody: any = await ownerProvOk.json();
+    assert.equal(provBody.offer.originSource, 'conventioned_provider');
+    assert.equal(provBody.offer.history.length, 1);
+
+    // 33e. Admin ('valid-admin-owner-jwt') updates that offer -> 200 OK + append-only history length === 2
+    const adminUpdateOk = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'off-gov-prov-1',
+        serviceId: 'srv-published-hotel',
+        offerKind: 'room',
+        name: 'Suite Lagune Conventionnée (Vérifiée Admin)',
+        priceState: 'displayed_price',
+        priceAmount: 82000,
+        maxGuests: 3,
+      }),
+    });
+    assert.equal(adminUpdateOk.status, 200);
+    const admBody: any = await adminUpdateOk.json();
+    assert.equal(admBody.offer.originSource, 'admin');
+    assert.equal(admBody.offer.history.length, 2);
   });
 });

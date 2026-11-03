@@ -48,6 +48,7 @@ import type {
   PilotPartnerDoc,
   PilotStockDoc,
   PlatformContentDoc,
+  ProviderOfferDoc,
   ProviderProfileDoc,
   ProviderThankYouDoc,
   ReservationDispatchChannel,
@@ -68,7 +69,10 @@ import {
   DEFAULT_PLATFORM_CONTENT,
 } from './data/amaroGovernanceDefaults';
 import { AmaroHeader, type AmaroTab } from './components/amaro/AmaroHeader';
-import { ExplorerView } from './components/amaro/ExplorerView';
+import {
+  ExplorerView,
+  type ExplorerBookingExtras,
+} from './components/amaro/ExplorerView';
 import { JourneyHubView } from './components/amaro/JourneyHubView';
 import {
   AssistantRescueView,
@@ -253,6 +257,7 @@ function AmaroPlatform() {
   // Public & Shared Data
   const [publishedServices, setPublishedServices] = useState<CatalogueItem[]>([]);
   const [publicActiveStocks, setPublicActiveStocks] = useState<PilotStockDoc[]>([]);
+  const [providerOffers, setProviderOffers] = useState<ProviderOfferDoc[]>([]);
   const [approvedStories, setApprovedStories] = useState<CulturalStoryDoc[]>([]);
   const [approvedReviews, setApprovedReviews] = useState<TravelerReviewDoc[]>([]);
   const [firestorePlatformContents, setFirestorePlatformContents] = useState<
@@ -403,9 +408,22 @@ function AmaroPlatform() {
     setFirestoreProbe(res);
   }, []);
 
-  // Boot: verify Cloud Firestore connectivity & fetch server currency rates
+  const refreshProviderOffers = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/amaro/offers');
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && Array.isArray(data?.offers)) {
+        setProviderOffers(data.offers);
+      }
+    } catch {
+      // Non-blocking: fallback offers remain available via offerEngine
+    }
+  }, []);
+
+  // Boot: verify Cloud Firestore connectivity, fetch server currency rates & structured offers
   useEffect(() => {
     void runFirestoreProbe();
+    void refreshProviderOffers();
     fetch('/api/amaro/rates')
       .then((r) => r.json())
       .then((json) => {
@@ -414,7 +432,7 @@ function AmaroPlatform() {
       .catch(() => {
         // Handled gracefully by BCEAO fallback in UI
       });
-  }, [runFirestoreProbe]);
+  }, [runFirestoreProbe, refreshProviderOffers]);
 
   // Auth state listener + automatic initial user document bootstrap
   useEffect(() => {
@@ -1967,7 +1985,8 @@ function AmaroPlatform() {
     item: CatalogueItem,
     date: string,
     startTime: string,
-    notes: string
+    notes: string,
+    extras?: ExplorerBookingExtras
   ) => {
     if (!authUser?.uid) return;
     const folderId = await ensureActiveFolderId();
@@ -1984,6 +2003,7 @@ function AmaroPlatform() {
           category: item.category,
           cityId: item.cityId,
           date,
+          ...(extras?.checkOutDate ? { checkOutDate: extras.checkOutDate } : {}),
           startTime,
           durationMinutes: item.durationMinutes,
         },
@@ -1997,6 +2017,13 @@ function AmaroPlatform() {
       setActiveTab('journey');
       return;
     }
+
+    const computedEstimatedCost =
+      typeof extras?.estimatedCost === 'number'
+        ? Math.max(0, extras.estimatedCost)
+        : item.priceKnown === false
+        ? 0
+        : Math.max(0, Number(item.priceAmount));
 
     const itemId = makeSafeId('step');
     try {
@@ -2012,10 +2039,23 @@ function AmaroPlatform() {
         startTime,
         endTime: String(brainData.computedEndTime || '12:00'),
         durationMinutes: Math.max(0, Math.round(item.durationMinutes)),
-        estimatedCost: item.priceKnown === false ? 0 : Math.max(0, Number(item.priceAmount)),
+        estimatedCost: computedEstimatedCost,
         currency: item.currency,
         stage: 'envisaged',
         notes: notes.slice(0, 580),
+        ...(extras?.selectedOffers && extras.selectedOffers.length > 0
+          ? { selectedOffersJson: JSON.stringify(extras.selectedOffers).slice(0, 3900) }
+          : {}),
+        ...(typeof extras?.hasPriceToVerify === 'boolean'
+          ? { hasPriceToVerify: extras.hasPriceToVerify }
+          : {}),
+        ...(extras?.checkOutDate ? { checkOutDate: extras.checkOutDate.slice(0, 20) } : {}),
+        ...(extras?.pickupLocation
+          ? { pickupLocation: extras.pickupLocation.slice(0, 195) }
+          : {}),
+        ...(extras?.dropoffLocation
+          ? { dropoffLocation: extras.dropoffLocation.slice(0, 195) }
+          : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -2177,13 +2217,14 @@ function AmaroPlatform() {
     }
   };
 
-  // Server-Authoritative Reservation Creation (+ Dossier Fee Gate & Affiliate Anti-Abuse)
+  // Server-Authoritative Reservation Creation (+ Dossier Fee Gate, Multi-Offer Selection & Affiliate Anti-Abuse)
   const handleRequestReservation = async (
     item: CatalogueItem,
     date: string,
     startTime: string,
     participants: number,
-    stockId?: string
+    stockId?: string,
+    extras?: ExplorerBookingExtras
   ) => {
     if (!authUser?.uid) return;
     const folderId = await ensureActiveFolderId();
@@ -2204,6 +2245,12 @@ function AmaroPlatform() {
           participants: Math.max(1, Math.min(100, Math.round(participants))),
           ...(stockId ? { stockId } : {}),
           ...(codeToSend ? { referralCode: codeToSend } : {}),
+          ...(extras?.selectedOffersPayload && extras.selectedOffersPayload.length > 0
+            ? { selectedOffers: extras.selectedOffersPayload }
+            : {}),
+          ...(extras?.checkOutDate ? { checkOutDate: extras.checkOutDate } : {}),
+          ...(extras?.pickupLocation ? { pickupLocation: extras.pickupLocation } : {}),
+          ...(extras?.dropoffLocation ? { dropoffLocation: extras.dropoffLocation } : {}),
         }),
       });
       const data = await res.json();
@@ -2249,6 +2296,41 @@ function AmaroPlatform() {
       setActiveTab('journey');
     } catch {
       showToast('Impossible de contacter le serveur de réservation sécurisé.');
+    }
+  };
+
+  // B6: Modify selected offers & quantities while reservation is not yet confirmed
+  const handleClientUpdateReservationOffers = async (
+    reservationId: string,
+    payload: {
+      participants: number;
+      checkOutDate?: string;
+      pickupLocation?: string;
+      dropoffLocation?: string;
+      selectedOffers: Array<{ offerId: string; quantity: number }>;
+    }
+  ) => {
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/reservations/${encodeURIComponent(reservationId)}/offers`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || 'Impossible de modifier les offres de cette demande.');
+        return;
+      }
+      showToast(
+        data?.hasPriceToVerify
+          ? 'Offres mises à jour et total recalculé (Estimation avec prix à vérifier).'
+          : 'Offres mises à jour et montant recalculé par Amaro Budget Guardian.'
+      );
+    } catch {
+      showToast('Erreur réseau lors de la mise à jour des offres.');
     }
   };
 
@@ -2691,41 +2773,18 @@ function AmaroPlatform() {
     }
   };
 
-  const handleCreateProviderService = async (payload: {
-    title: string;
-    category: ServiceCategory;
-    cityId: string;
-    address: string;
-    description: string;
-    priceAmount: number;
-    currency: CurrencyCode;
-    durationMinutes: number;
-    capacity: number;
-    imageKey: string;
-  }) => {
-    await handleCreateOrUpdatePromoteService({
-      title: payload.title,
-      category: payload.category,
-      cityId: payload.cityId,
-      address: payload.address,
-      description: payload.description,
-      priceAmount: payload.priceAmount,
-      capacity: payload.capacity,
-      durationMinutes: payload.durationMinutes,
-      blockedDates: [],
-    });
-  };
-
   const handleProviderRespondReservation = async (
     reservation: ReservationDoc,
-    decision: 'accepted' | 'rejected' | 'alternative_proposed',
+    decision: 'accepted' | 'partial_accepted' | 'rejected' | 'alternative_proposed',
     alternativeProposal: string,
     newDate: string,
-    newTime: string
+    newTime: string,
+    acceptedUnits?: number
   ) => {
     try {
       const actionMap = {
         accepted: 'provider_accept',
+        partial_accepted: 'provider_partial_accept',
         rejected: 'provider_reject',
         alternative_proposed: 'provider_propose_alternative',
       } as const;
@@ -2740,35 +2799,22 @@ function AmaroPlatform() {
             alternativeProposal,
             scheduledDate: newDate,
             scheduledTime: newTime,
+            ...(typeof acceptedUnits === 'number' ? { acceptedUnits } : {}),
           }),
         }
       );
-      if (resp.ok) {
-        showToast('Réponse transmise au voyageur et dossier mis à jour.');
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || 'Impossible d’enregistrer la réponse prestataire.');
         return;
       }
-
-      // Fallback direct Firestore update if server store is unavailable
-      await updateDoc(doc(db, 'reservations', reservation.id), {
-        status: decision,
-        alternativeProposal: alternativeProposal.slice(0, 780),
-        scheduledDate: newDate,
-        scheduledTime: newTime,
-        updatedAt: serverTimestamp(),
-      });
-      await createInternalNotification(
-        reservation.clientId,
-        decision === 'alternative_proposed' ? 'alternative' : 'reservation',
-        `Réponse prestataire : ${reservation.serviceTitle}`,
-        decision === 'accepted'
-          ? `Votre créneau du ${newDate} à ${newTime} est confirmé disponible.`
-          : decision === 'alternative_proposed'
-          ? `Alternative proposée : ${alternativeProposal} (${newDate} à ${newTime}).`
-          : `Créneau indisponible : ${alternativeProposal}`
+      showToast(
+        decision === 'partial_accepted'
+          ? 'Disponibilité partielle enregistrée et montant recalculé pour le voyageur.'
+          : 'Réponse transmise au voyageur et dossier mis à jour.'
       );
-      showToast('Réponse envoyée au voyageur.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reservations/${reservation.id}`);
+    } catch {
+      showToast('Erreur réseau lors de l’envoi de votre réponse.');
     }
   };
 
@@ -2973,48 +3019,6 @@ function AmaroPlatform() {
     }
   };
 
-  const handleAdminSaveSettings = async (
-    commissionPercent: number,
-    serviceFeeFlat: number,
-    taxPercent: number
-  ) => {
-    if (!authUser?.uid) return;
-    const ref = doc(db, 'system_settings', 'BJ');
-    try {
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        await updateDoc(ref, {
-          countryCode: 'BJ',
-          commissionPercent: Math.max(0, Math.min(100, commissionPercent)),
-          serviceFeeFlat: Math.max(0, serviceFeeFlat),
-          taxPercent: Math.max(0, Math.min(100, taxPercent)),
-          currency: 'XOF',
-          updatedBy: authUser.uid,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(ref, {
-          countryCode: 'BJ',
-          commissionPercent: Math.max(0, Math.min(100, commissionPercent)),
-          serviceFeeFlat: Math.max(0, serviceFeeFlat),
-          taxPercent: Math.max(0, Math.min(100, taxPercent)),
-          currency: 'XOF',
-          updatedBy: authUser.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      await writeAuditLog(
-        'UPDATE_FINANCE_BJ',
-        'BJ',
-        `Commission=${commissionPercent}%, Fixe=${serviceFeeFlat} XOF, Taxe=${taxPercent}%`
-      );
-      showToast('Barèmes financiers Bénin enregistrés.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'system_settings/BJ');
-    }
-  };
-
   const handleAdminSaveExtendedSettings = async (patch: Partial<SystemSettingDoc>) => {
     if (!authUser?.uid || !isAdmin) return;
     const ref = doc(db, 'system_settings', 'BJ');
@@ -3085,34 +3089,6 @@ function AmaroPlatform() {
       showToast(`Document « ${docDraft.title} » enregistré.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `platform_content/${cleanId}`);
-    }
-  };
-
-  const handleAdminSettleReservation = async (
-    reservation: ReservationDoc,
-    nextStatus: ReservationDoc['status'],
-    nextPaymentStatus: ReservationDoc['paymentStatus']
-  ) => {
-    try {
-      await updateDoc(doc(db, 'reservations', reservation.id), {
-        status: nextStatus,
-        paymentStatus: nextPaymentStatus,
-        updatedAt: serverTimestamp(),
-      });
-      await createInternalNotification(
-        reservation.clientId,
-        'payment',
-        `Mise à jour réservation : ${reservation.serviceTitle}`,
-        `Nouvel état : ${nextStatus} · Paiement : ${nextPaymentStatus}.`
-      );
-      await writeAuditLog(
-        'SETTLE_RESERVATION',
-        reservation.id,
-        `Statut=${nextStatus}, Paiement=${nextPaymentStatus}`
-      );
-      showToast('Réservation mise à jour par l’Administration.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reservations/${reservation.id}`);
     }
   };
 
@@ -3210,51 +3186,6 @@ function AmaroPlatform() {
       showToast(`Commission affiliée mise à jour (${nextStatus}).`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `partner_referrals/${referral.id}`);
-    }
-  };
-
-  const handleAdminSavePartnerSettings = async (
-    partnerCommissionPercent: number,
-    attributionWindowDays: number,
-    attributionModel: 'first_touch' | 'last_touch'
-  ) => {
-    if (!authUser?.uid || !isAdmin) return;
-    const ref = doc(db, 'system_settings', 'BJ');
-    try {
-      const snap = await getDoc(ref);
-      const safePct = Math.max(0, Math.min(100, Number(partnerCommissionPercent) || 0));
-      const safeWindow = Math.max(1, Math.min(365, Math.round(attributionWindowDays || 30)));
-      if (snap.exists()) {
-        await updateDoc(ref, {
-          partnerCommissionPercent: safePct,
-          attributionWindowDays: safeWindow,
-          attributionModel,
-          updatedBy: authUser.uid,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(ref, {
-          countryCode: 'BJ',
-          commissionPercent: 10,
-          serviceFeeFlat: 1_000,
-          taxPercent: 18,
-          currency: 'XOF',
-          partnerCommissionPercent: safePct,
-          attributionWindowDays: safeWindow,
-          attributionModel,
-          updatedBy: authUser.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      await writeAuditLog(
-        'UPDATE_PARTNER_SETTINGS_BJ',
-        'BJ',
-        `CommissionPartenaire=${safePct}% (sur marge AMARO), Fenêtre=${safeWindow}j, Modèle=${attributionModel}`
-      );
-      showToast('Paramètres AMARO PARTNERS enregistrés.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'system_settings/BJ');
     }
   };
 
@@ -3673,12 +3604,22 @@ function AmaroPlatform() {
   const handleDispatchReservationAction = async (params: {
     reservationId: string;
     action:
+      | 'admin_confirm_contacted'
+      | 'admin_record_coordination_result'
+      | 'provider_accept'
+      | 'provider_partial_accept'
+      | 'provider_reject'
+      | 'admin_confirm_payment'
+      | 'admin_refund'
       | 'admin_mark_dispatched'
       | 'admin_mark_send_failed'
       | 'admin_record_followup'
       | 'admin_mark_expired';
     dispatchChannel?: ReservationDispatchChannel;
     alternativeProposal?: string;
+    outcomeKind?: 'confirmed_available' | 'unavailable' | 'alternative_proposed';
+    acceptedUnits?: number;
+    note?: string;
   }) => {
     try {
       const resp = await authorizedFetch(
@@ -3692,6 +3633,11 @@ function AmaroPlatform() {
             ...(params.alternativeProposal
               ? { alternativeProposal: params.alternativeProposal }
               : {}),
+            ...(params.outcomeKind ? { outcomeKind: params.outcomeKind } : {}),
+            ...(typeof params.acceptedUnits === 'number'
+              ? { acceptedUnits: params.acceptedUnits }
+              : {}),
+            ...(params.note ? { note: params.note } : {}),
           }),
         }
       );
@@ -3700,7 +3646,14 @@ function AmaroPlatform() {
         showToast(data?.error || 'Action de suivi refusée par le serveur.');
         return;
       }
-      showToast('Suivi de transmission prestataire enregistré.');
+      await writeAuditLog(
+        'RESERVATION_TRANSITION_ADMIN',
+        params.reservationId,
+        `Action=${params.action}${params.outcomeKind ? ` (${params.outcomeKind})` : ''}${
+          typeof params.acceptedUnits === 'number' ? ` units=${params.acceptedUnits}` : ''
+        }`
+      );
+      showToast('Mise à jour serveur de la réservation enregistrée.');
     } catch {
       showToast('Erreur de communication avec le serveur de réservation.');
     }
@@ -3768,6 +3721,7 @@ function AmaroPlatform() {
             rateInfo={rateInfo}
             catalogue={combinedCatalogue}
             pilotStocks={publicActiveStocks}
+            providerOffers={providerOffers}
             culturalStories={approvedStories}
             countrySetting={countrySetting}
             isSignedIn={Boolean(authUser)}
@@ -3811,6 +3765,8 @@ function AmaroPlatform() {
             onClientInitiatePayment={handleClientInitiatePayment}
             onClientCancelReservation={handleClientCancelReservation}
             onRequestAlternativeItem={handleRequestReservation}
+            providerOffers={providerOffers}
+            onClientUpdateReservationOffers={handleClientUpdateReservationOffers}
             notifications={notifications}
             onMarkNotificationRead={handleMarkNotificationRead}
             onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
@@ -3857,23 +3813,37 @@ function AmaroPlatform() {
         {activeTab === 'promote' && (
           <PromoteServicesView
             isSignedIn={Boolean(authUser)}
+            currentUserEmail={authUser?.email || null}
             onRequireSignIn={handleSignIn}
             myProvider={myProvider}
+            myProviderPrivate={myProviderPrivate}
+            defaultCommissionPercent={countrySetting?.partnerMarginPercent ?? 10}
             myServices={myServices}
+            providerOffers={providerOffers}
+            onRefreshOffers={() => void refreshProviderOffers()}
             providerReservations={providerReservations}
             providerThankYous={providerThankYous}
+            providerIdentityByRes={providerIdentityByRes}
+            vaultKeyConfirmedByOwner={Boolean(countrySetting?.vaultKeyConfirmedByOwner)}
             platformContentMap={platformContentMap}
             onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+            onNotify={showToast}
             onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
+            onSaveProviderProfile={handleSaveProviderProfile}
             onCreateOrUpdateProviderService={handleCreateOrUpdatePromoteService}
             onProviderRespondReservation={async ({
               reservation,
               decision,
+              acceptedUnits,
               alternativeProposal,
+              scheduledDate,
+              scheduledTime,
             }) => {
               const mapped =
                 decision === 'accept'
                   ? 'accepted'
+                  : decision === 'partial_accept'
+                  ? 'partial_accepted'
                   : decision === 'propose_alternative'
                   ? 'alternative_proposed'
                   : 'rejected';
@@ -3881,8 +3851,9 @@ function AmaroPlatform() {
                 reservation,
                 mapped,
                 alternativeProposal || '',
-                reservation.scheduledDate,
-                reservation.scheduledTime
+                scheduledDate || reservation.scheduledDate,
+                scheduledTime || reservation.scheduledTime,
+                acceptedUnits
               );
             }}
           />
@@ -3908,12 +3879,6 @@ function AmaroPlatform() {
             onOpenPromoteServices={() => setActiveTab('promote')}
             onOpenLegalDoc={(slug) => setActiveLegalDoc(slug as LegalDocKey)}
             myProvider={myProvider}
-            myProviderPrivate={myProviderPrivate}
-            myServices={myServices}
-            providerReservations={providerReservations}
-            onSaveProviderProfile={handleSaveProviderProfile}
-            onCreateProviderService={handleCreateProviderService}
-            onProviderRespondReservation={handleProviderRespondReservation}
             myPartner={myPartner}
             myReferrals={myReferrals}
             allPartners={allPartners}
@@ -3921,7 +3886,6 @@ function AmaroPlatform() {
             onRegisterPartner={handleRegisterPartner}
             onAdminUpdatePartnerStatus={handleAdminUpdatePartnerStatus}
             onAdminUpdateReferral={handleAdminUpdateReferral}
-            onAdminSavePartnerSettings={handleAdminSavePartnerSettings}
             countrySetting={countrySetting}
             allCatalogueServices={allCatalogueServices}
             allProviders={allProviders}
@@ -3933,9 +3897,7 @@ function AmaroPlatform() {
             onAdminVerifyProvider={handleAdminVerifyProvider}
             onAdminLinkProviderToDirectoryListing={handleAdminLinkProviderToDirectoryListing}
             onAdminModerateStory={handleAdminModerateStory}
-            onAdminSaveSettings={handleAdminSaveSettings}
             onAdminSaveExtendedSettings={handleAdminSaveExtendedSettings}
-            onAdminSettleReservation={handleAdminSettleReservation}
             platformContents={platformContentMap}
             onAdminSavePlatformContent={handleAdminSavePlatformContent}
             allReviews={allReviews}
@@ -3947,13 +3909,14 @@ function AmaroPlatform() {
             onAdminRemoveAdminUid={handleAdminRemoveAdminUid}
             pilotPartners={adminPilotPartners}
             pilotStocks={adminPilotStocks}
+            providerOffers={providerOffers}
+            onRefreshOffers={() => void refreshProviderOffers()}
             onSavePilotPartner={handleSavePilotPartner}
             onDeletePilotPartner={handleDeletePilotPartner}
             onSyncPilotOfferActivation={handleSyncPilotOfferActivation}
             onSavePilotStock={handleSavePilotStock}
             onDeletePilotStock={handleDeletePilotStock}
             onDispatchReservationAction={handleDispatchReservationAction}
-            providerIdentityByRes={providerIdentityByRes}
             adminIdentityByRes={adminIdentityByRes}
             onNotify={showToast}
           />

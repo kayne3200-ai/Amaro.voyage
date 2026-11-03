@@ -40,6 +40,7 @@ import type {
   PilotPartnerDoc,
   PilotStockDoc,
   PlatformContentDoc,
+  ProviderOfferDoc,
   ProviderProfileDoc,
   ProviderThankYouDoc,
   ReservationDispatchChannel,
@@ -52,6 +53,7 @@ import type {
 } from '../../types/amaro';
 import { FIREBASE_CLOUD_META } from '../../lib/firebase';
 import { authorizedFetch } from '../../lib/apiClient';
+import { parseSelectedOffersJson } from '../../lib/offerEngine';
 import {
   BENIN_PUBLIC_DIRECTORY,
   COUNTRIES_REGISTRY,
@@ -64,6 +66,7 @@ import {
   OWNER_PLACEHOLDER,
 } from '../../data/amaroGovernanceDefaults';
 import { TRANSLATIONS } from '../../i18n/translations';
+import { AdminCensusTab } from './AdminCensusTab';
 import { AmaroPartnersView } from './AmaroPartnersView';
 import { PilotConventioningView } from './PilotConventioningView';
 import {
@@ -84,14 +87,6 @@ interface UserPrivateData {
   email: string;
   phone: string;
   emergencyContact: string;
-}
-
-interface ProviderPrivateData {
-  ownerId: string;
-  contactEmail: string;
-  contactPhone: string;
-  payoutChannel: string;
-  registrationRef: string;
 }
 
 interface AuditLogEntry {
@@ -137,40 +132,8 @@ interface WorkspacesAdminViewProps {
   onSignOutAfterDelete?: () => Promise<void>;
   onOpenPromoteServices?: () => void;
   onOpenLegalDoc?: (slug: string) => void;
-  // Provider workspace
+  // Provider reference (for profile role badge & shortcut to PromoteServicesView)
   myProvider: ProviderProfileDoc | null;
-  myProviderPrivate: ProviderPrivateData | null;
-  myServices: CatalogueItem[];
-  providerReservations: ReservationDoc[];
-  onSaveProviderProfile: (
-    pub: {
-      businessName: string;
-      category: ServiceCategory;
-      countryCode: string;
-      cityId: string;
-      description: string;
-    },
-    priv: Omit<ProviderPrivateData, 'ownerId'>
-  ) => Promise<void>;
-  onCreateProviderService: (payload: {
-    title: string;
-    category: ServiceCategory;
-    cityId: string;
-    address: string;
-    description: string;
-    priceAmount: number;
-    currency: CurrencyCode;
-    durationMinutes: number;
-    capacity: number;
-    imageKey: string;
-  }) => Promise<void>;
-  onProviderRespondReservation: (
-    reservation: ReservationDoc,
-    decision: 'accepted' | 'rejected' | 'alternative_proposed',
-    alternativeProposal: string,
-    newDate: string,
-    newTime: string
-  ) => Promise<void>;
   // Partners / Affiliate Program
   myPartner: PartnerProfileDoc | null;
   myReferrals: PartnerReferralDoc[];
@@ -191,11 +154,6 @@ interface WorkspacesAdminViewProps {
     nextStatus: PartnerCommissionStatus,
     clientPaid: boolean,
     providerSettled: boolean
-  ) => Promise<void>;
-  onAdminSavePartnerSettings: (
-    partnerCommissionPercent: number,
-    attributionWindowDays: number,
-    attributionModel: 'first_touch' | 'last_touch'
   ) => Promise<void>;
   // Admin workspace & Catalogue Management
   countrySetting: SystemSettingDoc | null;
@@ -241,17 +199,7 @@ interface WorkspacesAdminViewProps {
     storyId: string,
     status: 'approved' | 'rejected'
   ) => Promise<void>;
-  onAdminSaveSettings: (
-    commissionPercent: number,
-    serviceFeeFlat: number,
-    taxPercent: number
-  ) => Promise<void>;
-  onAdminSaveExtendedSettings?: (patch: Partial<SystemSettingDoc>) => Promise<void>;
-  onAdminSettleReservation: (
-    reservation: ReservationDoc,
-    nextStatus: ReservationDoc['status'],
-    nextPaymentStatus: ReservationDoc['paymentStatus']
-  ) => Promise<void>;
+  onAdminSaveExtendedSettings: (patch: Partial<SystemSettingDoc>) => Promise<void>;
   platformContents?: Record<string, PlatformContentDoc>;
   onAdminSavePlatformContent?: (
     doc: Omit<PlatformContentDoc, 'updatedBy' | 'updatedAtIso'>
@@ -269,10 +217,11 @@ interface WorkspacesAdminViewProps {
   adminsList?: Array<{ id: string; email?: string; role?: string }>;
   onAdminAddAdminUid?: (uid: string, email: string) => Promise<void>;
   onAdminRemoveAdminUid?: (uid: string) => Promise<void>;
-  providerIdentityByRes?: Record<string, IdentityVerificationDoc>;
   adminIdentityByRes?: Record<string, IdentityVerificationDoc>;
   pilotPartners?: PilotPartnerDoc[];
   pilotStocks?: PilotStockDoc[];
+  providerOffers?: ProviderOfferDoc[];
+  onRefreshOffers?: () => void;
   onSavePilotPartner?: (
     draft: Omit<PilotPartnerDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
   ) => Promise<void>;
@@ -289,15 +238,25 @@ interface WorkspacesAdminViewProps {
     draft: Omit<PilotStockDoc, 'id' | 'updatedBy' | 'updatedAtIso'> & { id?: string }
   ) => Promise<void>;
   onDeletePilotStock?: (stockId: string) => Promise<void>;
-  onDispatchReservationAction?: (params: {
+  onDispatchReservationAction: (params: {
     reservationId: string;
     action:
+      | 'admin_confirm_contacted'
+      | 'admin_record_coordination_result'
+      | 'provider_accept'
+      | 'provider_partial_accept'
+      | 'provider_reject'
+      | 'admin_confirm_payment'
+      | 'admin_refund'
       | 'admin_mark_dispatched'
       | 'admin_mark_send_failed'
       | 'admin_record_followup'
       | 'admin_mark_expired';
     dispatchChannel?: ReservationDispatchChannel;
     alternativeProposal?: string;
+    outcomeKind?: 'confirmed_available' | 'unavailable' | 'alternative_proposed';
+    acceptedUnits?: number;
+    note?: string;
   }) => Promise<void>;
   onNotify: (message: string) => void;
 }
@@ -306,8 +265,8 @@ type SubWorkspace =
   | 'github'
   | 'partners'
   | 'profile'
-  | 'provider'
   | 'pilots'
+  | 'census'
   | 'admin'
   | 'matrix';
 
@@ -357,12 +316,6 @@ export function WorkspacesAdminView({
   onOpenPromoteServices,
   onOpenLegalDoc,
   myProvider,
-  myProviderPrivate,
-  myServices,
-  providerReservations,
-  onSaveProviderProfile,
-  onCreateProviderService,
-  onProviderRespondReservation,
   myPartner,
   myReferrals,
   allPartners,
@@ -370,7 +323,6 @@ export function WorkspacesAdminView({
   onRegisterPartner,
   onAdminUpdatePartnerStatus,
   onAdminUpdateReferral,
-  onAdminSavePartnerSettings,
   countrySetting,
   allCatalogueServices,
   allProviders,
@@ -382,9 +334,7 @@ export function WorkspacesAdminView({
   onAdminVerifyProvider,
   onAdminLinkProviderToDirectoryListing,
   onAdminModerateStory,
-  onAdminSaveSettings,
   onAdminSaveExtendedSettings,
-  onAdminSettleReservation,
   platformContents = {},
   onAdminSavePlatformContent,
   allReviews = [],
@@ -394,10 +344,11 @@ export function WorkspacesAdminView({
   adminsList = [],
   onAdminAddAdminUid,
   onAdminRemoveAdminUid,
-  providerIdentityByRes = {},
   adminIdentityByRes = {},
   pilotPartners = [],
   pilotStocks = [],
+  providerOffers = [],
+  onRefreshOffers,
   onSavePilotPartner,
   onDeletePilotPartner,
   onSyncPilotOfferActivation,
@@ -408,13 +359,19 @@ export function WorkspacesAdminView({
 }: WorkspacesAdminViewProps) {
   const t = TRANSLATIONS[locale];
   const [subTab, setSubTab] = useState<SubWorkspace>('profile');
+  const [adminPartialUnitsByRes, setAdminPartialUnitsByRes] = useState<
+    Record<string, number>
+  >({});
   const [identityModalContext, setIdentityModalContext] = useState<{
     reservation: ReservationDoc;
-    role: 'provider' | 'admin';
+    role: 'admin';
   } | null>(null);
 
   useEffect(() => {
-    if (!isAdmin && (subTab === 'admin' || subTab === 'github' || subTab === 'pilots')) {
+    if (
+      !isAdmin &&
+      (subTab === 'admin' || subTab === 'github' || subTab === 'pilots' || subTab === 'census')
+    ) {
       setSubTab('profile');
     }
   }, [isAdmin, subTab]);
@@ -463,54 +420,8 @@ export function WorkspacesAdminView({
     }
   }, [userSavedPrefs]);
 
-  // 2. Provider Form State (only for existing registered providers via PromoteServicesView)
-  const [businessName, setBusinessName] = useState<string>('');
-  const [provCategory, setProvCategory] = useState<ServiceCategory>('accommodation');
-  const [provCity, setProvCity] = useState<string>('cotonou');
-  const [provDesc, setProvDesc] = useState<string>('');
-  const [contactEmail, setContactEmail] = useState<string>('');
-  const [contactPhone, setContactPhone] = useState<string>('');
-  const [payoutChannel, setPayoutChannel] = useState<string>('MTN MoMo Bénin');
-  const [registrationRef, setRegistrationRef] = useState<string>('');
-  const [savingProvider, setSavingProvider] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (myProvider) {
-      setBusinessName(myProvider.businessName);
-      setProvCategory(myProvider.category);
-      setProvCity(myProvider.cityId);
-      setProvDesc(myProvider.description);
-    }
-    if (myProviderPrivate) {
-      setContactEmail(myProviderPrivate.contactEmail);
-      setContactPhone(myProviderPrivate.contactPhone);
-      setPayoutChannel(myProviderPrivate.payoutChannel);
-      setRegistrationRef(myProviderPrivate.registrationRef);
-    } else if (currentUserEmail) {
-      setContactEmail(currentUserEmail);
-    }
-  }, [myProvider, myProviderPrivate, currentUserEmail]);
-
-  // Provider New Service Offer State
-  const [srvTitle, setSrvTitle] = useState<string>('');
-  const [srvCategory, setSrvCategory] = useState<ServiceCategory>('accommodation');
-  const [srvCity, setSrvCity] = useState<string>('cotonou');
-  const [srvAddress, setSrvAddress] = useState<string>('');
-  const [srvDesc, setSrvDesc] = useState<string>('');
-  const [srvPrice, setSrvPrice] = useState<number>(25000);
-  const [srvCurrency, setSrvCurrency] = useState<CurrencyCode>('XOF');
-  const [srvDuration, setSrvDuration] = useState<number>(120);
-  const [srvCapacity, setSrvCapacity] = useState<number>(4);
-  const [srvImageKey, setSrvImageKey] = useState<string>('cotonou_coast');
-  const [savingService, setSavingService] = useState<boolean>(false);
-
-  // Provider Alternative Proposal Drafts
-  const [altTextByRes, setAltTextByRes] = useState<Record<string, string>>({});
-  const [altDateByRes, setAltDateByRes] = useState<Record<string, string>>({});
-  const [altTimeByRes, setAltTimeByRes] = useState<Record<string, string>>({});
-
-  // 3. Admin Settings & Extended Governance State
-  const [commPct, setCommPct] = useState<number>(countrySetting?.commissionPercent ?? 10);
+  // 2. Admin Settings & Extended Governance State
+  const [, setCommPct] = useState<number>(countrySetting?.commissionPercent ?? 10);
   const [partnerMarginPct, setPartnerMarginPct] = useState<number>(
     countrySetting?.partnerMarginPercent ?? 10
   );
@@ -604,8 +515,10 @@ export function WorkspacesAdminView({
   >({});
   const [exportingOperational, setExportingOperational] = useState<boolean>(false);
 
-  // Editable Platform Content State
-  const contentSlugs = Object.keys(DEFAULT_PLATFORM_CONTENT);
+  // Editable Platform Content State (excludes legacy combined duplicate 'transparence_garanties')
+  const contentSlugs = Object.keys(DEFAULT_PLATFORM_CONTENT).filter(
+    (slug) => slug !== 'transparence_garanties'
+  );
   const [selectedContentSlug, setSelectedContentSlug] = useState<string>(
     contentSlugs[0] || 'cgv'
   );
@@ -1030,9 +943,6 @@ export function WorkspacesAdminView({
     }
   };
 
-  const pendingProviderReservations = providerReservations.filter(
-    (r) => r.status === 'pending_provider'
-  );
   const feeQueueFolders = allFolders.filter(
     (f) =>
       f.dossierFeeStatus === 'in_verification' ||
@@ -1058,8 +968,8 @@ export function WorkspacesAdminView({
           </p>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
             {isAdmin
-              ? 'Espaces Profil, Prestataires, Partenaires & Administration'
-              : 'Mon Profil, Espace Prestataire & Amaro Partners'}
+              ? 'Mon Profil, Partenaires Pilotes & Administration'
+              : 'Mon Profil & Amaro Partners'}
           </h1>
         </div>
 
@@ -1090,15 +1000,6 @@ export function WorkspacesAdminView({
               adminOnly: false,
             },
             {
-              id: 'provider' as SubWorkspace,
-              label:
-                pendingProviderReservations.length > 0
-                  ? `Espace Prestataire (${pendingProviderReservations.length} en attente)`
-                  : 'Espace Prestataire',
-              icon: Building2,
-              adminOnly: false,
-            },
-            {
               id: 'matrix' as SubWorkspace,
               label: isAdmin ? 'Matrice & Légal' : 'Charte Légale & Confidentialité',
               icon: FileCheck2,
@@ -1108,6 +1009,12 @@ export function WorkspacesAdminView({
               id: 'pilots' as SubWorkspace,
               label: 'Partenaires pilotes — Conventionnement',
               icon: FolderKanban,
+              adminOnly: true,
+            },
+            {
+              id: 'census' as SubWorkspace,
+              label: 'Recensement Web Bénin',
+              icon: Database,
               adminOnly: true,
             },
             {
@@ -1145,6 +1052,23 @@ export function WorkspacesAdminView({
             );
           })}
       </div>
+
+      {/* =====================================================================
+          TAB CENSUS: RECENSEMENT WEB BÉNIN & OFFRES STRUCTURÉES (ADMIN ONLY)
+         ===================================================================== */}
+      {subTab === 'census' && isAdmin && (
+        <AdminCensusTab
+          allCatalogueServices={[
+            ...allCatalogueServices,
+            ...BENIN_PUBLIC_DIRECTORY.filter(
+              (b) => !allCatalogueServices.some((c) => c.id === b.id)
+            ),
+          ]}
+          providerOffers={providerOffers}
+          onRefreshOffers={() => onRefreshOffers?.()}
+          onNotify={onNotify}
+        />
+      )}
 
       {/* =====================================================================
           TAB PILOTS: PARTENAIRES PILOTES — CONVENTIONNEMENT (ADMIN ONLY)
@@ -1188,7 +1112,23 @@ export function WorkspacesAdminView({
           onRegisterPartner={onRegisterPartner}
           onAdminUpdatePartnerStatus={onAdminUpdatePartnerStatus}
           onAdminUpdateReferral={onAdminUpdateReferral}
-          onAdminSavePartnerSettings={onAdminSavePartnerSettings}
+          onAdminSavePartnerSettings={async (
+            partnerCommissionPercent,
+            attributionWindowDays,
+            attributionModel
+          ) => {
+            await onAdminSaveExtendedSettings({
+              partnerCommissionPercent: Math.max(
+                0,
+                Math.min(100, Number(partnerCommissionPercent) || 0)
+              ),
+              attributionWindowDays: Math.max(
+                1,
+                Math.min(365, Math.round(attributionWindowDays || 30))
+              ),
+              attributionModel,
+            });
+          }}
           onNotify={onNotify}
         />
       )}
@@ -1689,524 +1629,6 @@ export function WorkspacesAdminView({
       )}
 
       {/* =====================================================================
-          TAB 3: PROVIDER WORKSPACE (SINGLE ENTRY VIA PROMOTE SERVICES — BLOC 1)
-         ===================================================================== */}
-      {subTab === 'provider' && (
-        <div className="space-y-6">
-          {!isSignedIn ? (
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
-              <h2 className="font-display text-lg font-bold">
-                Espace Prestataire Partenaire Bénin
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                Connectez-vous pour accéder à vos demandes clients en attente ou présenter votre établissement via le parcours officiel « Promouvoir mes services ».
-              </p>
-              <button
-                type="button"
-                onClick={onRequireSignIn}
-                className="min-h-[44px] px-5 py-2 text-xs font-semibold text-slate-950 bg-amber-400 rounded-xl"
-              >
-                Connexion Prestataire
-              </button>
-            </div>
-          ) : !myProvider ? (
-            /* Bloc 1: Single authorized entry point for provider registration */
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3 max-w-2xl">
-              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                Inscription Prestataire uniquement via « Promouvoir mes services »
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Pour garantir la transparence du catalogue AMARO.VOYAGE, aucun établissement ne peut s’inscrire sans lire et accepter la convention prestataire dans l’espace dédié <strong>« Promouvoir mes services »</strong>, suivi d’une validation humaine par l’administrateur.
-              </p>
-              {onOpenPromoteServices && (
-                <button
-                  type="button"
-                  onClick={onOpenPromoteServices}
-                  className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
-                >
-                  <Building2 className="w-4 h-4" />
-                  <span>Ouvrir « Promouvoir mes services »</span>
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Lot 1.1: Registered provider immediately sees pending requests on workspace open */}
-              {pendingProviderReservations.length > 0 && (
-                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-2 text-amber-950 dark:text-amber-200 font-semibold">
-                    <Bell className="w-4 h-4 shrink-0" />
-                    <span>
-                      Vous avez {pendingProviderReservations.length} demande(s) client en attente de réponse (délai contractuel : {myProvider.agreedResponseHours ?? countrySetting?.providerResponseHours ?? 24} h).
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                <div className="lg:col-span-6 space-y-6">
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      setSavingProvider(true);
-                      try {
-                        await onSaveProviderProfile(
-                          {
-                            businessName: businessName.trim(),
-                            category: provCategory,
-                            countryCode: 'BJ',
-                            cityId: provCity,
-                            description: provDesc.trim(),
-                          },
-                          {
-                            contactEmail: contactEmail.trim(),
-                            contactPhone: contactPhone.trim(),
-                            payoutChannel: payoutChannel.trim(),
-                            registrationRef: registrationRef.trim(),
-                          }
-                        );
-                      } finally {
-                        setSavingProvider(false);
-                      }
-                    }}
-                    className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-                        1. Fiche Établissement ({myProvider.businessName})
-                      </h2>
-                      <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">
-                        Statut :{' '}
-                        {myProvider.verificationStatus === 'verified'
-                          ? 'Partenaire AMARO vérifié'
-                          : myProvider.verificationStatus === 'rejected'
-                          ? 'Refusé'
-                          : 'En attente de validation Admin'}
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-slate-500">
-                      Marge partenaire conventionné Circuit B applicable :{' '}
-                      <strong>
-                        {myProvider.agreedCommissionPercent ??
-                          countrySetting?.partnerMarginPercent ??
-                          10}
-                        %
-                      </strong>{' '}
-                      · Convention acceptée v{myProvider.conventionVersionAccepted || '1.0'}.
-                    </p>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        value={businessName}
-                        onChange={(e) => setBusinessName(e.target.value)}
-                        placeholder="Nom commercial de l'établissement"
-                        required
-                        minLength={2}
-                        maxLength={135}
-                        className="sm:col-span-2 min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                      />
-                      <select
-                        value={provCategory}
-                        onChange={(e) => setProvCategory(e.target.value as ServiceCategory)}
-                        className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                      >
-                        {CATEGORIES.map((c) => (
-                          <option key={c} value={c}>
-                            {t.categories[c]}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={provCity}
-                        onChange={(e) => setProvCity(e.target.value)}
-                        className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                      >
-                        {BENIN_CITIES.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <textarea
-                      value={provDesc}
-                      onChange={(e) => setProvDesc(e.target.value)}
-                      rows={3}
-                      required
-                      minLength={10}
-                      maxLength={1400}
-                      placeholder="Présentation réelle et vérifiable de vos services..."
-                      className="w-full p-3 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                      <p className="text-[11px] font-semibold text-slate-500">
-                        Données commerciales privées (visibles uniquement par vous et l’Administration)
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <input
-                          type="email"
-                          value={contactEmail}
-                          onChange={(e) => setContactEmail(e.target.value)}
-                          placeholder="Email pro"
-                          required
-                          className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                        <input
-                          type="tel"
-                          value={contactPhone}
-                          onChange={(e) => setContactPhone(e.target.value)}
-                          placeholder="Téléphone / WhatsApp pro"
-                          required
-                          className="min-h-[42px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                        <input
-                          type="text"
-                          value={payoutChannel}
-                          onChange={(e) => setPayoutChannel(e.target.value)}
-                          placeholder="Canal reversement (MTN MoMo, Banque...)"
-                          className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                        <input
-                          type="text"
-                          value={registrationRef}
-                          onChange={(e) => setRegistrationRef(e.target.value)}
-                          placeholder="IFU / RCCM (optionnel)"
-                          className="min-h-[42px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={savingProvider}
-                      className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
-                    >
-                      {savingProvider ? 'Enregistrement...' : 'Mettre à jour ma fiche prestataire'}
-                    </button>
-                  </form>
-
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      setSavingService(true);
-                      try {
-                        await onCreateProviderService({
-                          title: srvTitle.trim(),
-                          category: srvCategory,
-                          cityId: srvCity,
-                          address: srvAddress.trim(),
-                          description: srvDesc.trim(),
-                          priceAmount: Math.max(0, Number(srvPrice)),
-                          currency: srvCurrency,
-                          durationMinutes: Math.max(15, Math.round(srvDuration)),
-                          capacity: Math.max(1, Math.round(srvCapacity)),
-                          imageKey: srvImageKey,
-                        });
-                        setSrvTitle('');
-                        setSrvAddress('');
-                        setSrvDesc('');
-                      } finally {
-                        setSavingService(false);
-                      }
-                    }}
-                    className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3"
-                  >
-                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-                      2. Publier une offre ({myServices.length} enregistrée(s))
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      {myProvider.verificationStatus === 'verified'
-                        ? 'Votre compte est validé : vos offres portent le badge « Partenaire AMARO ».'
-                        : 'Tant que votre compte est en attente de validation Admin, vos offres restent en brouillon non réservables publiquement.'}
-                    </p>
-
-                    <input
-                      type="text"
-                      value={srvTitle}
-                      onChange={(e) => setSrvTitle(e.target.value)}
-                      placeholder="Titre précis de la prestation"
-                      required
-                      minLength={2}
-                      maxLength={150}
-                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <select
-                        value={srvCategory}
-                        onChange={(e) => setSrvCategory(e.target.value as ServiceCategory)}
-                        className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                      >
-                        {CATEGORIES.map((c) => (
-                          <option key={c} value={c}>
-                            {t.categories[c]}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={srvCity}
-                        onChange={(e) => setSrvCity(e.target.value)}
-                        className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                      >
-                        {BENIN_CITIES.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <input
-                      type="text"
-                      value={srvAddress}
-                      onChange={(e) => setSrvAddress(e.target.value)}
-                      placeholder="Quartier / Adresse exacte au Bénin"
-                      required
-                      maxLength={220}
-                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="block text-[11px] mb-1">Tarif ({srvCurrency})</label>
-                        <input
-                          type="number"
-                          min={0}
-                          value={srvPrice}
-                          onChange={(e) => setSrvPrice(Number(e.target.value))}
-                          required
-                          className="w-full min-h-[40px] px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] mb-1">Durée (min)</label>
-                        <input
-                          type="number"
-                          min={15}
-                          value={srvDuration}
-                          onChange={(e) => setSrvDuration(Number(e.target.value))}
-                          required
-                          className="w-full min-h-[40px] px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] mb-1">Capacité max</label>
-                        <input
-                          type="number"
-                          min={1}
-                          value={srvCapacity}
-                          onChange={(e) => setSrvCapacity(Number(e.target.value))}
-                          required
-                          className="w-full min-h-[40px] px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                        />
-                      </div>
-                    </div>
-
-                    <select
-                      value={srvImageKey}
-                      onChange={(e) => setSrvImageKey(e.target.value)}
-                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    >
-                      {Object.entries(EDITORIAL_IMAGES).map(([k, v]) => (
-                        <option key={k} value={k}>
-                          Illustration générique : {v.alt.slice(0, 60)}...
-                        </option>
-                      ))}
-                    </select>
-
-                    <textarea
-                      value={srvDesc}
-                      onChange={(e) => setSrvDesc(e.target.value)}
-                      rows={2}
-                      required
-                      maxLength={1800}
-                      placeholder="Conditions incluses, horaires habituels (sans sacralisation marketing auto-déclarée)..."
-                      className="w-full p-3 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-
-                    <button
-                      type="submit"
-                      disabled={savingService}
-                      className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-xl"
-                    >
-                      {savingService ? 'Enregistrement...' : 'Enregistrer cette prestation'}
-                    </button>
-                  </form>
-                </div>
-
-                {/* Provider Incoming Reservations */}
-                <div className="lg:col-span-6 p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
-                  <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-                    3. Demandes Clients Reçues ({providerReservations.length})
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Les demandes en attente s’affichent en priorité. Répondez par « Disponible », « Indisponible » ou proposez un nouvel horaire soumis à l’accord du client.
-                  </p>
-
-                  {providerReservations.length === 0 ? (
-                    <p className="text-xs text-slate-500 py-4">
-                      Aucune demande reçue sur vos prestations pour le moment.
-                    </p>
-                  ) : (
-                    <div className="space-y-4">
-                      {[...providerReservations]
-                        .sort((a, b) =>
-                          a.status === 'pending_provider' && b.status !== 'pending_provider'
-                            ? -1
-                            : 1
-                        )
-                        .map((r) => (
-                          <div
-                            key={r.id}
-                            className={`p-4 border rounded-xl space-y-2.5 text-xs ${
-                              r.status === 'pending_provider'
-                                ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
-                                : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
-                            }`}
-                          >
-                            <div className="flex justify-between gap-2 font-mono tabular-nums text-slate-500">
-                              <span>
-                                {r.scheduledDate} · {r.scheduledTime}
-                              </span>
-                              <span>{r.participants} pers.</span>
-                            </div>
-                            <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                              {r.serviceTitle}
-                            </p>
-                            <p className="font-mono tabular-nums">
-                              Montant net prestataire : {r.providerPrice} {r.currency} · Statut :{' '}
-                              <strong>{r.status}</strong>
-                              {r.responseDeadlineAt && (
-                                <> · Limite réponse : {r.responseDeadlineAt.slice(0, 16).replace('T', ' ')}</>
-                              )}
-                            </p>
-
-                            {(() => {
-                              const idMeta = providerIdentityByRes[r.id];
-                              const statusKey = idMeta?.status || 'not_requested';
-                              const ui = IDENTITY_STATUS_META[statusKey];
-                              return (
-                                <div className="pt-1.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/70 dark:border-slate-800">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <span className="text-[11px] text-slate-500">
-                                      Justificatif client :
-                                    </span>
-                                    <span
-                                      className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${ui.badgeClass}`}
-                                    >
-                                      {ui.label}
-                                    </span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setIdentityModalContext({ reservation: r, role: 'provider' })
-                                    }
-                                    className="min-h-[36px] inline-flex items-center gap-1 px-3 py-1 text-[11px] font-semibold text-white bg-[#0B192C] hover:bg-slate-800 rounded-lg"
-                                  >
-                                    <ShieldCheck className="w-3.5 h-3.5" />
-                                    <span>Vérification d’identité client</span>
-                                  </button>
-                                </div>
-                              );
-                            })()}
-
-                            {r.status === 'pending_provider' && (
-                              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                                <div className="flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void onProviderRespondReservation(
-                                        r,
-                                        'accepted',
-                                        '',
-                                        r.scheduledDate,
-                                        r.scheduledTime
-                                      )
-                                    }
-                                    className="min-h-[38px] px-3.5 py-1.5 font-semibold text-white bg-emerald-700 rounded-lg"
-                                  >
-                                    Accepter (Disponible)
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void onProviderRespondReservation(
-                                        r,
-                                        'rejected',
-                                        'Créneau complet ou indisponible.',
-                                        r.scheduledDate,
-                                        r.scheduledTime
-                                      )
-                                    }
-                                    className="min-h-[38px] px-3.5 py-1.5 font-semibold text-red-700 bg-red-100 dark:bg-red-950/60 dark:text-red-300 rounded-lg"
-                                  >
-                                    Refuser (Indisponible)
-                                  </button>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                                  <input
-                                    type="date"
-                                    value={altDateByRes[r.id] ?? r.scheduledDate}
-                                    onChange={(e) =>
-                                      setAltDateByRes((p) => ({ ...p, [r.id]: e.target.value }))
-                                    }
-                                    className="min-h-[38px] px-2 py-1 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
-                                  />
-                                  <input
-                                    type="time"
-                                    value={altTimeByRes[r.id] ?? r.scheduledTime}
-                                    onChange={(e) =>
-                                      setAltTimeByRes((p) => ({ ...p, [r.id]: e.target.value }))
-                                    }
-                                    className="min-h-[38px] px-2 py-1 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={altTextByRes[r.id] ?? ''}
-                                    onChange={(e) =>
-                                      setAltTextByRes((p) => ({ ...p, [r.id]: e.target.value }))
-                                    }
-                                    placeholder="Détail de l'alternative..."
-                                    className="min-h-[38px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void onProviderRespondReservation(
-                                      r,
-                                      'alternative_proposed',
-                                      altTextByRes[r.id] ||
-                                        'Nouvel horaire proposé par le prestataire.',
-                                      altDateByRes[r.id] || r.scheduledDate,
-                                      altTimeByRes[r.id] || r.scheduledTime
-                                    )
-                                  }
-                                  className="min-h-[38px] px-3.5 py-1.5 font-semibold text-slate-900 bg-amber-300 rounded-lg"
-                                >
-                                  Proposer cette alternative au client
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =====================================================================
           TAB 4: CENTRAL ADMINISTRATION, GOVERNANCE, CIRCUITS A/B & CONTENT
          ===================================================================== */}
       {subTab === 'admin' && (
@@ -2484,35 +1906,32 @@ export function WorkspacesAdminView({
                 </section>
               </div>
 
-              {/* Extended System Settings BJ (Differentiated Margins, Dossier Fee, Vault Key, Retention) */}
+              {/* Extended System Settings BJ (Single Unified Save Handler) */}
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
                   setSavingSettings(true);
                   try {
-                    await onAdminSaveSettings(partnerMarginPct, flatFee, taxPct);
-                    if (onAdminSaveExtendedSettings) {
-                      await onAdminSaveExtendedSettings({
-                        commissionPercent: partnerMarginPct,
-                        partnerMarginPercent: partnerMarginPct,
-                        directoryMarginPercent: directoryMarginPct,
-                        serviceFeeFlat: flatFee,
-                        taxPercent: taxPct,
-                        dossierFeeXof,
-                        providerResponseHours: providerRespHours,
-                        maxVisitsCityChangeDay: maxVisitsChange,
-                        maxVisitsSameCityDay: maxVisitsSame,
-                        localContributionPercent: localContribPct,
-                        localContributionLabel: localContribLabel.trim() || OWNER_PLACEHOLDER,
-                        amaroMobileMoneyNumber: momoNumber.trim() || OWNER_PLACEHOLDER,
-                        amaroMobileMoneyHolder: momoHolder.trim() || OWNER_PLACEHOLDER,
-                        amaroWhatsappNumber: waSupport.trim() || OWNER_PLACEHOLDER,
-                        financialRetentionDuration:
-                          retentionDuration.trim() || OWNER_PLACEHOLDER,
-                        vaultKeyConfirmedByOwner: vaultKeyConfirmed,
-                        includeDemoData: includeDemo,
-                      });
-                    }
+                    await onAdminSaveExtendedSettings({
+                      commissionPercent: Math.max(0, Math.min(100, partnerMarginPct)),
+                      partnerMarginPercent: Math.max(0, Math.min(100, partnerMarginPct)),
+                      directoryMarginPercent: Math.max(0, Math.min(100, directoryMarginPct)),
+                      serviceFeeFlat: Math.max(0, flatFee),
+                      taxPercent: Math.max(0, Math.min(100, taxPct)),
+                      dossierFeeXof: Math.max(0, dossierFeeXof),
+                      providerResponseHours: providerRespHours,
+                      maxVisitsCityChangeDay: maxVisitsChange,
+                      maxVisitsSameCityDay: maxVisitsSame,
+                      localContributionPercent: localContribPct,
+                      localContributionLabel: localContribLabel.trim() || OWNER_PLACEHOLDER,
+                      amaroMobileMoneyNumber: momoNumber.trim() || OWNER_PLACEHOLDER,
+                      amaroMobileMoneyHolder: momoHolder.trim() || OWNER_PLACEHOLDER,
+                      amaroWhatsappNumber: waSupport.trim() || OWNER_PLACEHOLDER,
+                      financialRetentionDuration:
+                        retentionDuration.trim() || OWNER_PLACEHOLDER,
+                      vaultKeyConfirmedByOwner: vaultKeyConfirmed,
+                      includeDemoData: includeDemo,
+                    });
                   } finally {
                     setSavingSettings(false);
                   }
@@ -3239,7 +2658,22 @@ export function WorkspacesAdminView({
                         const catItem =
                           allCatalogueServices.find((x) => x.id === r.serviceId) ||
                           BENIN_PUBLIC_DIRECTORY.find((x) => x.id === r.serviceId);
-                        const readyMessage = `Bonjour ${r.serviceTitle}, nous coordonnons via AMARO.VOYAGE une demande client pour le ${r.scheduledDate} à ${r.scheduledTime} (${r.participants} personne(s)). Pourriez-vous nous confirmer votre disponibilité et votre tarif ? Merci.`;
+                        const chosenLines = parseSelectedOffersJson(r.selectedOffersJson);
+                        const requestedUnits = Math.max(
+                          1,
+                          r.requestedUnitsTotal ||
+                            chosenLines.reduce((sum, l) => sum + Math.max(1, l.quantity), 0) ||
+                            1
+                        );
+                        const partialDraft =
+                          adminPartialUnitsByRes[r.id] ?? Math.max(1, requestedUnits - 1);
+                        const offersTextForMsg =
+                          chosenLines.length > 0
+                            ? ` · Offres : ${chosenLines
+                                .map((l) => `${l.quantity}x ${l.offerName}`)
+                                .join(', ')}`
+                            : '';
+                        const readyMessage = `Bonjour ${r.serviceTitle}, nous coordonnons via AMARO.VOYAGE une demande client pour le ${r.scheduledDate}${r.checkOutDate ? ` au ${r.checkOutDate}` : ''} à ${r.scheduledTime} (${r.participants} personne(s)${offersTextForMsg}). Pourriez-vous nous confirmer votre disponibilité réelle et votre tarif ? Merci.`;
                         const cleanPhone = catItem?.contactPhone
                           ? catItem.contactPhone.replace(/[^0-9]/g, '')
                           : '';
@@ -3255,10 +2689,27 @@ export function WorkspacesAdminView({
                               </span>
                             </div>
                             <div className="font-mono text-slate-500 tabular-nums">
-                              {r.scheduledDate} {r.scheduledTime} · {r.totalAmount} {r.currency} ·{' '}
-                              {r.status} / {r.paymentStatus}
+                              {r.scheduledDate}
+                              {r.checkOutDate ? ` → ${r.checkOutDate}` : ''} {r.scheduledTime} ·{' '}
+                              {r.totalAmount} {r.currency}
+                              {r.hasPriceToVerify ? ' (Estimation)' : ''} · {r.status} /{' '}
+                              {r.paymentStatus}
                               {r.coordinationStatus && <> · Coord: {r.coordinationStatus}</>}
                             </div>
+                            {chosenLines.length > 0 && (
+                              <div className="text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+                                Offres demandées :{' '}
+                                {chosenLines
+                                  .map((l) => `${l.quantity} × ${l.offerName} (${l.priceUnit})`)
+                                  .join(' · ')}
+                              </div>
+                            )}
+                            {r.isPartialAcceptance && (
+                              <div className="text-[11px] font-semibold text-teal-800 dark:text-teal-300 tabular-nums">
+                                Confirmation partielle enregistrée : {r.acceptedUnitsTotal}/
+                                {r.requestedUnitsTotal} unité(s) confirmée(s).
+                              </div>
+                            )}
                             {r.adminNotifyProviderTask === 'pending_inform_cancellation' && (
                               <p className="text-amber-800 dark:text-amber-300 font-semibold">
                                 À faire : informer manuellement cet établissement de l’annulation du dossier.
@@ -3299,41 +2750,111 @@ export function WorkspacesAdminView({
                                       <span>Ouvrir WhatsApp</span>
                                     </a>
                                   )}
-                                  {onDispatchReservationAction && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        void onDispatchReservationAction({
-                                          reservationId: r.id,
-                                          action: 'admin_mark_dispatched',
-                                          dispatchChannel: 'manual_concierge',
-                                        })
-                                      }
-                                      className="min-h-[32px] px-2.5 py-1 bg-amber-300 text-slate-950 rounded font-semibold"
-                                    >
-                                      J’ai contacté l’établissement
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void onDispatchReservationAction({
+                                        reservationId: r.id,
+                                        action: 'admin_confirm_contacted',
+                                        dispatchChannel: 'manual_concierge',
+                                      })
+                                    }
+                                    className="min-h-[32px] px-2.5 py-1 bg-amber-300 text-slate-950 rounded font-semibold"
+                                  >
+                                    J’ai contacté l’établissement
+                                  </button>
                                 </div>
                               </div>
                             )}
 
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               {r.status === 'pending_provider' && (
                                 <>
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      void onAdminSettleReservation(r, 'accepted', r.paymentStatus)
+                                      void onDispatchReservationAction(
+                                        isCircuitA
+                                          ? {
+                                              reservationId: r.id,
+                                              action: 'admin_record_coordination_result',
+                                              outcomeKind: 'confirmed_available',
+                                            }
+                                          : {
+                                              reservationId: r.id,
+                                              action: 'provider_accept',
+                                            }
+                                      )
                                     }
                                     className="min-h-[34px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
                                   >
                                     Confirmer dispo réelle
                                   </button>
+
+                                  {requestedUnits > 1 && (
+                                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={requestedUnits - 1}
+                                        value={partialDraft}
+                                        onChange={(e) =>
+                                          setAdminPartialUnitsByRes((prev) => ({
+                                            ...prev,
+                                            [r.id]: Math.max(
+                                              1,
+                                              Math.min(
+                                                requestedUnits - 1,
+                                                Number(e.target.value) || 1
+                                              )
+                                            ),
+                                          }))
+                                        }
+                                        className="w-12 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 font-mono tabular-nums"
+                                      />
+                                      <span className="text-slate-500 tabular-nums">
+                                        / {requestedUnits}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void onDispatchReservationAction(
+                                            isCircuitA
+                                              ? {
+                                                  reservationId: r.id,
+                                                  action: 'admin_record_coordination_result',
+                                                  outcomeKind: 'confirmed_available',
+                                                  acceptedUnits: partialDraft,
+                                                }
+                                              : {
+                                                  reservationId: r.id,
+                                                  action: 'provider_partial_accept',
+                                                  acceptedUnits: partialDraft,
+                                                }
+                                          )
+                                        }
+                                        className="px-2 py-1 rounded bg-teal-700 text-white font-semibold"
+                                      >
+                                        Confirmer {partialDraft}/{requestedUnits}
+                                      </button>
+                                    </div>
+                                  )}
+
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      void onAdminSettleReservation(r, 'rejected', r.paymentStatus)
+                                      void onDispatchReservationAction(
+                                        isCircuitA
+                                          ? {
+                                              reservationId: r.id,
+                                              action: 'admin_record_coordination_result',
+                                              outcomeKind: 'unavailable',
+                                            }
+                                          : {
+                                              reservationId: r.id,
+                                              action: 'provider_reject',
+                                            }
+                                      )
                                     }
                                     className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                                   >
@@ -3345,7 +2866,10 @@ export function WorkspacesAdminView({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    void onAdminSettleReservation(r, 'confirmed', 'succeeded')
+                                    void onDispatchReservationAction({
+                                      reservationId: r.id,
+                                      action: 'admin_confirm_payment',
+                                    })
                                   }
                                   className="min-h-[34px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                                 >
@@ -3356,7 +2880,10 @@ export function WorkspacesAdminView({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    void onAdminSettleReservation(r, 'refunded', 'refunded')
+                                    void onDispatchReservationAction({
+                                      reservationId: r.id,
+                                      action: 'admin_refund',
+                                    })
                                   }
                                   className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                                 >
@@ -3773,12 +3300,8 @@ export function WorkspacesAdminView({
       {identityModalContext && (
         <IdentityVerificationModal
           reservation={identityModalContext.reservation}
-          viewerRole={identityModalContext.role}
-          initialMetadata={
-            identityModalContext.role === 'provider'
-              ? providerIdentityByRes[identityModalContext.reservation.id] || null
-              : adminIdentityByRes[identityModalContext.reservation.id] || null
-          }
+          viewerRole="admin"
+          initialMetadata={adminIdentityByRes[identityModalContext.reservation.id] || null}
           vaultKeyConfirmedByOwner={Boolean(countrySetting?.vaultKeyConfirmedByOwner)}
           onClose={() => setIdentityModalContext(null)}
           onNotify={onNotify}

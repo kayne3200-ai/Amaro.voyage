@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
 import type {
   AccountGovernanceDoc,
+  CensusListingDoc,
   CurrencyCode,
   DossierFeeStatus,
   FinancialArchiveDoc,
@@ -12,12 +13,14 @@ import type {
   NotificationDispatchDoc,
   PartnerActivationLevel,
   PaymentStatus,
+  ProviderOfferDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ReservationStatus,
   ServiceCategory,
 } from '../types/amaro';
 import { OWNER_PLACEHOLDER } from '../data/amaroGovernanceDefaults';
+import { INITIAL_BENIN_WEB_CENSUS_RECORDS } from '../data/beninWebCensusSeed';
 import {
   OFFICIAL_PUBLIC_AND_DEMO_SERVICES,
   parseMinutes,
@@ -101,6 +104,14 @@ export interface ServerReservationRecord {
   balanceDeadlineAt?: string;
   adminNotifyProviderTask?: 'none' | 'pending_inform_cancellation' | 'informed';
   localContributionXof?: number;
+  selectedOffersJson?: string;
+  hasPriceToVerify?: boolean;
+  checkOutDate?: string;
+  pickupLocation?: string;
+  dropoffLocation?: string;
+  isPartialAcceptance?: boolean;
+  requestedUnitsTotal?: number;
+  acceptedUnitsTotal?: number;
   createdAtIso?: string;
   updatedAtIso?: string;
 }
@@ -201,6 +212,12 @@ export interface AtomicReservationPayload {
     | 'unavailable'
     | 'quote_received';
   localContributionXof?: number;
+  selectedOffersJson?: string;
+  hasPriceToVerify?: boolean;
+  checkOutDate?: string;
+  pickupLocation?: string;
+  dropoffLocation?: string;
+  requestedUnitsTotal?: number;
   referral?: AtomicReferralPayload | null;
 }
 
@@ -235,6 +252,16 @@ export interface AmaroServerStore {
         | 'quote_received';
       coordinationContactedAt?: string;
       coordinationOutcome?: string;
+      providerPrice?: number;
+      amaroFee?: number;
+      taxAmount?: number;
+      totalAmount?: number;
+      pricingSnapshot?: string;
+      selectedOffersJson?: string;
+      isPartialAcceptance?: boolean;
+      requestedUnitsTotal?: number;
+      acceptedUnitsTotal?: number;
+      folderIdToMarkPartiallyConfirmed?: string;
       cancelAffiliateReferral?: boolean;
       releaseStock?: {
         stockId: string;
@@ -425,6 +452,62 @@ export interface AmaroServerStore {
     retainedFinancialRecordsCount: number;
     retentionPolicyLabel: string;
   }>;
+  isVerifiedProviderOwner?(
+    providerId: string,
+    uid: string,
+    rawIdToken?: string
+  ): Promise<boolean>;
+  listProviderOffers?(
+    serviceId?: string,
+    rawIdToken?: string
+  ): Promise<ProviderOfferDoc[]>;
+  upsertProviderOffer?(
+    offer: ProviderOfferDoc,
+    rawIdToken: string
+  ): Promise<ProviderOfferDoc>;
+  deleteProviderOffer?(offerId: string, rawIdToken: string): Promise<void>;
+  updateUnconfirmedReservationOffers?(
+    params: {
+      reservationId: string;
+      folderId: string;
+      itemId: string;
+      participants: number;
+      providerPrice: number;
+      amaroFee: number;
+      taxAmount: number;
+      totalAmount: number;
+      pricingSnapshot: string;
+      selectedOffersJson: string;
+      hasPriceToVerify: boolean;
+      requestedUnitsTotal: number;
+      checkOutDate?: string;
+      pickupLocation?: string;
+      dropoffLocation?: string;
+    },
+    rawIdToken: string
+  ): Promise<void>;
+  listCensusListings?(rawIdToken: string): Promise<CensusListingDoc[]>;
+  upsertCensusListing?(
+    doc: CensusListingDoc,
+    rawIdToken: string
+  ): Promise<CensusListingDoc>;
+  publishCensusListingToCircuitA?(
+    params: {
+      censusDoc: CensusListingDoc;
+      serviceId: string;
+      providerId: string;
+      adminUid: string;
+    },
+    rawIdToken: string
+  ): Promise<{ serviceId: string }>;
+  applyCensusProposedUpdate?(
+    params: {
+      censusDoc: CensusListingDoc;
+      targetServiceId: string;
+      adminUid: string;
+    },
+    rawIdToken: string
+  ): Promise<{ serviceId: string; offersSaved: number }>;
 }
 
 export class ConflictError extends Error {
@@ -582,6 +665,18 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           typeof raw.providerResponseHours === 'number'
             ? raw.providerResponseHours
             : undefined,
+        address: raw.address ? String(raw.address) : undefined,
+        priceRangeNote: raw.priceRangeNote ? String(raw.priceRangeNote) : undefined,
+        roomTypes: Array.isArray(raw.roomTypes) ? raw.roomTypes.map(String) : undefined,
+        amenities: Array.isArray(raw.amenities) ? raw.amenities.map(String) : undefined,
+        languagesSpoken: Array.isArray(raw.languagesSpoken)
+          ? raw.languagesSpoken.map(String)
+          : undefined,
+        sourceName: raw.sourceName ? String(raw.sourceName) : undefined,
+        sourceUrl: raw.sourceUrl ? String(raw.sourceUrl) : undefined,
+        verifiedAt: raw.verifiedAt ? String(raw.verifiedAt) : undefined,
+        websiteUrl: raw.websiteUrl ? String(raw.websiteUrl) : undefined,
+        contactPhone: raw.contactPhone ? String(raw.contactPhone) : undefined,
       };
     }
 
@@ -967,6 +1062,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           startTime: String(it.startTime || '09:00'),
           endTime: String(it.endTime || '10:30'),
           durationMinutes: Number(it.durationMinutes || 90),
+          ...(it.checkOutDate ? { checkOutDate: String(it.checkOutDate) } : {}),
         });
       }
 
@@ -1033,6 +1129,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             startTime: String(it.startTime || '09:00'),
             endTime: String(it.endTime || '10:30'),
             durationMinutes: Number(it.durationMinutes || 90),
+            ...(it.checkOutDate ? { checkOutDate: String(it.checkOutDate) } : {}),
           });
         }
       }
@@ -1092,6 +1189,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
                 startTime: String(r.scheduledTime || '09:00'),
                 endTime,
                 durationMinutes: 90,
+                ...(r.checkOutDate ? { checkOutDate: String(r.checkOutDate) } : {}),
               });
             }
           } else {
@@ -1222,6 +1320,24 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           if (payload.localContributionXof !== undefined) {
             resDoc.localContributionXof = payload.localContributionXof;
           }
+          if (payload.selectedOffersJson !== undefined) {
+            resDoc.selectedOffersJson = payload.selectedOffersJson;
+          }
+          if (payload.hasPriceToVerify !== undefined) {
+            resDoc.hasPriceToVerify = Boolean(payload.hasPriceToVerify);
+          }
+          if (payload.checkOutDate) {
+            resDoc.checkOutDate = payload.checkOutDate;
+          }
+          if (payload.pickupLocation) {
+            resDoc.pickupLocation = payload.pickupLocation;
+          }
+          if (payload.dropoffLocation) {
+            resDoc.dropoffLocation = payload.dropoffLocation;
+          }
+          if (payload.requestedUnitsTotal !== undefined) {
+            resDoc.requestedUnitsTotal = payload.requestedUnitsTotal;
+          }
 
           tx.set(resRef, resDoc);
 
@@ -1238,7 +1354,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             .doc(payload.folderId)
             .collection('items')
             .doc(payload.itemId);
-          tx.set(itemRef, {
+          const itemDocPayload: Record<string, any> = {
             folderId: payload.folderId,
             ownerId: payload.clientId,
             serviceId: payload.serviceId,
@@ -1256,7 +1372,23 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             notes: itemNotes,
             createdAt: nowTs,
             updatedAt: nowTs,
-          });
+          };
+          if (payload.selectedOffersJson !== undefined) {
+            itemDocPayload.selectedOffersJson = payload.selectedOffersJson;
+          }
+          if (payload.hasPriceToVerify !== undefined) {
+            itemDocPayload.hasPriceToVerify = Boolean(payload.hasPriceToVerify);
+          }
+          if (payload.checkOutDate) {
+            itemDocPayload.checkOutDate = payload.checkOutDate;
+          }
+          if (payload.pickupLocation) {
+            itemDocPayload.pickupLocation = payload.pickupLocation;
+          }
+          if (payload.dropoffLocation) {
+            itemDocPayload.dropoffLocation = payload.dropoffLocation;
+          }
+          tx.set(itemRef, itemDocPayload);
 
           if (payload.referral) {
             const refDoc = db.collection('partner_referrals').doc(payload.referral.referralId);
@@ -1364,6 +1496,57 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       if (payload.localContributionXof !== undefined) {
         resFields.localContributionXof = encodeNumber(payload.localContributionXof);
       }
+      if (payload.selectedOffersJson !== undefined) {
+        resFields.selectedOffersJson = encodeString(payload.selectedOffersJson);
+      }
+      if (payload.hasPriceToVerify !== undefined) {
+        resFields.hasPriceToVerify = { booleanValue: Boolean(payload.hasPriceToVerify) };
+      }
+      if (payload.checkOutDate) {
+        resFields.checkOutDate = encodeString(payload.checkOutDate);
+      }
+      if (payload.pickupLocation) {
+        resFields.pickupLocation = encodeString(payload.pickupLocation);
+      }
+      if (payload.dropoffLocation) {
+        resFields.dropoffLocation = encodeString(payload.dropoffLocation);
+      }
+      if (payload.requestedUnitsTotal !== undefined) {
+        resFields.requestedUnitsTotal = encodeInt(payload.requestedUnitsTotal);
+      }
+
+      const itemFields: Record<string, any> = {
+        folderId: encodeString(payload.folderId),
+        ownerId: encodeString(payload.clientId),
+        serviceId: encodeString(payload.serviceId),
+        providerId: encodeString(payload.providerId),
+        serviceTitle: encodeString(payload.serviceTitle),
+        category: encodeString(payload.category),
+        cityId: encodeString(payload.cityId),
+        date: encodeString(payload.scheduledDate),
+        startTime: encodeString(payload.scheduledTime),
+        endTime: encodeString(payload.computedEndTime),
+        durationMinutes: encodeInt(payload.durationMinutes),
+        estimatedCost: encodeNumber(payload.totalAmount),
+        currency: encodeString(payload.currency),
+        stage: encodeString(effectiveItemStage),
+        notes: encodeString(itemNotes),
+      };
+      if (payload.selectedOffersJson !== undefined) {
+        itemFields.selectedOffersJson = encodeString(payload.selectedOffersJson);
+      }
+      if (payload.hasPriceToVerify !== undefined) {
+        itemFields.hasPriceToVerify = { booleanValue: Boolean(payload.hasPriceToVerify) };
+      }
+      if (payload.checkOutDate) {
+        itemFields.checkOutDate = encodeString(payload.checkOutDate);
+      }
+      if (payload.pickupLocation) {
+        itemFields.pickupLocation = encodeString(payload.pickupLocation);
+      }
+      if (payload.dropoffLocation) {
+        itemFields.dropoffLocation = encodeString(payload.dropoffLocation);
+      }
 
       const writes: any[] = [
         {
@@ -1380,23 +1563,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         {
           update: {
             name: itemDocName,
-            fields: {
-              folderId: encodeString(payload.folderId),
-              ownerId: encodeString(payload.clientId),
-              serviceId: encodeString(payload.serviceId),
-              providerId: encodeString(payload.providerId),
-              serviceTitle: encodeString(payload.serviceTitle),
-              category: encodeString(payload.category),
-              cityId: encodeString(payload.cityId),
-              date: encodeString(payload.scheduledDate),
-              startTime: encodeString(payload.scheduledTime),
-              endTime: encodeString(payload.computedEndTime),
-              durationMinutes: encodeInt(payload.durationMinutes),
-              estimatedCost: encodeNumber(payload.totalAmount),
-              currency: encodeString(payload.currency),
-              stage: encodeString(effectiveItemStage),
-              notes: encodeString(itemNotes),
-            },
+            fields: itemFields,
           },
           currentDocument: { exists: false },
           updateTransforms: [
@@ -1620,6 +1787,18 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         raw.localContributionXof !== undefined
           ? Number(raw.localContributionXof)
           : undefined,
+      selectedOffersJson: raw.selectedOffersJson ? String(raw.selectedOffersJson) : undefined,
+      hasPriceToVerify:
+        raw.hasPriceToVerify !== undefined ? Boolean(raw.hasPriceToVerify) : undefined,
+      checkOutDate: raw.checkOutDate ? String(raw.checkOutDate) : undefined,
+      pickupLocation: raw.pickupLocation ? String(raw.pickupLocation) : undefined,
+      dropoffLocation: raw.dropoffLocation ? String(raw.dropoffLocation) : undefined,
+      isPartialAcceptance:
+        raw.isPartialAcceptance !== undefined ? Boolean(raw.isPartialAcceptance) : undefined,
+      requestedUnitsTotal:
+        raw.requestedUnitsTotal !== undefined ? Number(raw.requestedUnitsTotal) : undefined,
+      acceptedUnitsTotal:
+        raw.acceptedUnitsTotal !== undefined ? Number(raw.acceptedUnitsTotal) : undefined,
       updatedAtIso,
     };
   }
@@ -1644,6 +1823,16 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         | 'quote_received';
       coordinationContactedAt?: string;
       coordinationOutcome?: string;
+      providerPrice?: number;
+      amaroFee?: number;
+      taxAmount?: number;
+      totalAmount?: number;
+      pricingSnapshot?: string;
+      selectedOffersJson?: string;
+      isPartialAcceptance?: boolean;
+      requestedUnitsTotal?: number;
+      acceptedUnitsTotal?: number;
+      folderIdToMarkPartiallyConfirmed?: string;
       cancelAffiliateReferral?: boolean;
       releaseStock?: {
         stockId: string;
@@ -1684,6 +1873,15 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           if (refSnap.exists) refDocRef = candidateRef;
         }
 
+        let folderRefToUpdate: FirebaseFirestore.DocumentReference | null = null;
+        if (params.folderIdToMarkPartiallyConfirmed) {
+          const candFolder = db
+            .collection('journey_folders')
+            .doc(params.folderIdToMarkPartiallyConfirmed);
+          const fSnap = await tx.get(candFolder);
+          if (fSnap.exists) folderRefToUpdate = candFolder;
+        }
+
         const resRef = db.collection('reservations').doc(params.reservationId);
         const updatePayload: Record<string, any> = {
           status: params.status,
@@ -1714,7 +1912,41 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         if (params.coordinationOutcome !== undefined) {
           updatePayload.coordinationOutcome = params.coordinationOutcome.slice(0, 500);
         }
+        if (params.providerPrice !== undefined) {
+          updatePayload.providerPrice = params.providerPrice;
+        }
+        if (params.amaroFee !== undefined) {
+          updatePayload.amaroFee = params.amaroFee;
+        }
+        if (params.taxAmount !== undefined) {
+          updatePayload.taxAmount = params.taxAmount;
+        }
+        if (params.totalAmount !== undefined) {
+          updatePayload.totalAmount = params.totalAmount;
+        }
+        if (params.pricingSnapshot !== undefined) {
+          updatePayload.pricingSnapshot = params.pricingSnapshot;
+        }
+        if (params.selectedOffersJson !== undefined) {
+          updatePayload.selectedOffersJson = params.selectedOffersJson;
+        }
+        if (params.isPartialAcceptance !== undefined) {
+          updatePayload.isPartialAcceptance = params.isPartialAcceptance;
+        }
+        if (params.requestedUnitsTotal !== undefined) {
+          updatePayload.requestedUnitsTotal = params.requestedUnitsTotal;
+        }
+        if (params.acceptedUnitsTotal !== undefined) {
+          updatePayload.acceptedUnitsTotal = params.acceptedUnitsTotal;
+        }
         tx.update(resRef, updatePayload);
+
+        if (folderRefToUpdate) {
+          tx.update(folderRefToUpdate, {
+            status: 'partially_confirmed',
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
 
         if (refDocRef) {
           tx.update(refDocRef, {
@@ -1792,6 +2024,42 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       resUpdateFields.coordinationOutcome = encodeString(params.coordinationOutcome.slice(0, 500));
       resFieldPaths.push('coordinationOutcome');
     }
+    if (params.providerPrice !== undefined) {
+      resUpdateFields.providerPrice = encodeNumber(params.providerPrice);
+      resFieldPaths.push('providerPrice');
+    }
+    if (params.amaroFee !== undefined) {
+      resUpdateFields.amaroFee = encodeNumber(params.amaroFee);
+      resFieldPaths.push('amaroFee');
+    }
+    if (params.taxAmount !== undefined) {
+      resUpdateFields.taxAmount = encodeNumber(params.taxAmount);
+      resFieldPaths.push('taxAmount');
+    }
+    if (params.totalAmount !== undefined) {
+      resUpdateFields.totalAmount = encodeNumber(params.totalAmount);
+      resFieldPaths.push('totalAmount');
+    }
+    if (params.pricingSnapshot !== undefined) {
+      resUpdateFields.pricingSnapshot = encodeString(params.pricingSnapshot);
+      resFieldPaths.push('pricingSnapshot');
+    }
+    if (params.selectedOffersJson !== undefined) {
+      resUpdateFields.selectedOffersJson = encodeString(params.selectedOffersJson);
+      resFieldPaths.push('selectedOffersJson');
+    }
+    if (params.isPartialAcceptance !== undefined) {
+      resUpdateFields.isPartialAcceptance = { booleanValue: Boolean(params.isPartialAcceptance) };
+      resFieldPaths.push('isPartialAcceptance');
+    }
+    if (params.requestedUnitsTotal !== undefined) {
+      resUpdateFields.requestedUnitsTotal = encodeInt(params.requestedUnitsTotal);
+      resFieldPaths.push('requestedUnitsTotal');
+    }
+    if (params.acceptedUnitsTotal !== undefined) {
+      resUpdateFields.acceptedUnitsTotal = encodeInt(params.acceptedUnitsTotal);
+      resFieldPaths.push('acceptedUnitsTotal');
+    }
 
     const writes: any[] = [
       {
@@ -1806,6 +2074,21 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
       },
     ];
+    if (params.folderIdToMarkPartiallyConfirmed) {
+      writes.push({
+        update: {
+          name: `${this.dbResourcePath}/journey_folders/${encodeURIComponent(
+            params.folderIdToMarkPartiallyConfirmed
+          )}`,
+          fields: {
+            status: encodeString('partially_confirmed'),
+          },
+        },
+        updateMask: { fieldPaths: ['status'] },
+        currentDocument: { exists: true },
+        updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+      });
+    }
 
     if (params.releaseStock && params.releaseStock.stockId && params.releaseStock.units > 0) {
       const stockRel = `pilot_stocks/${encodeURIComponent(params.releaseStock.stockId)}`;
@@ -3561,4 +3844,751 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       retentionPolicyLabel: params.retentionPolicyLabel,
     };
   }
+
+  // ===========================================================================
+  // PARTIE B & PARTIE A — OFFRES PAR PRESTATAIRE & RECENSEMENT WEB BÉNIN
+  // ===========================================================================
+  async isVerifiedProviderOwner(
+    providerId: string,
+    uid: string,
+    rawIdToken?: string
+  ): Promise<boolean> {
+    if (!providerId || !uid) return false;
+    let raw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('providers').doc(providerId).get();
+      raw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else {
+      try {
+        raw = await this.restGetDoc(`providers/${encodeURIComponent(providerId)}`, rawIdToken);
+      } catch {
+        raw = null;
+      }
+    }
+    return Boolean(
+      raw && String(raw.ownerId || '') === uid && String(raw.verificationStatus || '') === 'verified'
+    );
+  }
+
+  private mapProviderOfferFromDoc(id: string, raw: Record<string, any>): ProviderOfferDoc {
+    let parsedHistory: ProviderOfferDoc['history'] = [];
+    if (Array.isArray(raw.history)) {
+      parsedHistory = raw.history;
+    } else if (typeof raw.historyJson === 'string') {
+      try {
+        const p = JSON.parse(raw.historyJson);
+        if (Array.isArray(p)) parsedHistory = p;
+      } catch {
+        parsedHistory = [];
+      }
+    }
+    return {
+      id,
+      serviceId: String(raw.serviceId || ''),
+      providerId: String(raw.providerId || ''),
+      category: (raw.category || 'accommodation') as ServiceCategory,
+      offerKind: (raw.offerKind || 'room') as ProviderOfferDoc['offerKind'],
+      name: String(raw.name || ''),
+      shortDescription: String(raw.shortDescription || ''),
+      priceState: (raw.priceState || 'price_to_verify') as ProviderOfferDoc['priceState'],
+      priceAmount: Math.max(0, Number(raw.priceAmount ?? 0)),
+      originalCurrency: String(raw.originalCurrency || 'XOF'),
+      priceUnit: String(raw.priceUnit || 'par nuit'),
+      sourceName: String(raw.sourceName || ''),
+      sourceUrl: String(raw.sourceUrl || ''),
+      consultedAt: String(raw.consultedAt || ''),
+      needsConfirmationFromProvider: Boolean(raw.needsConfirmationFromProvider ?? true),
+      photoStatus:
+        raw.photoStatus === 'verified_photo' ? 'verified_photo' : 'photo_to_provide',
+      ...(raw.photoUrl ? { photoUrl: String(raw.photoUrl) } : {}),
+      originSource: (raw.originSource || 'admin') as ProviderOfferDoc['originSource'],
+      history: parsedHistory,
+      ...(raw.isFallbackGenericRoom ? { isFallbackGenericRoom: true } : {}),
+      ...(raw.maxGuests !== undefined ? { maxGuests: raw.maxGuests === null ? null : Number(raw.maxGuests) } : {}),
+      ...(raw.bedsDescription ? { bedsDescription: String(raw.bedsDescription) } : {}),
+      ...(Array.isArray(raw.amenities) ? { amenities: raw.amenities.map(String) } : {}),
+      ...(raw.hasAirConditioning !== undefined
+        ? {
+            hasAirConditioning:
+              raw.hasAirConditioning === null ? null : Boolean(raw.hasAirConditioning),
+          }
+        : {}),
+      ...(raw.seats !== undefined ? { seats: raw.seats === null ? null : Number(raw.seats) } : {}),
+      ...(raw.transmission ? { transmission: raw.transmission as ProviderOfferDoc['transmission'] } : {}),
+      ...(raw.driverOption ? { driverOption: raw.driverOption as ProviderOfferDoc['driverOption'] } : {}),
+      ...(raw.rentalDurationLabel ? { rentalDurationLabel: String(raw.rentalDurationLabel) } : {}),
+      ...(raw.depositInfo ? { depositInfo: String(raw.depositInfo) } : {}),
+      ...(raw.fuelPolicy ? { fuelPolicy: String(raw.fuelPolicy) } : {}),
+      ...(raw.mileagePolicy ? { mileagePolicy: String(raw.mileagePolicy) } : {}),
+      ...(raw.licenseRequired ? { licenseRequired: String(raw.licenseRequired) } : {}),
+      ...(raw.routeOrigin ? { routeOrigin: String(raw.routeOrigin) } : {}),
+      ...(raw.routeDestination ? { routeDestination: String(raw.routeDestination) } : {}),
+      ...(raw.publishedSchedule ? { publishedSchedule: String(raw.publishedSchedule) } : {}),
+      ...(Array.isArray(raw.languages) ? { languages: raw.languages.map(String) } : {}),
+      ...(raw.durationLabel ? { durationLabel: String(raw.durationLabel) } : {}),
+      ...(raw.formulaType ? { formulaType: String(raw.formulaType) } : {}),
+    };
+  }
+
+  async listProviderOffers(
+    serviceId?: string,
+    rawIdToken?: string
+  ): Promise<ProviderOfferDoc[]> {
+    const cleanServiceId = String(serviceId || '').trim();
+    if (this.hasServiceAccount) {
+      const col = this.getAdminDb().collection('provider_offers');
+      const snap = cleanServiceId
+        ? await col.where('serviceId', '==', cleanServiceId).limit(200).get()
+        : await col.limit(500).get();
+      return snap.docs.map((d) => this.mapProviderOfferFromDoc(d.id, d.data()));
+    }
+
+    const headers: Record<string, string> = {};
+    if (rawIdToken) headers.Authorization = `Bearer ${rawIdToken}`;
+    if (cleanServiceId) {
+      const r = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'provider_offers' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'serviceId' },
+                op: 'EQUAL',
+                value: { stringValue: cleanServiceId },
+              },
+            },
+            limit: 200,
+          },
+        }),
+      });
+      if (!r.ok) return [];
+      const rows: any[] = await r.json();
+      return rows
+        .filter((row) => row?.document?.fields)
+        .map((row) =>
+          this.mapProviderOfferFromDoc(
+            String(row.document.name || '').split('/').pop() || '',
+            decodeFirestoreFields(row.document.fields)
+          )
+        );
+    }
+
+    const res = await fetch(`${this.baseUrl}/provider_offers?pageSize=300`, { headers });
+    if (!res.ok) return [];
+    const json: any = await res.json();
+    return (Array.isArray(json?.documents) ? json.documents : []).map((doc: any) =>
+      this.mapProviderOfferFromDoc(
+        String(doc.name || '').split('/').pop() || '',
+        decodeFirestoreFields(doc.fields)
+      )
+    );
+  }
+
+  async upsertProviderOffer(
+    offer: ProviderOfferDoc,
+    rawIdToken: string
+  ): Promise<ProviderOfferDoc> {
+    const historyJson = JSON.stringify(offer.history || []).slice(0, 6000);
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const { history: _h, ...rest } = offer;
+      await db
+        .collection('provider_offers')
+        .doc(offer.id)
+        .set(
+          {
+            ...rest,
+            historyJson,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      return offer;
+    }
+
+    const fields: Record<string, any> = {
+      serviceId: encodeString(offer.serviceId),
+      providerId: encodeString(offer.providerId),
+      category: encodeString(offer.category),
+      offerKind: encodeString(offer.offerKind),
+      name: encodeString(offer.name.slice(0, 160)),
+      shortDescription: encodeString(offer.shortDescription.slice(0, 600)),
+      priceState: encodeString(offer.priceState),
+      priceAmount: encodeNumber(offer.priceAmount),
+      originalCurrency: encodeString(offer.originalCurrency || 'XOF'),
+      priceUnit: encodeString(offer.priceUnit || 'par nuit'),
+      sourceName: encodeString(offer.sourceName || ''),
+      sourceUrl: encodeString(offer.sourceUrl || ''),
+      consultedAt: encodeString(offer.consultedAt || ''),
+      needsConfirmationFromProvider: {
+        booleanValue: Boolean(offer.needsConfirmationFromProvider),
+      },
+      photoStatus: encodeString(offer.photoStatus),
+      originSource: encodeString(offer.originSource),
+      historyJson: encodeString(historyJson),
+    };
+    if (offer.photoUrl) fields.photoUrl = encodeString(offer.photoUrl);
+    if (offer.maxGuests !== undefined && offer.maxGuests !== null) {
+      fields.maxGuests = encodeInt(offer.maxGuests);
+    }
+    if (offer.bedsDescription) fields.bedsDescription = encodeString(offer.bedsDescription);
+    if (Array.isArray(offer.amenities)) {
+      fields.amenities = {
+        arrayValue: { values: offer.amenities.map((a) => encodeString(String(a))) },
+      };
+    }
+    if (typeof offer.hasAirConditioning === 'boolean') {
+      fields.hasAirConditioning = { booleanValue: offer.hasAirConditioning };
+    }
+    if (offer.seats !== undefined && offer.seats !== null) {
+      fields.seats = encodeInt(offer.seats);
+    }
+    if (offer.transmission) fields.transmission = encodeString(offer.transmission);
+    if (offer.driverOption) fields.driverOption = encodeString(offer.driverOption);
+    if (offer.rentalDurationLabel) {
+      fields.rentalDurationLabel = encodeString(offer.rentalDurationLabel);
+    }
+    if (offer.depositInfo) fields.depositInfo = encodeString(offer.depositInfo);
+    if (offer.fuelPolicy) fields.fuelPolicy = encodeString(offer.fuelPolicy);
+    if (offer.mileagePolicy) fields.mileagePolicy = encodeString(offer.mileagePolicy);
+    if (offer.licenseRequired) fields.licenseRequired = encodeString(offer.licenseRequired);
+    if (offer.routeOrigin) fields.routeOrigin = encodeString(offer.routeOrigin);
+    if (offer.routeDestination) fields.routeDestination = encodeString(offer.routeDestination);
+    if (offer.publishedSchedule) {
+      fields.publishedSchedule = encodeString(offer.publishedSchedule);
+    }
+    if (Array.isArray(offer.languages)) {
+      fields.languages = {
+        arrayValue: { values: offer.languages.map((l) => encodeString(String(l))) },
+      };
+    }
+    if (offer.durationLabel) fields.durationLabel = encodeString(offer.durationLabel);
+    if (offer.formulaType) fields.formulaType = encodeString(offer.formulaType);
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/provider_offers/${encodeURIComponent(offer.id)}`,
+              fields,
+            },
+            updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Enregistrement d’offre refusé (${res.status}).`);
+    }
+    return offer;
+  }
+
+  async deleteProviderOffer(offerId: string, rawIdToken: string): Promise<void> {
+    if (this.hasServiceAccount) {
+      await this.getAdminDb().collection('provider_offers').doc(offerId).delete();
+      return;
+    }
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          { delete: `${this.dbResourcePath}/provider_offers/${encodeURIComponent(offerId)}` },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Suppression d’offre refusée (${res.status}).`);
+    }
+  }
+
+  async updateUnconfirmedReservationOffers(
+    params: {
+      reservationId: string;
+      folderId: string;
+      itemId: string;
+      participants: number;
+      providerPrice: number;
+      amaroFee: number;
+      taxAmount: number;
+      totalAmount: number;
+      pricingSnapshot: string;
+      selectedOffersJson: string;
+      hasPriceToVerify: boolean;
+      requestedUnitsTotal: number;
+      checkOutDate?: string;
+      pickupLocation?: string;
+      dropoffLocation?: string;
+    },
+    rawIdToken: string
+  ): Promise<void> {
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const resRef = db.collection('reservations').doc(params.reservationId);
+      const resUpdate: Record<string, any> = {
+        participants: params.participants,
+        providerPrice: params.providerPrice,
+        amaroFee: params.amaroFee,
+        taxAmount: params.taxAmount,
+        totalAmount: params.totalAmount,
+        pricingSnapshot: params.pricingSnapshot,
+        selectedOffersJson: params.selectedOffersJson,
+        hasPriceToVerify: params.hasPriceToVerify,
+        requestedUnitsTotal: params.requestedUnitsTotal,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (params.checkOutDate !== undefined) resUpdate.checkOutDate = params.checkOutDate;
+      if (params.pickupLocation !== undefined) resUpdate.pickupLocation = params.pickupLocation;
+      if (params.dropoffLocation !== undefined) resUpdate.dropoffLocation = params.dropoffLocation;
+      batch.update(resRef, resUpdate);
+
+      const itemRef = db
+        .collection('journey_folders')
+        .doc(params.folderId)
+        .collection('items')
+        .doc(params.itemId);
+      const itemSnap = await itemRef.get();
+      if (itemSnap.exists) {
+        batch.update(itemRef, {
+          estimatedCost: params.totalAmount,
+          selectedOffersJson: params.selectedOffersJson,
+          hasPriceToVerify: params.hasPriceToVerify,
+          ...(params.checkOutDate !== undefined ? { checkOutDate: params.checkOutDate } : {}),
+          ...(params.pickupLocation !== undefined ? { pickupLocation: params.pickupLocation } : {}),
+          ...(params.dropoffLocation !== undefined
+            ? { dropoffLocation: params.dropoffLocation }
+            : {}),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      return;
+    }
+
+    const resFields: Record<string, any> = {
+      participants: encodeInt(params.participants),
+      providerPrice: encodeNumber(params.providerPrice),
+      amaroFee: encodeNumber(params.amaroFee),
+      taxAmount: encodeNumber(params.taxAmount),
+      totalAmount: encodeNumber(params.totalAmount),
+      pricingSnapshot: encodeString(params.pricingSnapshot),
+      selectedOffersJson: encodeString(params.selectedOffersJson),
+      hasPriceToVerify: { booleanValue: Boolean(params.hasPriceToVerify) },
+      requestedUnitsTotal: encodeInt(params.requestedUnitsTotal),
+    };
+    const mask = [
+      'participants',
+      'providerPrice',
+      'amaroFee',
+      'taxAmount',
+      'totalAmount',
+      'pricingSnapshot',
+      'selectedOffersJson',
+      'hasPriceToVerify',
+      'requestedUnitsTotal',
+    ];
+    if (params.checkOutDate !== undefined) {
+      resFields.checkOutDate = encodeString(params.checkOutDate);
+      mask.push('checkOutDate');
+    }
+    if (params.pickupLocation !== undefined) {
+      resFields.pickupLocation = encodeString(params.pickupLocation);
+      mask.push('pickupLocation');
+    }
+    if (params.dropoffLocation !== undefined) {
+      resFields.dropoffLocation = encodeString(params.dropoffLocation);
+      mask.push('dropoffLocation');
+    }
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/reservations/${encodeURIComponent(
+                params.reservationId
+              )}`,
+              fields: resFields,
+            },
+            updateMask: { fieldPaths: mask },
+            currentDocument: { exists: true },
+            updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Mise à jour des offres réservées refusée (${res.status}).`);
+    }
+  }
+
+  private decodeCensusListing(id: string, raw: Record<string, any>): CensusListingDoc | null {
+    if (typeof raw.payloadJson === 'string' && raw.payloadJson.trim()) {
+      try {
+        const parsed = JSON.parse(raw.payloadJson) as CensusListingDoc;
+        return {
+          ...parsed,
+          id,
+          status: (raw.status || parsed.status || 'to_validate') as CensusListingDoc['status'],
+          ...(raw.publishedServiceId
+            ? { publishedServiceId: String(raw.publishedServiceId) }
+            : {}),
+          updatedAtIso: String(raw.updatedAtIso || parsed.updatedAtIso || new Date().toISOString()),
+        };
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async listCensusListings(rawIdToken: string): Promise<CensusListingDoc[]> {
+    const byId = new Map<string, CensusListingDoc>();
+    for (const seed of INITIAL_BENIN_WEB_CENSUS_RECORDS) {
+      byId.set(seed.id, seed);
+    }
+
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('census_listings').limit(500).get();
+      for (const docSnap of snap.docs) {
+        const decoded = this.decodeCensusListing(docSnap.id, docSnap.data());
+        if (decoded) byId.set(decoded.id, decoded);
+      }
+      return Array.from(byId.values());
+    }
+
+    const res = await fetch(`${this.baseUrl}/census_listings?pageSize=300`, {
+      headers: { Authorization: `Bearer ${rawIdToken}` },
+    });
+    if (res.ok) {
+      const json: any = await res.json();
+      const docs = Array.isArray(json?.documents) ? json.documents : [];
+      for (const d of docs) {
+        const id = String(d.name || '').split('/').pop() || '';
+        const decoded = this.decodeCensusListing(id, decodeFirestoreFields(d.fields));
+        if (decoded) byId.set(decoded.id, decoded);
+      }
+    }
+    return Array.from(byId.values());
+  }
+
+  async upsertCensusListing(
+    doc: CensusListingDoc,
+    rawIdToken: string
+  ): Promise<CensusListingDoc> {
+    const payloadJson = JSON.stringify(doc);
+    if (this.hasServiceAccount) {
+      await this.getAdminDb()
+        .collection('census_listings')
+        .doc(doc.id)
+        .set({
+          businessName: doc.businessName.slice(0, 160),
+          category: doc.category,
+          cityId: doc.cityId,
+          status: doc.status,
+          confidenceLevel: doc.confidenceLevel,
+          publishedServiceId: doc.publishedServiceId || '',
+          updatedAtIso: doc.updatedAtIso,
+          payloadJson,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      return doc;
+    }
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/census_listings/${encodeURIComponent(doc.id)}`,
+              fields: {
+                businessName: encodeString(doc.businessName.slice(0, 160)),
+                category: encodeString(doc.category),
+                cityId: encodeString(doc.cityId),
+                status: encodeString(doc.status),
+                confidenceLevel: encodeString(doc.confidenceLevel),
+                publishedServiceId: encodeString(doc.publishedServiceId || ''),
+                updatedAtIso: encodeString(doc.updatedAtIso),
+                payloadJson: encodeString(payloadJson),
+              },
+            },
+            updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Enregistrement fiche recensement refusé (${res.status}).`);
+    }
+    return doc;
+  }
+
+  async publishCensusListingToCircuitA(
+    params: {
+      censusDoc: CensusListingDoc;
+      serviceId: string;
+      providerId: string;
+      adminUid: string;
+    },
+    rawIdToken: string
+  ): Promise<{ serviceId: string }> {
+    const { censusDoc, serviceId, providerId, adminUid } = params;
+    const nowIso = new Date().toISOString();
+    const priceKnown =
+      censusDoc.priceState !== 'price_on_request' && Number(censusDoc.priceAmount || 0) > 0;
+    const primarySource = censusDoc.sources[0];
+
+    const maxCap = Math.max(
+      2,
+      ...censusDoc.offers.map((o) => Number(o.maxGuests || o.seats || 2))
+    );
+
+    const updatedCensus: CensusListingDoc = {
+      ...censusDoc,
+      status: 'published',
+      publishedServiceId: serviceId,
+      updatedAtIso: nowIso,
+      history: [
+        ...(censusDoc.history || []),
+        {
+          atIso: nowIso,
+          actorId: adminUid,
+          action: 'VALIDATED_AND_PUBLISHED_CIRCUIT_A',
+          note: `Validée par l’administrateur et publiée en Circuit A (${serviceId}) avec badge « Recensé, non vérifié ».`,
+        },
+      ],
+    };
+
+    const normalizedOffers: ProviderOfferDoc[] = censusDoc.offers.map((off) => ({
+      ...off,
+      serviceId,
+      providerId,
+      originSource: 'web_census',
+      needsConfirmationFromProvider: true,
+    }));
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const batch = db.batch();
+      const nowTs = FieldValue.serverTimestamp();
+      const svcRef = db.collection('services').doc(serviceId);
+      batch.set(svcRef, {
+        providerId,
+        ownerId: 'manual_concierge',
+        title: censusDoc.businessName.slice(0, 155),
+        category: censusDoc.category,
+        countryCode: 'BJ',
+        cityId: censusDoc.cityId,
+        address: `${censusDoc.neighborhoodOrAddress}, ${censusDoc.department}, Bénin`.slice(0, 290),
+        description: censusDoc.factualDescription.slice(0, 1900),
+        priceAmount: priceKnown ? censusDoc.priceAmount : 0,
+        priceKnown,
+        priceRangeNote:
+          censusDoc.priceVerifyReason ||
+          `${censusDoc.priceUnit} (source : ${primarySource?.label || 'web'}, consultée le ${
+            primarySource?.consultedAt || nowIso.slice(0, 10)
+          })`.slice(0, 380),
+        currency: 'XOF',
+        durationMinutes: censusDoc.category === 'accommodation' ? 720 : 180,
+        capacity: maxCap,
+        dataOrigin: 'public_directory',
+        status: 'published',
+        imageKey: 'cotonou_coast',
+        imageLicense: 'Photo à fournir · Illustration régionale non contractuelle',
+        subCategory: censusDoc.subCategory.slice(0, 120),
+        department: censusDoc.department.slice(0, 80),
+        sourceName: (primarySource?.label || 'Recensement web Bénin').slice(0, 150),
+        sourceUrl: (primarySource?.url || '').slice(0, 350),
+        verifiedAt: primarySource?.consultedAt || nowIso.slice(0, 10),
+        websiteUrl:
+          censusDoc.officialWebsite !== 'non précisé'
+            ? censusDoc.officialWebsite.slice(0, 350)
+            : '',
+        contactPhone:
+          censusDoc.contactPhone !== 'non précisé'
+            ? censusDoc.contactPhone.slice(0, 80)
+            : '',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      });
+
+      for (const off of normalizedOffers) {
+        const { history, ...rest } = off;
+        batch.set(db.collection('provider_offers').doc(off.id), {
+          ...rest,
+          historyJson: JSON.stringify(history || []).slice(0, 6000),
+          updatedAt: nowTs,
+        });
+      }
+
+      batch.set(db.collection('census_listings').doc(updatedCensus.id), {
+        businessName: updatedCensus.businessName.slice(0, 160),
+        category: updatedCensus.category,
+        cityId: updatedCensus.cityId,
+        status: 'published',
+        confidenceLevel: updatedCensus.confidenceLevel,
+        publishedServiceId: serviceId,
+        updatedAtIso: nowIso,
+        payloadJson: JSON.stringify(updatedCensus),
+        updatedAt: nowTs,
+      });
+
+      await batch.commit();
+      return { serviceId };
+    }
+
+    // REST path
+    const svcFields: Record<string, any> = {
+      providerId: encodeString(providerId),
+      ownerId: encodeString('manual_concierge'),
+      title: encodeString(censusDoc.businessName.slice(0, 155)),
+      category: encodeString(censusDoc.category),
+      countryCode: encodeString('BJ'),
+      cityId: encodeString(censusDoc.cityId),
+      address: encodeString(
+        `${censusDoc.neighborhoodOrAddress}, ${censusDoc.department}, Bénin`.slice(0, 290)
+      ),
+      description: encodeString(censusDoc.factualDescription.slice(0, 1900)),
+      priceAmount: encodeNumber(priceKnown ? censusDoc.priceAmount : 0),
+      priceKnown: { booleanValue: priceKnown },
+      priceRangeNote: encodeString(
+        (
+          censusDoc.priceVerifyReason ||
+          `${censusDoc.priceUnit} (source consultée le ${
+            primarySource?.consultedAt || nowIso.slice(0, 10)
+          })`
+        ).slice(0, 380)
+      ),
+      currency: encodeString('XOF'),
+      durationMinutes: encodeInt(censusDoc.category === 'accommodation' ? 720 : 180),
+      capacity: encodeInt(maxCap),
+      dataOrigin: encodeString('public_directory'),
+      status: encodeString('published'),
+      imageKey: encodeString('cotonou_coast'),
+      imageLicense: encodeString('Photo à fournir · Illustration régionale non contractuelle'),
+      subCategory: encodeString(censusDoc.subCategory.slice(0, 120)),
+      department: encodeString(censusDoc.department.slice(0, 80)),
+      sourceName: encodeString((primarySource?.label || 'Recensement web Bénin').slice(0, 150)),
+      sourceUrl: encodeString((primarySource?.url || '').slice(0, 350)),
+      verifiedAt: encodeString(primarySource?.consultedAt || nowIso.slice(0, 10)),
+      websiteUrl: encodeString(
+        censusDoc.officialWebsite !== 'non précisé'
+          ? censusDoc.officialWebsite.slice(0, 350)
+          : ''
+      ),
+      contactPhone: encodeString(
+        censusDoc.contactPhone !== 'non précisé' ? censusDoc.contactPhone.slice(0, 80) : ''
+      ),
+    };
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/services/${encodeURIComponent(serviceId)}`,
+              fields: svcFields,
+            },
+            updateTransforms: [
+              { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+              { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+            ],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Publication Circuit A refusée (${res.status}).`);
+    }
+
+    for (const off of normalizedOffers) {
+      await this.upsertProviderOffer(off, rawIdToken);
+    }
+    await this.upsertCensusListing(updatedCensus, rawIdToken);
+    return { serviceId };
+  }
+
+  async applyCensusProposedUpdate(
+    params: {
+      censusDoc: CensusListingDoc;
+      targetServiceId: string;
+      adminUid: string;
+    },
+    rawIdToken: string
+  ): Promise<{ serviceId: string; offersSaved: number }> {
+    const { censusDoc, targetServiceId, adminUid } = params;
+    const nowIso = new Date().toISOString();
+    const existingSvc = await this.getService(targetServiceId, rawIdToken);
+    const providerId = existingSvc?.providerId || `dir-${targetServiceId}`;
+
+    let saved = 0;
+    for (const off of censusDoc.offers) {
+      await this.upsertProviderOffer(
+        {
+          ...off,
+          serviceId: targetServiceId,
+          providerId,
+          originSource: 'web_census',
+          needsConfirmationFromProvider: true,
+          history: [
+            ...(off.history || []),
+            {
+              updatedAtIso: nowIso,
+              actorRole: 'admin',
+              actorId: adminUid,
+              summary: `Mise à jour proposée approuvée par l’administrateur pour la fiche existante ${targetServiceId} (sans écraser les champs propriétaires).`,
+            },
+          ],
+        },
+        rawIdToken
+      );
+      saved += 1;
+    }
+
+    const updatedCensus: CensusListingDoc = {
+      ...censusDoc,
+      status: 'published',
+      publishedServiceId: targetServiceId,
+      updatedAtIso: nowIso,
+      history: [
+        ...(censusDoc.history || []),
+        {
+          atIso: nowIso,
+          actorId: adminUid,
+          action: 'APPLIED_PROPOSED_UPDATE',
+          note: `${saved} offre(s) rattachée(s) à la fiche existante ${targetServiceId} sans écrasement.`,
+        },
+      ],
+    };
+    await this.upsertCensusListing(updatedCensus, rawIdToken);
+    return { serviceId: targetServiceId, offersSaved: saved };
+  }
 }
+

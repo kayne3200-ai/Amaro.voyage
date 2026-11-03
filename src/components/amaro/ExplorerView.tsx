@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   Building2,
   CalendarPlus,
@@ -10,6 +11,7 @@ import {
   Languages,
   Landmark,
   MapPin,
+  Minus,
   Plus,
   Scale,
   Search,
@@ -22,6 +24,8 @@ import type {
   EmergencyNumberEntry,
   LocaleCode,
   PilotStockDoc,
+  ProviderOfferDoc,
+  SelectedOfferLine,
   ServiceCategory,
   StandingLevel,
   SystemSettingDoc,
@@ -33,6 +37,7 @@ import { BeninExploreSection } from './BeninExploreSection';
 import {
   AccommodationComparatorModal,
   ServiceDetailModal,
+  type ServiceBookingPrefill,
 } from './ServiceDetailModal';
 import { ListingTrustBadge } from './ListingTrustBadge';
 import {
@@ -40,6 +45,11 @@ import {
   DEFAULT_EMERGENCY_NUMBERS_BJ,
   isAmaroOwnAssistanceOffer,
 } from '../../data/amaroGovernanceDefaults';
+import {
+  OFFER_PRICE_STATE_LABELS,
+  resolveServiceOffers,
+  validateAndPriceOfferSelection,
+} from '../../lib/offerEngine';
 import type { LegalDocKey } from './LegalAndCharterModal';
 
 interface RateInfo {
@@ -47,6 +57,16 @@ interface RateInfo {
   source: string;
   status: string;
   updatedAt: string;
+}
+
+export interface ExplorerBookingExtras {
+  selectedOffers?: SelectedOfferLine[];
+  selectedOffersPayload?: Array<{ offerId: string; quantity: number }>;
+  checkOutDate?: string;
+  pickupLocation?: string;
+  dropoffLocation?: string;
+  estimatedCost?: number;
+  hasPriceToVerify?: boolean;
 }
 
 interface ExplorerViewProps {
@@ -57,6 +77,7 @@ interface ExplorerViewProps {
   rateInfo: RateInfo | null;
   catalogue: CatalogueItem[];
   pilotStocks?: PilotStockDoc[];
+  providerOffers?: ProviderOfferDoc[];
   culturalStories: CulturalStoryDoc[];
   countrySetting: SystemSettingDoc | null;
   isSignedIn: boolean;
@@ -68,14 +89,16 @@ interface ExplorerViewProps {
     item: CatalogueItem,
     date: string,
     startTime: string,
-    notes: string
+    notes: string,
+    extras?: ExplorerBookingExtras
   ) => Promise<void>;
   onRequestReservation: (
     item: CatalogueItem,
     date: string,
     startTime: string,
     participants: number,
-    stockId?: string
+    stockId?: string,
+    extras?: ExplorerBookingExtras
   ) => Promise<void>;
   onSubmitCulturalStory: (cityId: string, title: string, story: string) => Promise<boolean>;
   approvedReviews?: TravelerReviewDoc[];
@@ -145,6 +168,7 @@ export function ExplorerView({
   rateInfo,
   catalogue,
   pilotStocks = [],
+  providerOffers = [],
   culturalStories,
   countrySetting,
   isSignedIn,
@@ -186,12 +210,46 @@ export function ExplorerView({
     mode: 'folder' | 'booking';
   } | null>(null);
   const [actionDate, setActionDate] = useState<string>('2026-11-15');
+  const [actionCheckOutDate, setActionCheckOutDate] = useState<string>('2026-11-16');
   const [actionTime, setActionTime] = useState<string>('10:00');
   const [actionParticipants, setActionParticipants] = useState<number>(2);
-  const [actionUnitChoice, setActionUnitChoice] = useState<string>('');
+  const [actionPickupLocation, setActionPickupLocation] = useState<string>('');
+  const [actionDropoffLocation, setActionDropoffLocation] = useState<string>('');
+  const [actionQuantitiesByOfferId, setActionQuantitiesByOfferId] = useState<Record<string, number>>({});
   const [actionStockId, setActionStockId] = useState<string>('');
   const [actionNotes, setActionNotes] = useState<string>('');
   const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
+
+  const openActionModal = (
+    item: CatalogueItem,
+    mode: 'folder' | 'booking',
+    prefill?: ServiceBookingPrefill
+  ) => {
+    const itemOffers = resolveServiceOffers(item, providerOffers);
+    const defaultQty =
+      prefill?.quantitiesByOfferId && Object.keys(prefill.quantitiesByOfferId).length > 0
+        ? { ...prefill.quantitiesByOfferId }
+        : itemOffers.length > 0
+        ? { [itemOffers[0].id]: 1 }
+        : {};
+    const nextDate = prefill?.date || actionDate || '2026-11-15';
+    const nextCheckOut =
+      prefill?.checkOutDate ||
+      (actionCheckOutDate > nextDate
+        ? actionCheckOutDate
+        : new Date(Date.parse(`${nextDate}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10));
+    setActionDate(nextDate);
+    setActionCheckOutDate(nextCheckOut);
+    setActionTime(prefill?.time || (item.category === 'accommodation' ? '14:00' : '10:00'));
+    setActionParticipants(
+      prefill?.participants || Math.min(2, Math.max(1, item.capacity || 2))
+    );
+    setActionPickupLocation(prefill?.pickupLocation || '');
+    setActionDropoffLocation(prefill?.dropoffLocation || '');
+    setActionQuantitiesByOfferId(defaultQty);
+    setActionNotes(prefill?.notes || '');
+    setSelectedItemForAction({ item, mode });
+  };
 
   // Cultural story contribution state
   const [showStoryForm, setShowStoryForm] = useState<boolean>(false);
@@ -347,24 +405,97 @@ export function ExplorerView({
 
   const heroImage = EDITORIAL_IMAGES.cotonou_coast;
 
+  const modalOffers = useMemo(
+    () =>
+      selectedItemForAction
+        ? resolveServiceOffers(selectedItemForAction.item, providerOffers)
+        : [],
+    [selectedItemForAction, providerOffers]
+  );
+
+  const modalSelectedRequests = useMemo(
+    () =>
+      Object.entries(actionQuantitiesByOfferId)
+        .filter(([, q]) => q > 0)
+        .map(([offerId, quantity]) => ({ offerId, quantity })),
+    [actionQuantitiesByOfferId]
+  );
+
+  const actionStayNights = useMemo(() => {
+    if (!selectedItemForAction || selectedItemForAction.item.category !== 'accommodation') {
+      return 1;
+    }
+    const diff = Math.round(
+      (Date.parse(`${actionCheckOutDate}T00:00:00Z`) - Date.parse(`${actionDate}T00:00:00Z`)) /
+        86_400_000
+    );
+    return Math.max(1, Number.isFinite(diff) ? diff : 1);
+  }, [selectedItemForAction, actionDate, actionCheckOutDate]);
+
+  const modalOfferValidation = useMemo(() => {
+    if (!selectedItemForAction) return null;
+    return validateAndPriceOfferSelection({
+      category: selectedItemForAction.item.category,
+      serviceCurrency: selectedItemForAction.item.currency,
+      defaultUnitCapacity: selectedItemForAction.item.capacity,
+      availableOffers: modalOffers,
+      requestedLines: modalSelectedRequests,
+      totalTravelers: actionParticipants,
+      defaultDurationUnits: actionStayNights,
+      rates: rateInfo?.rates,
+    });
+  }, [
+    selectedItemForAction,
+    modalOffers,
+    modalSelectedRequests,
+    actionParticipants,
+    actionStayNights,
+    rateInfo?.rates,
+  ]);
+
   const handleActionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedItemForAction) return;
+    if (!selectedItemForAction || !modalOfferValidation || !modalOfferValidation.valid) return;
     if (!isSignedIn) {
       onRequireSignIn();
       return;
     }
     setIsSubmittingAction(true);
     try {
-      const unitPrefix = actionUnitChoice.trim()
-        ? `[Option choisie : ${actionUnitChoice.trim()}] `
-        : '';
+      const offerSummary = modalOfferValidation.selectedLines
+        .map((ln) => `${ln.quantity}× ${ln.offerName}`)
+        .join(', ');
+      const extras: ExplorerBookingExtras = {
+        selectedOffers: modalOfferValidation.selectedLines,
+        selectedOffersPayload: modalSelectedRequests,
+        checkOutDate:
+          selectedItemForAction.item.category === 'accommodation'
+            ? actionCheckOutDate
+            : undefined,
+        pickupLocation:
+          selectedItemForAction.item.category === 'transport' && actionPickupLocation.trim()
+            ? actionPickupLocation.trim()
+            : undefined,
+        dropoffLocation:
+          selectedItemForAction.item.category === 'transport' && actionDropoffLocation.trim()
+            ? actionDropoffLocation.trim()
+            : undefined,
+        estimatedCost: modalOfferValidation.providerSubtotalInServiceCurrency,
+        hasPriceToVerify: modalOfferValidation.hasPriceToVerify,
+      };
       if (selectedItemForAction.mode === 'folder') {
+        const composedNote = [
+          offerSummary ? `Offres : ${offerSummary}` : '',
+          actionNotes.trim(),
+        ]
+          .filter(Boolean)
+          .join(' · ');
         await onAddServiceToJourney(
           selectedItemForAction.item,
           actionDate,
           actionTime,
-          `${unitPrefix}${actionNotes}`.trim()
+          composedNote,
+          extras
         );
       } else {
         await onRequestReservation(
@@ -372,11 +503,12 @@ export function ExplorerView({
           actionDate,
           actionTime,
           actionParticipants,
-          actionStockId || undefined
+          actionStockId || undefined,
+          extras
         );
       }
       setSelectedItemForAction(null);
-      setActionUnitChoice('');
+      setActionQuantitiesByOfferId({});
       setActionStockId('');
       setActionNotes('');
     } finally {
@@ -995,9 +1127,7 @@ export function ExplorerView({
                           {item.activationLevel === 'level_a_verified' ? (
                             <button
                               type="button"
-                              onClick={() =>
-                                setSelectedItemForAction({ item, mode: 'folder' })
-                              }
+                              onClick={() => openActionModal(item, 'folder')}
                               className="w-full min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
                             >
                               <CalendarPlus className="w-3.5 h-3.5" />
@@ -1007,9 +1137,7 @@ export function ExplorerView({
                             <div className="grid grid-cols-2 gap-2">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setSelectedItemForAction({ item, mode: 'folder' })
-                                }
+                                onClick={() => openActionModal(item, 'folder')}
                                 className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors whitespace-nowrap"
                               >
                                 <CalendarPlus className="w-3.5 h-3.5" />
@@ -1018,9 +1146,7 @@ export function ExplorerView({
 
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setSelectedItemForAction({ item, mode: 'booking' })
-                                }
+                                onClick={() => openActionModal(item, 'booking')}
                                 className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 dark:hover:bg-amber-300 rounded-xl transition-colors whitespace-nowrap"
                               >
                                 <span>
@@ -1262,17 +1388,19 @@ export function ExplorerView({
         </>
       )}
 
-      {/* Rich Detail Modal (14-Point Heritage Sheet / Accommodation Sheet) */}
+      {/* Rich Detail Modal (14-Point Heritage Sheet / Accommodation Sheet / Unified Offers) */}
       <ServiceDetailModal
         item={detailItem}
         locale={locale}
         displayCurrency={currency}
         formattedPrice={detailItem ? formatItemPrice(detailItem) : ''}
+        rates={rateInfo?.rates}
         activeStocks={pilotStocks}
+        providerOffers={providerOffers}
         approvedReviews={approvedReviews}
         onClose={() => setDetailItem(null)}
-        onAddToJourney={(it) => setSelectedItemForAction({ item: it, mode: 'folder' })}
-        onRequestBooking={(it) => setSelectedItemForAction({ item: it, mode: 'booking' })}
+        onAddToJourney={(it, prefill) => openActionModal(it, 'folder', prefill)}
+        onRequestBooking={(it, prefill) => openActionModal(it, 'booking', prefill)}
       />
 
       {/* Side-by-Side Accommodation Comparator Modal */}
@@ -1281,17 +1409,15 @@ export function ExplorerView({
           items={compareItems}
           onClose={() => setShowCompareModal(false)}
           onRemoveItem={(id) => toggleCompare(id)}
-          onSelectForJourney={(it) =>
-            setSelectedItemForAction({ item: it, mode: 'folder' })
-          }
+          onSelectForJourney={(it) => openActionModal(it, 'folder')}
           formatPrice={formatItemPrice}
         />
       )}
 
       {/* Action Bottom Sheet / Modal for Adding to Journey Folder or Requesting Booking */}
       {selectedItemForAction && (
-        <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full sm:max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl p-6 space-y-4">
+        <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="w-full sm:max-w-lg max-h-[92vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl p-6 space-y-4">
             <div className="space-y-1">
               <p className="text-xs font-medium text-teal-700 dark:text-teal-400">
                 {selectedItemForAction.mode === 'folder'
@@ -1317,28 +1443,64 @@ export function ExplorerView({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Date souhaitée
+                    {selectedItemForAction.item.category === 'accommodation'
+                      ? 'Date d’arrivée'
+                      : 'Date souhaitée'}
                   </label>
                   <input
                     type="date"
                     value={actionDate}
-                    onChange={(e) => setActionDate(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setActionDate(next);
+                      if (
+                        selectedItemForAction.item.category === 'accommodation' &&
+                        actionCheckOutDate <= next
+                      ) {
+                        setActionCheckOutDate(
+                          new Date(Date.parse(`${next}T00:00:00Z`) + 86_400_000)
+                            .toISOString()
+                            .slice(0, 10)
+                        );
+                      }
+                    }}
                     required
-                    className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="w-full min-h-[44px] px-3 py-2 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Heure de début
-                  </label>
-                  <input
-                    type="time"
-                    value={actionTime}
-                    onChange={(e) => setActionTime(e.target.value)}
-                    required
-                    className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                  />
-                </div>
+                {selectedItemForAction.item.category === 'accommodation' ? (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Date de départ ({actionStayNights} nuit
+                      {actionStayNights > 1 ? 's' : ''})
+                    </label>
+                    <input
+                      type="date"
+                      min={
+                        new Date(Date.parse(`${actionDate}T00:00:00Z`) + 86_400_000)
+                          .toISOString()
+                          .slice(0, 10)
+                      }
+                      value={actionCheckOutDate}
+                      onChange={(e) => setActionCheckOutDate(e.target.value)}
+                      required
+                      className="w-full min-h-[44px] px-3 py-2 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Heure de début
+                    </label>
+                    <input
+                      type="time"
+                      value={actionTime}
+                      onChange={(e) => setActionTime(e.target.value)}
+                      required
+                      className="w-full min-h-[44px] px-3 py-2 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Confirmed Pilot Stock Selector when Level C stocks exist */}
@@ -1360,7 +1522,7 @@ export function ExplorerView({
                       <select
                         value={actionStockId}
                         onChange={(e) => setActionStockId(e.target.value)}
-                        className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-2 text-xs font-mono tabular-nums bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-xl"
                       >
                         <option value="">Sélection automatique du stock disponible</option>
                         {matchingStocks.map((st) => {
@@ -1377,83 +1539,119 @@ export function ExplorerView({
                   );
                 })()}
 
-              {/* Partie 6: Granular Unit / Room / Vehicle / Language Choice */}
-              {(() => {
-                const it = selectedItemForAction.item;
-                const unitOptions: string[] =
-                  it.category === 'accommodation'
-                    ? it.roomTypes && it.roomTypes.length > 0
-                      ? it.roomTypes
-                      : [
-                          'Chambre Standard Climatisée',
-                          'Chambre Supérieure / Familiale',
-                          'Suite ou Appartement Équipé',
-                        ]
-                    : it.category === 'transport'
-                    ? [
-                        'Véhicule avec chauffeur dédié',
-                        'Location autonome (selon conditions agence)',
-                        'Transfert ponctuel / interurbain',
-                      ]
-                    : it.languagesSpoken && it.languagesSpoken.length > 0
-                    ? it.languagesSpoken.map((l) => `Accompagnement en ${l}`)
-                    : [];
+              {/* Real Multi-Offer Steppers from resolveServiceOffers (B1–B4, zero invented room/vehicle names) */}
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Offres de ce prestataire (sélectionnez une ou plusieurs unités)
+                </label>
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950">
+                  {modalOffers.map((off) => {
+                    const qty = actionQuantitiesByOfferId[off.id] || 0;
+                    const cap = off.maxGuests ?? off.seats ?? selectedItemForAction.item.capacity;
+                    return (
+                      <div
+                        key={off.id}
+                        className="p-3 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100 block">
+                            {off.name}
+                          </span>
+                          <span className="text-[11px] text-slate-500 tabular-nums block">
+                            {off.priceState === 'price_on_request' || off.priceAmount <= 0
+                              ? OFFER_PRICE_STATE_LABELS.price_on_request
+                              : `${off.priceAmount.toLocaleString('fr-FR')} ${
+                                  off.originalCurrency === 'XOF' ? 'FCFA' : off.originalCurrency
+                                } · ${off.priceUnit}`}{' '}
+                            · Max {cap} pers. · {OFFER_PRICE_STATE_LABELS[off.priceState]}
+                          </span>
+                        </div>
+                        <div className="inline-flex items-center gap-1.5 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5 bg-white dark:bg-slate-900 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setActionQuantitiesByOfferId((prev) => {
+                                const next = Math.max(0, (prev[off.id] || 0) - 1);
+                                const copy = { ...prev };
+                                if (next === 0) delete copy[off.id];
+                                else copy[off.id] = next;
+                                return copy;
+                              })
+                            }
+                            disabled={qty === 0}
+                            className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded disabled:opacity-35"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="w-5 text-center font-mono tabular-nums font-bold">
+                            {qty}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setActionQuantitiesByOfferId((prev) => ({
+                                ...prev,
+                                [off.id]: Math.min(20, (prev[off.id] || 0) + 1),
+                              }))
+                            }
+                            className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                if (unitOptions.length === 0) return null;
-                return (
+              {selectedItemForAction.item.category === 'transport' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      {it.category === 'accommodation'
-                        ? 'Type de chambre / unité souhaité'
-                        : it.category === 'transport'
-                        ? 'Formule véhicule / chauffeur souhaitée'
-                        : 'Langue / modalité souhaitée'}
+                      Lieu de prise en charge
                     </label>
-                    <select
-                      value={actionUnitChoice}
-                      onChange={(e) => setActionUnitChoice(e.target.value)}
-                      className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    >
-                      <option value="">Sélectionner une option précise (recommandé)</option>
-                      {unitOptions.map((u) => (
-                        <option key={u} value={u}>
-                          {u}
-                        </option>
-                      ))}
-                    </select>
+                    <input
+                      type="text"
+                      value={actionPickupLocation}
+                      onChange={(e) => setActionPickupLocation(e.target.value)}
+                      placeholder="Aéroport, hôtel..."
+                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
                   </div>
-                );
-              })()}
-
-              {selectedItemForAction.mode === 'booking' ? (
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Nombre de personnes / unités
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={selectedItemForAction.item.capacity}
-                    value={actionParticipants}
-                    onChange={(e) =>
-                      setActionParticipants(Math.max(1, Number(e.target.value)))
-                    }
-                    required
-                    className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    {selectedItemForAction.item.activationLevel === 'level_c_instant'
-                      ? 'Niveau C : allocation atomique immédiate si le stock confirmé couvre la date (sinon bascule honnête en validation prestataire Niveau B).'
-                      : 'Statut initial : « En attente de disponibilité ». Aucun débit automatique n’est effectué sans confirmation préalable.'}
-                  </p>
-                  <p className="text-[11px] text-teal-800 dark:text-teal-300 mt-1">
-                    {selectedItemForAction.item.category === 'accommodation' ||
-                    selectedItemForAction.item.category === 'transport'
-                      ? 'Justificatif d’identité : non demandé maintenant ; transmissible en coffre privé chiffré uniquement lors de la finalisation si l’établissement l’exige.'
-                      : 'Aucune pièce d’identité n’est demandée pour cette prestation.'}
-                  </p>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Lieu de restitution / destination
+                    </label>
+                    <input
+                      type="text"
+                      value={actionDropoffLocation}
+                      onChange={(e) => setActionDropoffLocation(e.target.value)}
+                      placeholder="Destination ou agence..."
+                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
                 </div>
-              ) : (
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Nombre total de voyageurs
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={actionParticipants}
+                  onChange={(e) =>
+                    setActionParticipants(Math.max(1, Number(e.target.value) || 1))
+                  }
+                  required
+                  className="w-full min-h-[44px] px-3 py-2 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                />
+              </div>
+
+              {selectedItemForAction.mode === 'folder' && (
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                     Note personnelle (optionnelle)
@@ -1468,6 +1666,41 @@ export function ExplorerView({
                 </div>
               )}
 
+              {modalOfferValidation && !modalOfferValidation.valid && (
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 flex items-start gap-2 text-xs text-red-800 dark:text-red-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{modalOfferValidation.error}</span>
+                </div>
+              )}
+
+              {modalOfferValidation && modalOfferValidation.valid && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs space-y-1 tabular-nums">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600 dark:text-slate-400">
+                      Sous-total prestataire ({modalOfferValidation.totalSelectedUnits} unité
+                      {modalOfferValidation.totalSelectedUnits > 1 ? 's' : ''})
+                    </span>
+                    <strong className="font-mono text-slate-900 dark:text-slate-100">
+                      {modalOfferValidation.providerSubtotalInServiceCurrency > 0
+                        ? `${modalOfferValidation.providerSubtotalInServiceCurrency.toLocaleString('fr-FR')} ${selectedItemForAction.item.currency === 'XOF' ? 'FCFA' : selectedItemForAction.item.currency}`
+                        : OFFER_PRICE_STATE_LABELS.price_on_request}
+                    </strong>
+                  </div>
+                  {modalOfferValidation.hasPriceToVerify && (
+                    <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                      Estimation : inclut au moins une offre « Prix à vérifier » ou « Tarif sur demande ».
+                    </p>
+                  )}
+                  {selectedItemForAction.mode === 'booking' && (
+                    <p className="text-[11px] text-slate-500">
+                      {selectedItemForAction.item.activationLevel === 'level_c_instant'
+                        ? 'Niveau C : allocation atomique immédiate si le stock confirmé couvre la date.'
+                        : 'Statut initial : « En attente de disponibilité ». Aucun débit automatique sans confirmation préalable.'}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1478,8 +1711,8 @@ export function ExplorerView({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingAction}
-                  className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                  disabled={isSubmittingAction || !modalOfferValidation?.valid}
+                  className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 disabled:opacity-45 rounded-xl"
                 >
                   {isSubmittingAction
                     ? 'Vérification...'

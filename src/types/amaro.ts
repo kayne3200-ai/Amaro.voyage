@@ -176,6 +176,7 @@ export interface CatalogueItem {
   }>;
   blockedDates?: string[];
   providerResponseHours?: number;
+  structuredOffers?: ProviderOfferDoc[];
 }
 
 export type JourneyFolderStatus =
@@ -266,6 +267,11 @@ export interface JourneyItemDoc {
   notes: string;
   providerId?: string;
   isFreeTimeBlock?: boolean;
+  selectedOffersJson?: string;
+  hasPriceToVerify?: boolean;
+  checkOutDate?: string;
+  pickupLocation?: string;
+  dropoffLocation?: string;
 }
 
 export interface JournalEntryDoc {
@@ -326,6 +332,14 @@ export interface ReservationDoc {
   balanceDeadlineAt?: string;
   adminNotifyProviderTask?: 'none' | 'pending_inform_cancellation' | 'informed';
   localContributionXof?: number;
+  selectedOffersJson?: string;
+  hasPriceToVerify?: boolean;
+  checkOutDate?: string;
+  pickupLocation?: string;
+  dropoffLocation?: string;
+  isPartialAcceptance?: boolean;
+  requestedUnitsTotal?: number;
+  acceptedUnitsTotal?: number;
 }
 
 export interface ProviderProfileDoc {
@@ -856,4 +870,171 @@ export interface FinancialArchiveDoc {
   anonymizedAtIso: string;
 }
 
+// ===========================================================================
+// OFFRES DÉTAILLÉES PAR PRESTATAIRE (PARTIE B) & RECENSEMENT WEB BÉNIN (PARTIE A)
+// ===========================================================================
+export type OfferPriceState =
+  | 'displayed_price'
+  | 'price_to_verify'
+  | 'price_on_request';
 
+export type OfferOriginSource =
+  | 'web_census'
+  | 'admin'
+  | 'conventioned_provider';
+
+export type OfferConfidenceLevel =
+  | 'two_concordant_sources'
+  | 'single_source'
+  | 'old_or_ambiguous';
+
+export type OfferKind =
+  | 'room'
+  | 'vehicle'
+  | 'transfer'
+  | 'intercity_bus'
+  | 'meal_formula'
+  | 'visit_formula'
+  | 'guide_translation'
+  | 'wellness_care'
+  | 'other_service';
+
+export interface OfferChangeRecord {
+  updatedAtIso: string;
+  actorRole: OfferOriginSource;
+  actorId: string;
+  summary: string;
+}
+
+export interface ProviderOfferDoc {
+  id: string;
+  serviceId: string;
+  providerId: string;
+  category: ServiceCategory;
+  offerKind: OfferKind;
+  name: string;
+  shortDescription: string;
+  priceState: OfferPriceState;
+  priceAmount: number;
+  originalCurrency: string;
+  priceUnit: string;
+  sourceName: string;
+  sourceUrl: string;
+  consultedAt: string;
+  needsConfirmationFromProvider: boolean;
+  photoStatus: 'photo_to_provide' | 'verified_photo';
+  photoUrl?: string;
+  originSource: OfferOriginSource;
+  history: OfferChangeRecord[];
+  isFallbackGenericRoom?: boolean;
+  // Accommodation-specific (B2)
+  maxGuests?: number | null;
+  bedsDescription?: string;
+  amenities?: string[];
+  hasAirConditioning?: boolean | null;
+  // Transport-specific (B3)
+  seats?: number | null;
+  transmission?: 'manuelle' | 'automatique' | 'non précisé';
+  driverOption?: 'with_driver' | 'without_driver' | 'both' | 'unspecified';
+  rentalDurationLabel?: string;
+  depositInfo?: string;
+  fuelPolicy?: string;
+  mileagePolicy?: string;
+  licenseRequired?: string;
+  routeOrigin?: string;
+  routeDestination?: string;
+  publishedSchedule?: string;
+  // Other categories (B4)
+  languages?: string[];
+  durationLabel?: string;
+  formulaType?: string;
+}
+
+export interface SelectedOfferLine {
+  offerId: string;
+  offerName: string;
+  offerKind: OfferKind;
+  quantity: number;
+  travelersCount: number;
+  maxGuestsPerUnit?: number | null;
+  unitPrice: number;
+  originalCurrency: string;
+  priceState: OfferPriceState;
+  priceUnit: string;
+  durationUnits: number;
+  lineSubtotal: number;
+  pickupLocation?: string;
+  dropoffLocation?: string;
+  returnDate?: string;
+  acceptedQuantity?: number;
+}
+
+export type CensusRecordStatus =
+  | 'to_validate'
+  | 'incomplete'
+  | 'possible_duplicate'
+  | 'proposed_update'
+  | 'published'
+  | 'rejected';
+
+export interface CensusSourceRef {
+  label: string;
+  url: string;
+  consultedAt: string;
+  note?: string;
+}
+
+export interface CensusProposedDiff {
+  field: string;
+  currentValue: string;
+  discoveredValue: string;
+  sourceUrl: string;
+  consultedAt: string;
+}
+
+export interface CensusListingDoc {
+  id: string;
+  businessName: string;
+  category: ServiceCategory;
+  subCategory: string;
+  cityId: string;
+  department: string;
+  neighborhoodOrAddress: string;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  contactPhone: string;
+  contactPhoneTested: boolean;
+  contactWhatsapp: string;
+  contactWhatsappTested: boolean;
+  contactEmail: string;
+  contactEmailTested: boolean;
+  officialWebsite: string;
+  socialPageUrl: string;
+  factualDescription: string;
+  openingHours: string;
+  spokenLanguages: string[];
+  paymentMeans: string[];
+  priceState: OfferPriceState;
+  priceAmount: number;
+  originalCurrency: string;
+  priceUnit: string;
+  priceVerifyReason?: string;
+  photoStatus: 'photo_to_provide';
+  confidenceLevel: OfferConfidenceLevel;
+  sources: CensusSourceRef[];
+  rejectedSourcesNotes?: string[];
+  offers: ProviderOfferDoc[];
+  status: CensusRecordStatus;
+  matchedExistingServiceId?: string;
+  matchedDuplicateReason?: string;
+  proposedDiffs?: CensusProposedDiff[];
+  toVerifyFlags: string[];
+  publishedServiceId?: string;
+  history: Array<{
+    atIso: string;
+    actorId: string;
+    action: string;
+    note: string;
+  }>;
+  updatedAtIso: string;
+}

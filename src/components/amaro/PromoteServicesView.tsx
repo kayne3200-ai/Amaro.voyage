@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Building2,
   Clock,
@@ -14,7 +14,12 @@ import {
 } from 'lucide-react';
 import type {
   CatalogueItem,
+  CurrencyCode,
+  IdentityVerificationDoc,
+  OfferKind,
+  OfferPriceState,
   PlatformContentDoc,
+  ProviderOfferDoc,
   ProviderProfileDoc,
   ProviderThankYouDoc,
   ReservationDoc,
@@ -22,8 +27,17 @@ import type {
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
+import { authorizedFetch } from '../../lib/apiClient';
+import {
+  OFFER_PRICE_STATE_LABELS,
+  parseSelectedOffersJson,
+} from '../../lib/offerEngine';
 import { ListingTrustBadge } from './ListingTrustBadge';
 import type { LegalDocKey } from './LegalAndCharterModal';
+import {
+  IDENTITY_STATUS_META,
+  IdentityVerificationModal,
+} from './IdentityVerificationModal';
 
 const BENIN_CITIES = COUNTRIES_REGISTRY[0]?.cities || [];
 const CATEGORY_LIST: ServiceCategory[] = [
@@ -40,15 +54,31 @@ function formatXof(amount: number): string {
   return `${Math.round(amount).toLocaleString('fr-FR')} XOF`;
 }
 
+interface ProviderCommercialPrivateData {
+  ownerId: string;
+  contactEmail: string;
+  contactPhone: string;
+  payoutChannel: string;
+  registrationRef: string;
+}
+
 interface PromoteServicesViewProps {
   isSignedIn: boolean;
+  currentUserEmail?: string | null;
   onRequireSignIn: () => void;
   myProvider: ProviderProfileDoc | null;
+  myProviderPrivate?: ProviderCommercialPrivateData | null;
+  defaultCommissionPercent?: number;
   myServices: CatalogueItem[];
+  providerOffers?: ProviderOfferDoc[];
+  onRefreshOffers?: () => void;
   providerReservations: ReservationDoc[];
   providerThankYous: ProviderThankYouDoc[];
+  providerIdentityByRes?: Record<string, IdentityVerificationDoc>;
+  vaultKeyConfirmedByOwner?: boolean;
   platformContentMap: Record<string, PlatformContentDoc>;
   onOpenLegalDoc: (docId: LegalDocKey) => void;
+  onNotify?: (message: string) => void;
   onRegisterProviderViaPromote: (payload: {
     businessName: string;
     category: ServiceCategory;
@@ -62,6 +92,16 @@ interface PromoteServicesViewProps {
     acceptedConvention: boolean;
     claimDirectoryServiceId?: string;
   }) => Promise<boolean>;
+  onSaveProviderProfile?: (
+    pub: {
+      businessName: string;
+      category: ServiceCategory;
+      countryCode: string;
+      cityId: string;
+      description: string;
+    },
+    priv: Omit<ProviderCommercialPrivateData, 'ownerId'>
+  ) => Promise<void>;
   onCreateOrUpdateProviderService: (draft: {
     id?: string;
     title: string;
@@ -76,21 +116,33 @@ interface PromoteServicesViewProps {
   }) => Promise<void>;
   onProviderRespondReservation: (params: {
     reservation: ReservationDoc;
-    decision: 'accept' | 'propose_alternative' | 'reject';
+    decision: 'accept' | 'partial_accept' | 'propose_alternative' | 'reject';
+    acceptedUnits?: number;
     alternativeProposal?: string;
+    scheduledDate?: string;
+    scheduledTime?: string;
   }) => Promise<void>;
 }
 
 export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   isSignedIn,
+  currentUserEmail,
   onRequireSignIn,
   myProvider,
+  myProviderPrivate = null,
+  defaultCommissionPercent = 10,
   myServices,
+  providerOffers = [],
+  onRefreshOffers,
   providerReservations,
   providerThankYous,
+  providerIdentityByRes = {},
+  vaultKeyConfirmedByOwner = false,
   platformContentMap,
   onOpenLegalDoc,
+  onNotify,
   onRegisterProviderViaPromote,
+  onSaveProviderProfile,
   onCreateOrUpdateProviderService,
   onProviderRespondReservation,
 }) => {
@@ -121,6 +173,54 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   const [blockedDatesText, setBlockedDatesText] = useState('');
 
   const [altProposalByRes, setAltProposalByRes] = useState<Record<string, string>>({});
+  const [altDateByRes, setAltDateByRes] = useState<Record<string, string>>({});
+  const [altTimeByRes, setAltTimeByRes] = useState<Record<string, string>>({});
+  const [partialUnitsByRes, setPartialUnitsByRes] = useState<Record<string, number>>({});
+  const [activeIdentityRes, setActiveIdentityRes] = useState<ReservationDoc | null>(null);
+
+  // Structured Offer Form (B7 — Verified Conventioned Provider Only)
+  const [editingOfferId, setEditingOfferId] = useState('');
+  const [offerServiceId, setOfferServiceId] = useState('');
+  const [offerName, setOfferName] = useState('');
+  const [offerKind, setOfferKind] = useState<OfferKind>('room');
+  const [offerDesc, setOfferDesc] = useState('');
+  const [offerPriceState, setOfferPriceState] = useState<OfferPriceState>('displayed_price');
+  const [offerPriceAmount, setOfferPriceAmount] = useState<number>(35000);
+  const [offerCurrency, setOfferCurrency] = useState<CurrencyCode>('XOF');
+  const [offerUnit, setOfferUnit] = useState('par nuit');
+  const [offerCapacity, setOfferCapacity] = useState<number>(2);
+  const [offerBedsOrCondition, setOfferBedsOrCondition] = useState('');
+  const [offerHasAc, setOfferHasAc] = useState<boolean>(true);
+  const [offerDriverOption, setOfferDriverOption] = useState<'with_driver' | 'without_driver' | 'both'>('with_driver');
+  const [offerSaving, setOfferSaving] = useState(false);
+
+  // Commercial & Payout Private Profile state for registered providers
+  const [editBusinessName, setEditBusinessName] = useState('');
+  const [editCategory, setEditCategory] = useState<ServiceCategory>('accommodation');
+  const [editCityId, setEditCityId] = useState<string>('cotonou');
+  const [editDescription, setEditDescription] = useState('');
+  const [editContactEmail, setEditContactEmail] = useState('');
+  const [editContactPhone, setEditContactPhone] = useState('');
+  const [editPayoutChannel, setEditPayoutChannel] = useState('MTN MoMo Bénin');
+  const [editRegistrationRef, setEditRegistrationRef] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    if (myProvider) {
+      setEditBusinessName(myProvider.businessName || '');
+      setEditCategory(myProvider.category || 'accommodation');
+      setEditCityId(myProvider.cityId || 'cotonou');
+      setEditDescription(myProvider.description || '');
+    }
+    if (myProviderPrivate) {
+      setEditContactEmail(myProviderPrivate.contactEmail || currentUserEmail || '');
+      setEditContactPhone(myProviderPrivate.contactPhone || '');
+      setEditPayoutChannel(myProviderPrivate.payoutChannel || 'MTN MoMo Bénin');
+      setEditRegistrationRef(myProviderPrivate.registrationRef || '');
+    } else if (currentUserEmail) {
+      setEditContactEmail(currentUserEmail);
+    }
+  }, [myProvider, myProviderPrivate, currentUserEmail]);
 
   const conventionDoc = platformContentMap['convention_prestataire'];
 
@@ -539,54 +639,175 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
               </p>
             ) : (
               <div className="space-y-3">
-                {pendingRequests.map((res) => (
-                  <div
-                    key={res.id}
-                    className="p-4 rounded-xl bg-amber-50/50 dark:bg-slate-950 border border-amber-200 dark:border-slate-800 space-y-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-bold text-slate-900 dark:text-white">
-                          {res.serviceTitle}
-                        </p>
-                        <p className="text-xs text-slate-600 dark:text-slate-300">
-                          Date demandée : <strong>{res.scheduledDate}</strong> à{' '}
-                          <strong>{res.scheduledTime}</strong> · {res.participants} voyageur(s) ·
-                          Montant prestataire :{' '}
-                          <strong>{formatXof(res.providerPrice || 0)}</strong>
-                        </p>
-                      </div>
-                      {res.responseDeadlineAt && (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-100 text-amber-900">
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          Répondre avant : {res.responseDeadlineAt.replace('T', ' ').slice(0, 16)} UTC
-                        </span>
-                      )}
-                    </div>
+                {pendingRequests.map((res) => {
+                  const chosenLines = parseSelectedOffersJson(res.selectedOffersJson);
+                  const requestedUnits = Math.max(
+                    1,
+                    res.requestedUnitsTotal ||
+                      chosenLines.reduce((sum, l) => sum + Math.max(1, l.quantity), 0) ||
+                      1
+                  );
+                  const partialDraft =
+                    partialUnitsByRes[res.id] ?? Math.max(1, requestedUnits - 1);
 
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="text"
-                        value={altProposalByRes[res.id] || ''}
-                        onChange={(e) =>
-                          setAltProposalByRes((prev) => ({ ...prev, [res.id]: e.target.value }))
-                        }
-                        placeholder="Optionnel : proposer un autre horaire ou préciser vos conditions..."
-                        className="flex-1 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                      />
-                      <div className="flex flex-wrap gap-2">
+                  return (
+                    <div
+                      key={res.id}
+                      className="p-4 rounded-xl bg-amber-50/50 dark:bg-slate-950 border border-amber-200 dark:border-slate-800 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-bold text-slate-900 dark:text-white">
+                            {res.serviceTitle}
+                          </p>
+                          <p className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                            Date demandée : <strong>{res.scheduledDate}</strong>
+                            {res.checkOutDate ? ` → ${res.checkOutDate}` : ''} à{' '}
+                            <strong>{res.scheduledTime}</strong> · {res.participants} voyageur(s) ·
+                            Montant prestataire :{' '}
+                            <strong>{formatXof(res.providerPrice || 0)}</strong>
+                            {res.hasPriceToVerify ? ' (Estimation à confirmer)' : ''}
+                          </p>
+                          {(res.pickupLocation || res.dropoffLocation) && (
+                            <p className="text-xs text-slate-500">
+                              Prise en charge : {res.pickupLocation || 'non précisée'} · Retour :{' '}
+                              {res.dropoffLocation || 'non précisé'}
+                            </p>
+                          )}
+                          {chosenLines.length > 0 && (
+                            <div className="pt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-700 dark:text-slate-300 tabular-nums">
+                              <span className="font-semibold">Offres demandées :</span>
+                              {chosenLines.map((line, idx) => (
+                                <React.Fragment key={`${line.offerId}-${idx}`}>
+                                  {idx > 0 && <span aria-hidden="true">·</span>}
+                                  <span>
+                                    {line.quantity} × {line.offerName} ({line.priceUnit})
+                                  </span>
+                                </React.Fragment>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {res.responseDeadlineAt && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-100 text-amber-900 tabular-nums">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            Répondre avant : {res.responseDeadlineAt.replace('T', ' ').slice(0, 16)} UTC
+                          </span>
+                        )}
+                      </div>
+
+                      {(() => {
+                        const idMeta = providerIdentityByRes[res.id];
+                        const statusKey = idMeta?.status || 'not_requested';
+                        const ui = IDENTITY_STATUS_META[statusKey];
+                        return (
+                          <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-amber-200/70 dark:border-slate-800">
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                              <span className="text-slate-500">Justificatif d&apos;identité client :</span>
+                              <span
+                                className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${ui.badgeClass}`}
+                              >
+                                {ui.label}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setActiveIdentityRes(res)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-[11px] font-semibold"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              Vérification d&apos;identité client
+                            </button>
+                          </div>
+                        );
+                      })()}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-1">
+                        <input
+                          type="date"
+                          value={altDateByRes[res.id] ?? res.scheduledDate}
+                          onChange={(e) =>
+                            setAltDateByRes((prev) => ({ ...prev, [res.id]: e.target.value }))
+                          }
+                          className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                        <input
+                          type="time"
+                          value={altTimeByRes[res.id] ?? res.scheduledTime}
+                          onChange={(e) =>
+                            setAltTimeByRes((prev) => ({ ...prev, [res.id]: e.target.value }))
+                          }
+                          className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={altProposalByRes[res.id] || ''}
+                          onChange={(e) =>
+                            setAltProposalByRes((prev) => ({ ...prev, [res.id]: e.target.value }))
+                          }
+                          placeholder="Optionnel : préciser le nouvel horaire ou vos conditions..."
+                          className="sm:col-span-2 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() =>
                             void onProviderRespondReservation({
                               reservation: res,
                               decision: 'accept',
+                              scheduledDate: res.scheduledDate,
+                              scheduledTime: res.scheduledTime,
                             })
                           }
                           className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
                         >
-                          Confirmer la disponibilité
+                          Confirmer la disponibilité ({requestedUnits} unité{requestedUnits > 1 ? 's' : ''})
                         </button>
+
+                        {requestedUnits > 1 && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs">
+                            <label htmlFor={`partial-${res.id}`} className="text-slate-600 dark:text-slate-300">
+                              Dispo partielle :
+                            </label>
+                            <input
+                              id={`partial-${res.id}`}
+                              type="number"
+                              min={1}
+                              max={requestedUnits - 1}
+                              value={partialDraft}
+                              onChange={(e) =>
+                                setPartialUnitsByRes((prev) => ({
+                                  ...prev,
+                                  [res.id]: Math.max(
+                                    1,
+                                    Math.min(requestedUnits - 1, Number(e.target.value) || 1)
+                                  ),
+                                }))
+                              }
+                              className="w-14 px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono tabular-nums text-xs"
+                            />
+                            <span className="text-slate-500 tabular-nums">/ {requestedUnits}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void onProviderRespondReservation({
+                                  reservation: res,
+                                  decision: 'partial_accept',
+                                  acceptedUnits: partialDraft,
+                                  alternativeProposal: altProposalByRes[res.id] || '',
+                                  scheduledDate: res.scheduledDate,
+                                  scheduledTime: res.scheduledTime,
+                                })
+                              }
+                              className="px-2.5 py-1 rounded bg-teal-700 hover:bg-teal-800 text-white font-semibold"
+                            >
+                              Confirmer {partialDraft}/{requestedUnits}
+                            </button>
+                          </div>
+                        )}
+
                         <button
                           type="button"
                           onClick={() =>
@@ -596,6 +817,8 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                               alternativeProposal:
                                 altProposalByRes[res.id] ||
                                 'Autre créneau disponible — à valider par le voyageur',
+                              scheduledDate: altDateByRes[res.id] || res.scheduledDate,
+                              scheduledTime: altTimeByRes[res.id] || res.scheduledTime,
                             })
                           }
                           className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
@@ -608,6 +831,8 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                             void onProviderRespondReservation({
                               reservation: res,
                               decision: 'reject',
+                              scheduledDate: res.scheduledDate,
+                              scheduledTime: res.scheduledTime,
                             })
                           }
                           className="px-3.5 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold"
@@ -616,8 +841,60 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                         </button>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Accepted / Confirmed Reservations History + Identity Verification Access */}
+            {providerReservations.filter(
+              (r) => r.status !== 'pending_provider' && r.status !== 'alternative_proposed'
+            ).length > 0 && (
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Dossiers traités & justificatifs d&apos;identité voyageurs
+                </p>
+                <div className="space-y-2">
+                  {providerReservations
+                    .filter(
+                      (r) => r.status !== 'pending_provider' && r.status !== 'alternative_proposed'
+                    )
+                    .map((res) => {
+                      const idMeta = providerIdentityByRes[res.id];
+                      const statusKey = idMeta?.status || 'not_requested';
+                      const ui = IDENTITY_STATUS_META[statusKey];
+                      return (
+                        <div
+                          key={res.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              {res.serviceTitle}
+                            </span>{' '}
+                            · {res.scheduledDate} ({res.scheduledTime}) · Statut :{' '}
+                            <strong>{res.status}</strong> · Net prestataire :{' '}
+                            <strong>{formatXof(res.providerPrice || 0)}</strong>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${ui.badgeClass}`}
+                            >
+                              {ui.label}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setActiveIdentityRes(res)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-[11px] font-semibold"
+                            >
+                              <ShieldCheck className="w-3 h-3" />
+                              Justificatif client
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
               </div>
             )}
           </section>
@@ -807,6 +1084,320 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                 )}
               </div>
             </form>
+
+            {/* B7: Structured Detailed Offers (Rooms, Vehicles, Formulas) — Strictly for Verified Conventioned Providers */}
+            {myProvider.verificationStatus === 'verified' && myServices.length > 0 && (
+              <div className="pt-5 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Offres détaillées rattachées à mes prestations (chambres, véhicules, formules)
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    En tant que Partenaire AMARO validé, vous pouvez déclarer chaque type de chambre, véhicule ou formule avec son tarif exact et ses conditions. Chaque modification est tracée dans l&apos;historique.
+                  </p>
+                </div>
+
+                {(() => {
+                  const myServiceIds = new Set(myServices.map((s) => s.id));
+                  const myStructuredOffers = providerOffers.filter((o) =>
+                    myServiceIds.has(o.serviceId)
+                  );
+                  return myStructuredOffers.length > 0 ? (
+                    <div className="space-y-2">
+                      {myStructuredOffers.map((off) => (
+                        <div
+                          key={off.id}
+                          className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-wrap items-start justify-between gap-3 text-xs"
+                        >
+                          <div className="space-y-1">
+                            <p className="font-bold text-slate-900 dark:text-white">
+                              {off.name}{' '}
+                              <span className="font-normal text-slate-500">
+                                · {myServices.find((s) => s.id === off.serviceId)?.title || off.serviceId}
+                              </span>
+                            </p>
+                            <p className="text-slate-600 dark:text-slate-400 tabular-nums">
+                              {off.priceState === 'price_on_request'
+                                ? 'Tarif sur demande'
+                                : `${off.priceAmount.toLocaleString('fr-FR')} ${off.originalCurrency} (${off.priceUnit})`}{' '}
+                              · {OFFER_PRICE_STATE_LABELS[off.priceState]} · Capacité :{' '}
+                              {off.maxGuests ?? off.seats ?? 2} pers.
+                            </p>
+                            {off.history && off.history.length > 0 && (
+                              <p className="text-[11px] text-slate-500 tabular-nums">
+                                Dernière mise à jour : {off.history[off.history.length - 1].updatedAtIso.slice(0, 16).replace('T', ' ')} ({off.history[off.history.length - 1].summary})
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingOfferId(off.id);
+                                setOfferServiceId(off.serviceId);
+                                setOfferName(off.name);
+                                setOfferKind(off.offerKind);
+                                setOfferDesc(off.shortDescription);
+                                setOfferPriceState(off.priceState);
+                                setOfferPriceAmount(off.priceAmount);
+                                setOfferCurrency(
+                                  (off.originalCurrency === 'EUR' || off.originalCurrency === 'USD'
+                                    ? off.originalCurrency
+                                    : 'XOF') as CurrencyCode
+                                );
+                                setOfferUnit(off.priceUnit);
+                                setOfferCapacity(off.maxGuests ?? off.seats ?? 2);
+                                setOfferBedsOrCondition(
+                                  off.bedsDescription || off.depositInfo || ''
+                                );
+                              }}
+                              className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold"
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const resp = await authorizedFetch(
+                                  `/api/amaro/offers/${encodeURIComponent(off.id)}`,
+                                  { method: 'DELETE' }
+                                );
+                                if (resp.ok) {
+                                  onNotify?.('Offre détaillée retirée.');
+                                  onRefreshOffers?.();
+                                } else {
+                                  const err = await resp.json().catch(() => ({}));
+                                  onNotify?.(err.error || 'Suppression refusée.');
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 font-semibold"
+                            >
+                              Supprimer
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      Aucune offre détaillée enregistrée pour l&apos;instant. Ajoutez vos types de chambres, véhicules ou formules ci-dessous.
+                    </p>
+                  );
+                })()}
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const targetSrvId = offerServiceId || myServices[0]?.id;
+                    if (!targetSrvId || !offerName.trim() || offerSaving) return;
+                    const targetSrv = myServices.find((s) => s.id === targetSrvId);
+                    setOfferSaving(true);
+                    try {
+                      const resp = await authorizedFetch('/api/amaro/offers/upsert', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          ...(editingOfferId ? { id: editingOfferId } : {}),
+                          serviceId: targetSrvId,
+                          name: offerName.trim(),
+                          shortDescription: offerDesc.trim(),
+                          offerKind,
+                          priceState: offerPriceState,
+                          priceAmount:
+                            offerPriceState === 'price_on_request' ? 0 : Math.max(0, offerPriceAmount),
+                          originalCurrency: offerCurrency,
+                          priceUnit: offerUnit.trim() || 'par nuit',
+                          sourceName: `Déclaré par le Partenaire AMARO (${myProvider.businessName})`,
+                          sourceUrl: '',
+                          ...(targetSrv?.category === 'accommodation'
+                            ? {
+                                maxGuests: Math.max(1, offerCapacity),
+                                bedsDescription: offerBedsOrCondition.trim() || 'non précisé',
+                                hasAirConditioning: offerHasAc,
+                              }
+                            : targetSrv?.category === 'transport'
+                            ? {
+                                seats: Math.max(1, offerCapacity),
+                                hasAirConditioning: offerHasAc,
+                                driverOption: offerDriverOption,
+                                depositInfo: offerBedsOrCondition.trim() || 'non précisé',
+                              }
+                            : {
+                                maxGuests: Math.max(1, offerCapacity),
+                                formulaType: offerBedsOrCondition.trim() || undefined,
+                              }),
+                        }),
+                      });
+                      const data = await resp.json().catch(() => ({}));
+                      if (!resp.ok) {
+                        onNotify?.(data.error || 'Enregistrement de l’offre refusé.');
+                        return;
+                      }
+                      onNotify?.(
+                        editingOfferId
+                          ? 'Offre détaillée mise à jour avec historique.'
+                          : 'Offre détaillée ajoutée à votre prestation.'
+                      );
+                      setEditingOfferId('');
+                      setOfferName('');
+                      setOfferDesc('');
+                      setOfferBedsOrCondition('');
+                      onRefreshOffers?.();
+                    } finally {
+                      setOfferSaving(false);
+                    }
+                  }}
+                  className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <select
+                      value={offerServiceId || myServices[0]?.id || ''}
+                      onChange={(e) => setOfferServiceId(e.target.value)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    >
+                      {myServices.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      required
+                      minLength={2}
+                      value={offerName}
+                      onChange={(e) => setOfferName(e.target.value)}
+                      placeholder="Nom de l'offre (ex: Chambre Double Vue Mer, SUV 4x4) *"
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    />
+                    <select
+                      value={offerKind}
+                      onChange={(e) => setOfferKind(e.target.value as OfferKind)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    >
+                      <option value="room">Chambre / Suite / Appartement</option>
+                      <option value="vehicle">Véhicule / Location</option>
+                      <option value="transfer">Transfert / Navette</option>
+                      <option value="intercity_bus">Ligne interurbaine</option>
+                      <option value="meal_formula">Menu / Repas</option>
+                      <option value="visit_formula">Formule de visite</option>
+                      <option value="guide_translation">Prestation guide / interprète</option>
+                      <option value="wellness_care">Soin bien-être</option>
+                      <option value="other_service">Atelier / Artisanat / Autre</option>
+                    </select>
+                    <select
+                      value={offerPriceState}
+                      onChange={(e) => setOfferPriceState(e.target.value as OfferPriceState)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    >
+                      <option value="displayed_price">Prix confirmé affiché</option>
+                      <option value="price_to_verify">Prix indicatif à vérifier</option>
+                      <option value="price_on_request">Tarif sur demande</option>
+                    </select>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        disabled={offerPriceState === 'price_on_request'}
+                        value={offerPriceState === 'price_on_request' ? 0 : offerPriceAmount}
+                        onChange={(e) => setOfferPriceAmount(Number(e.target.value))}
+                        placeholder="Montant"
+                        className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono tabular-nums"
+                      />
+                      <select
+                        value={offerCurrency}
+                        onChange={(e) => setOfferCurrency(e.target.value as CurrencyCode)}
+                        className="px-2 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono"
+                      >
+                        <option value="XOF">XOF</option>
+                        <option value="EUR">EUR</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                    <input
+                      type="text"
+                      value={offerUnit}
+                      onChange={(e) => setOfferUnit(e.target.value)}
+                      placeholder="Unité (par nuit, par jour, par personne)"
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={offerCapacity}
+                      onChange={(e) => setOfferCapacity(Number(e.target.value))}
+                      placeholder="Capacité max / places *"
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono tabular-nums"
+                    />
+                    <input
+                      type="text"
+                      value={offerBedsOrCondition}
+                      onChange={(e) => setOfferBedsOrCondition(e.target.value)}
+                      placeholder="Lits / Caution / Formule (ex: 1 lit King, Caution 200 000 XOF)"
+                      className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                    />
+                    <div className="flex items-center gap-3">
+                      <label className="inline-flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={offerHasAc}
+                          onChange={(e) => setOfferHasAc(e.target.checked)}
+                        />
+                        <span>Climatisation</span>
+                      </label>
+                      {offerKind === 'vehicle' && (
+                        <select
+                          value={offerDriverOption}
+                          onChange={(e) =>
+                            setOfferDriverOption(
+                              e.target.value as 'with_driver' | 'without_driver' | 'both'
+                            )
+                          }
+                          className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                        >
+                          <option value="with_driver">Avec chauffeur</option>
+                          <option value="without_driver">Sans chauffeur</option>
+                          <option value="both">Avec ou sans chauffeur</option>
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    value={offerDesc}
+                    onChange={(e) => setOfferDesc(e.target.value)}
+                    placeholder="Description courte factuelle des équipements ou conditions incluses..."
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={offerSaving}
+                      className="px-4 py-2 rounded-lg bg-[#0B192C] text-white text-xs font-bold hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {editingOfferId
+                        ? 'Enregistrer la modification de cette offre'
+                        : 'Ajouter cette offre détaillée'}
+                    </button>
+                    {editingOfferId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingOfferId('');
+                          setOfferName('');
+                          setOfferDesc('');
+                          setOfferBedsOrCondition('');
+                        }}
+                        className="px-3 py-2 rounded-lg border border-slate-300 text-xs"
+                      >
+                        Annuler
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+            )}
           </section>
 
           {/* Private Traveler Thank-Yous (9.4) */}
@@ -836,7 +1427,153 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
               </div>
             </section>
           )}
+
+          {/* Establishment Profile & Confidential Commercial Payout Coordinates */}
+          {onSaveProviderProfile && (
+            <section className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-amber-600" />
+                    Ma fiche établissement & coordonnées privées de reversement
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Marge partenaire Circuit B applicable :{' '}
+                    <strong>
+                      {myProvider.agreedCommissionPercent ?? defaultCommissionPercent} %
+                    </strong>{' '}
+                    · Convention acceptée v{myProvider.conventionVersionAccepted || '1.0'}. Vos coordonnées de reversement restent strictement confidentielles (visibles uniquement par vous et l&apos;administration AMARO).
+                  </p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setSavingProfile(true);
+                  try {
+                    await onSaveProviderProfile(
+                      {
+                        businessName: editBusinessName.trim(),
+                        category: editCategory,
+                        countryCode: 'BJ',
+                        cityId: editCityId,
+                        description: editDescription.trim(),
+                      },
+                      {
+                        contactEmail: editContactEmail.trim(),
+                        contactPhone: editContactPhone.trim(),
+                        payoutChannel: editPayoutChannel.trim(),
+                        registrationRef: editRegistrationRef.trim(),
+                      }
+                    );
+                  } finally {
+                    setSavingProfile(false);
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input
+                    type="text"
+                    required
+                    minLength={2}
+                    maxLength={135}
+                    value={editBusinessName}
+                    onChange={(e) => setEditBusinessName(e.target.value)}
+                    placeholder="Nom commercial *"
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                  />
+                  <select
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value as ServiceCategory)}
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                  >
+                    {CATEGORY_LIST.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {t.categories[cat]}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={editCityId}
+                    onChange={(e) => setEditCityId(e.target.value)}
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                  >
+                    {BENIN_CITIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <textarea
+                  rows={2}
+                  required
+                  minLength={10}
+                  maxLength={1400}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="Présentation réelle et vérifiable de vos prestations..."
+                  className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <input
+                    type="email"
+                    required
+                    value={editContactEmail}
+                    onChange={(e) => setEditContactEmail(e.target.value)}
+                    placeholder="E-mail pro *"
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                  />
+                  <input
+                    type="tel"
+                    required
+                    value={editContactPhone}
+                    onChange={(e) => setEditContactPhone(e.target.value)}
+                    placeholder="Téléphone / WhatsApp pro *"
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={editPayoutChannel}
+                    onChange={(e) => setEditPayoutChannel(e.target.value)}
+                    placeholder="Canal de reversement (MTN MoMo, Banque...)"
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
+                  />
+                  <input
+                    type="text"
+                    value={editRegistrationRef}
+                    onChange={(e) => setEditRegistrationRef(e.target.value)}
+                    placeholder="IFU / RCCM (optionnel)"
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-mono"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingProfile}
+                  className="px-5 py-2.5 rounded-xl bg-[#0B192C] hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold"
+                >
+                  {savingProfile ? 'Enregistrement...' : 'Mettre à jour ma fiche & mes coordonnées'}
+                </button>
+              </form>
+            </section>
+          )}
         </div>
+      )}
+
+      {activeIdentityRes && (
+        <IdentityVerificationModal
+          reservation={activeIdentityRes}
+          viewerRole="provider"
+          initialMetadata={providerIdentityByRes[activeIdentityRes.id] || null}
+          vaultKeyConfirmedByOwner={vaultKeyConfirmedByOwner}
+          onClose={() => setActiveIdentityRes(null)}
+          onNotify={(msg) => onNotify?.(msg)}
+        />
       )}
     </div>
   );

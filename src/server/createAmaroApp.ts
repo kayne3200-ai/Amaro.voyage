@@ -6,18 +6,39 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import type {
   AssistantChatHistoryItem,
   AssistantDraftItinerary,
+  CensusListingDoc,
   CurrencyCode,
   IdentityDocumentType,
   IdentityVerificationStatus,
   NotificationDispatchDoc,
+  OfferKind,
+  OfferPriceState,
+  ProviderOfferDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
+  SelectedOfferLine,
   ServiceCategory,
 } from '../types/amaro';
 import {
   DEFAULT_EMERGENCY_NUMBERS_BJ,
   OWNER_PLACEHOLDER,
 } from '../data/amaroGovernanceDefaults';
+import {
+  CENSUS_CONSULTATION_DATE,
+  CENSUS_METHODOLOGY_SUMMARY,
+} from '../data/beninWebCensusSeed';
+import {
+  classifyCensusCandidateAgainstCatalogue,
+  computePartialOfferAcceptance,
+  inferDefaultOfferKind,
+  inferDefaultPriceUnit,
+  parseSelectedOffersJson,
+  resolveHonestOfferAvailability,
+  resolveListingOfferPriceState,
+  resolveServiceOffers,
+  validateAndPriceOfferSelection,
+  type OfferSelectionInputLine,
+} from '../lib/offerEngine';
 import {
   analyzeConversationAndCatalogue,
   buildConversationalSystemPrompt,
@@ -584,6 +605,61 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     res.json(rateBundle);
   });
 
+  function computeStayDurationUnits(startDateIso: string, endDateIso?: string): number {
+    if (!isValidIsoDate(startDateIso) || !endDateIso || !isValidIsoDate(endDateIso)) {
+      return 1;
+    }
+    const startMs = Date.parse(`${startDateIso}T00:00:00Z`);
+    const endMs = Date.parse(`${endDateIso}T00:00:00Z`);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return 1;
+    }
+    return Math.max(1, Math.min(90, Math.round((endMs - startMs) / 86_400_000)));
+  }
+
+  function expandAccommodationNightDates(startDateIso: string, checkOutIso?: string): string[] {
+    const nights = computeStayDurationUnits(startDateIso, checkOutIso);
+    if (nights <= 1) return [startDateIso];
+    const startMs = Date.parse(`${startDateIso}T00:00:00Z`);
+    const out: string[] = [];
+    for (let i = 0; i < nights; i += 1) {
+      out.push(new Date(startMs + i * 86_400_000).toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  async function resolveOffersForServerService(
+    service: ServerServiceRecord,
+    rawIdToken?: string
+  ): Promise<ProviderOfferDoc[]> {
+    const stored = store.listProviderOffers
+      ? await store.listProviderOffers(service.id, rawIdToken)
+      : [];
+    return resolveServiceOffers(
+      {
+        id: service.id,
+        providerId: service.providerId,
+        title: service.title,
+        category: service.category,
+        priceAmount: service.priceAmount,
+        priceKnown: service.priceKnown,
+        priceRangeNote: service.priceRangeNote,
+        currency: service.currency,
+        capacity: service.capacity,
+        dataOrigin: service.dataOrigin,
+        roomTypes: service.roomTypes,
+        amenities: service.amenities,
+        languagesSpoken: service.languagesSpoken,
+        unitTariffs: service.unitTariffs,
+        sourceName: service.sourceName,
+        sourceUrl: service.sourceUrl,
+        verifiedAt: service.verifiedAt,
+        structuredOffers: service.structuredOffers,
+      },
+      stored
+    );
+  }
+
   app.post('/api/amaro/finance/quote', async (req: Request, res: Response) => {
     const rl = publicApiLimiter.check(`quote:${getClientIp(req)}`);
     if (!rl.allowed) {
@@ -620,7 +696,13 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         });
         return;
       }
-      if (rawParticipants > service.capacity) {
+
+      const rawSelectedOffers: OfferSelectionInputLine[] = Array.isArray(req.body?.selectedOffers)
+        ? req.body.selectedOffers
+        : [];
+      const hasMultiOfferInput = rawSelectedOffers.length > 0;
+
+      if (!hasMultiOfferInput && rawParticipants > service.capacity) {
         res.status(400).json({
           error: `Capacité dépassée : maximum ${service.capacity} personne(s) pour cette prestation.`,
         });
@@ -636,11 +718,44 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       ) as CurrencyCode;
 
       const requestedDate = String(req.body?.scheduledDate || '').trim();
+      const checkOutDate = String(req.body?.checkOutDate || '').trim() || undefined;
+      const defaultDurationUnits = computeStayDurationUnits(requestedDate, checkOutDate);
       const requestedStockId = String(req.body?.stockId || '').trim() || undefined;
       let effectiveUnitPrice = service.priceAmount;
       let effectivePriceKnown = service.priceKnown;
+      let overrideProviderSubtotal: number | undefined = undefined;
+      let hasPriceToVerify =
+        resolveListingOfferPriceState({
+          priceKnown: service.priceKnown,
+          priceAmount: service.priceAmount,
+          dataOrigin: service.dataOrigin,
+          priceRangeNote: service.priceRangeNote,
+        }) !== 'displayed_price';
+      let selectedOffersCount: number | undefined = undefined;
+      let validatedLines: SelectedOfferLine[] | undefined = undefined;
 
-      if (
+      if (hasMultiOfferInput) {
+        const availableOffers = await resolveOffersForServerService(service, bearer);
+        const selection = validateAndPriceOfferSelection({
+          category: service.category,
+          serviceCurrency: service.currency,
+          defaultUnitCapacity: service.capacity,
+          availableOffers,
+          requestedLines: rawSelectedOffers,
+          totalTravelers: rawParticipants,
+          defaultDurationUnits,
+          rates: rateBundle.rates,
+        });
+        if (!selection.valid) {
+          res.status(400).json({ error: selection.error || 'Sélection d’offres invalide.' });
+          return;
+        }
+        overrideProviderSubtotal = selection.providerSubtotalInServiceCurrency;
+        effectivePriceKnown = !selection.allPricesOnRequest;
+        hasPriceToVerify = selection.hasPriceToVerify;
+        selectedOffersCount = selection.selectedLines.length;
+        validatedLines = selection.selectedLines;
+      } else if (
         service.activationLevel === 'level_c_instant' &&
         isValidIsoDate(requestedDate) &&
         store.listActivePilotStocksForService
@@ -656,6 +771,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         if (decision.allowed && decision.effectiveMode === 'level_c_instant' && decision.matchedStock) {
           effectiveUnitPrice = decision.matchedStock.contractualPrice;
           effectivePriceKnown = true;
+          hasPriceToVerify = false;
         }
       }
 
@@ -683,6 +799,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         rateSource: rateBundle.source,
         rateStatus: rateBundle.status,
         quotedAt: rateBundle.updatedAt,
+        overrideProviderSubtotal,
+        hasPriceToVerify,
+        selectedOffersCount,
       });
 
       const tamper = detectClientPriceTampering(
@@ -697,7 +816,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         return;
       }
 
-      res.json(quote);
+      res.json({
+        ...quote,
+        ...(validatedLines ? { selectedOffers: validatedLines } : {}),
+      });
     } catch (err) {
       res.status(500).json({ error: redactSecrets(err) });
     }
@@ -887,17 +1009,35 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           });
           return;
         }
+        const rawSelectedOffers: OfferSelectionInputLine[] = Array.isArray(
+          req.body?.selectedOffers
+        )
+          ? req.body.selectedOffers
+          : [];
+        const hasMultiOfferInput = rawSelectedOffers.length > 0;
+        const rawCheckOutDate = String(req.body?.checkOutDate || '').trim();
+        const checkOutDate =
+          rawCheckOutDate && isValidIsoDate(rawCheckOutDate) ? rawCheckOutDate : undefined;
+        const pickupLocation = String(req.body?.pickupLocation || '').trim().slice(0, 160) || undefined;
+        const dropoffLocation = String(req.body?.dropoffLocation || '').trim().slice(0, 160) || undefined;
+        const stayDurationUnits = computeStayDurationUnits(scheduledDate, checkOutDate);
+
+        const nightDatesToCheck =
+          service.category === 'accommodation'
+            ? expandAccommodationNightDates(scheduledDate, checkOutDate)
+            : [scheduledDate];
+
         if (
           Array.isArray(service.blockedDates) &&
-          service.blockedDates.includes(scheduledDate)
+          nightDatesToCheck.some((d) => service.blockedDates!.includes(d))
         ) {
           res.status(409).json({
             error:
-              'Le prestataire a marqué cette date comme indisponible dans son calendrier.',
+              'Le prestataire a marqué au moins l’une des dates demandées comme indisponible dans son calendrier.',
           });
           return;
         }
-        if (rawParticipants > service.capacity) {
+        if (!hasMultiOfferInput && rawParticipants > service.capacity) {
           res.status(400).json({
             error: `Capacité maximale dépassée (${rawParticipants} demandé(s), maximum ${service.capacity}).`,
           });
@@ -928,24 +1068,66 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           return;
         }
 
-        const effectiveUnitPrice =
-          isCircuitBPartner &&
-          modeDecision.effectiveMode === 'level_c_instant' &&
-          modeDecision.matchedStock
-            ? modeDecision.matchedStock.contractualPrice
-            : service.priceAmount;
-        const effectivePriceKnown =
-          isCircuitBPartner &&
-          modeDecision.effectiveMode === 'level_c_instant' &&
-          modeDecision.matchedStock
-            ? true
-            : service.priceKnown;
-
         const setting = await store.getSystemSetting(
           service.countryCode,
           caller.rawIdToken
         );
         const rateBundle = await getVerifiedCurrencyRates();
+
+        let effectiveUnitPrice =
+          isCircuitBPartner &&
+          modeDecision.effectiveMode === 'level_c_instant' &&
+          modeDecision.matchedStock
+            ? modeDecision.matchedStock.contractualPrice
+            : service.priceAmount;
+        let effectivePriceKnown =
+          isCircuitBPartner &&
+          modeDecision.effectiveMode === 'level_c_instant' &&
+          modeDecision.matchedStock
+            ? true
+            : service.priceKnown;
+        let overrideProviderSubtotal: number | undefined = undefined;
+        let hasPriceToVerify =
+          isCircuitBPartner &&
+          modeDecision.effectiveMode === 'level_c_instant' &&
+          modeDecision.matchedStock
+            ? false
+            : resolveListingOfferPriceState({
+                priceKnown: service.priceKnown,
+                priceAmount: service.priceAmount,
+                dataOrigin: service.dataOrigin,
+                priceRangeNote: service.priceRangeNote,
+              }) !== 'displayed_price';
+        let selectedOffersJson: string | undefined = undefined;
+        let selectedLinesForResponse: SelectedOfferLine[] | undefined = undefined;
+        let requestedUnitsTotal = 1;
+
+        if (hasMultiOfferInput) {
+          const availableOffers = await resolveOffersForServerService(
+            service,
+            caller.rawIdToken
+          );
+          const selection = validateAndPriceOfferSelection({
+            category: service.category,
+            serviceCurrency: service.currency,
+            defaultUnitCapacity: service.capacity,
+            availableOffers,
+            requestedLines: rawSelectedOffers,
+            totalTravelers: rawParticipants,
+            defaultDurationUnits: stayDurationUnits,
+            rates: rateBundle.rates,
+          });
+          if (!selection.valid) {
+            res.status(400).json({ error: selection.error || 'Sélection d’offres invalide.' });
+            return;
+          }
+          overrideProviderSubtotal = selection.providerSubtotalInServiceCurrency;
+          effectivePriceKnown = !selection.allPricesOnRequest;
+          hasPriceToVerify = selection.hasPriceToVerify;
+          selectedLinesForResponse = selection.selectedLines;
+          selectedOffersJson = JSON.stringify(selection.selectedLines);
+          requestedUnitsTotal = selection.totalSelectedUnits;
+        }
 
         // 3. Server-side authoritative financial calculation & differentiated margin (10% Circuit B / 5% Circuit A)
         const quote = computeAuthoritativeQuote({
@@ -959,6 +1141,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           rates: rateBundle.rates,
           rateSource: rateBundle.source,
           rateStatus: rateBundle.status,
+          overrideProviderSubtotal,
+          hasPriceToVerify,
+          selectedOffersCount: selectedLinesForResponse?.length,
         });
 
         const tamper = detectClientPriceTampering(
@@ -1055,7 +1240,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             )
         );
 
-        const brain = evaluateJourneyBrain(
+        let brain = evaluateJourneyBrain(
           slotsForBrain,
           {
             serviceId: service.id,
@@ -1073,6 +1258,34 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay,
           }
         );
+
+        // B2: Check every additional night of a multi-night stay against same-night different-accommodation rule
+        if (brain.valid && service.category === 'accommodation' && nightDatesToCheck.length > 1) {
+          for (const extraNight of nightDatesToCheck.slice(1)) {
+            const nightCheck = evaluateJourneyBrain(
+              slotsForBrain,
+              {
+                serviceId: service.id,
+                providerId: service.providerId,
+                serviceTitle: service.title,
+                category: 'accommodation',
+                cityId: service.cityId,
+                date: extraNight,
+                startTime: scheduledTime,
+                durationMinutes: service.durationMinutes,
+              },
+              {
+                maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay,
+                maxVisitsSameCityDay: setting.maxVisitsSameCityDay,
+                freeTimeBlocksPerDay: setting.freeTimeBlocksPerDay,
+              }
+            );
+            if (!nightCheck.valid) {
+              brain = nightCheck;
+              break;
+            }
+          }
+        }
 
         if (!brain.valid) {
           res.status(409).json({
@@ -1179,6 +1392,12 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             circuitType,
             coordinationStatus,
             localContributionXof: quote.localContributionAmount,
+            selectedOffersJson,
+            hasPriceToVerify: quote.hasPriceToVerify,
+            checkOutDate,
+            pickupLocation,
+            dropoffLocation,
+            requestedUnitsTotal,
             referral: validatedReferral
               ? {
                   ...validatedReferral,
@@ -1276,6 +1495,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           dispatchStatus,
           responseDeadlineAt,
           priceKnown: quote.priceKnown,
+          hasPriceToVerify: quote.hasPriceToVerify,
+          requestedUnitsTotal,
+          ...(selectedLinesForResponse ? { selectedOffers: selectedLinesForResponse } : {}),
           referralAttached: Boolean(validatedReferral),
           affiliateSkippedReason,
           breakdown: quote.breakdown,
@@ -1368,6 +1590,114 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           | undefined = undefined;
         let nextCoordinationContactedAt: string | undefined = undefined;
         let nextCoordinationOutcome: string | undefined = undefined;
+        let updatedProviderPrice: number | undefined = undefined;
+        let updatedAmaroFee: number | undefined = undefined;
+        let updatedTaxAmount: number | undefined = undefined;
+        let updatedTotalAmount: number | undefined = undefined;
+        let updatedPricingSnapshot: string | undefined = undefined;
+        let updatedSelectedOffersJson: string | undefined = undefined;
+        let updatedIsPartialAcceptance: boolean | undefined = undefined;
+        let updatedRequestedUnitsTotal: number | undefined = undefined;
+        let updatedAcceptedUnitsTotal: number | undefined = undefined;
+        let folderIdToMarkPartiallyConfirmed: string | undefined = undefined;
+
+        const currentRes = existing;
+        async function applyPartialAcceptanceIfPresent(): Promise<{
+          applied: boolean;
+          error?: string;
+        }> {
+          const rawAcceptedMap =
+            req.body?.acceptedByOfferId && typeof req.body.acceptedByOfferId === 'object'
+              ? (req.body.acceptedByOfferId as Record<string, number>)
+              : null;
+          const rawAcceptedScalar =
+            req.body?.acceptedUnits !== undefined ? Number(req.body.acceptedUnits) : null;
+
+          if (!rawAcceptedMap && (rawAcceptedScalar === null || !Number.isFinite(rawAcceptedScalar))) {
+            return { applied: false };
+          }
+
+          let existingLines = parseSelectedOffersJson(currentRes.selectedOffersJson);
+          if (existingLines.length === 0) {
+            const fallbackQty = Math.max(1, Number(currentRes.requestedUnitsTotal || currentRes.participants || 1));
+            const fallbackUnitPrice =
+              fallbackQty > 0 ? Math.max(0, Number(currentRes.providerPrice || 0)) / fallbackQty : 0;
+            existingLines = [
+              {
+                offerId: `off-default-${currentRes.serviceId}`,
+                offerName: currentRes.serviceTitle,
+                offerKind: inferDefaultOfferKind(currentRes.category),
+                quantity: fallbackQty,
+                travelersCount: Math.max(1, Number(currentRes.participants || 1)),
+                unitPrice: fallbackUnitPrice,
+                originalCurrency: currentRes.currency || 'XOF',
+                priceState: 'displayed_price',
+                priceUnit: inferDefaultPriceUnit(currentRes.category),
+                durationUnits: 1,
+                lineSubtotal: Number(currentRes.providerPrice || 0),
+              },
+            ];
+          }
+
+          const acceptedMap: Record<string, number> = rawAcceptedMap
+            ? rawAcceptedMap
+            : { [existingLines[0].offerId]: Math.max(0, Math.round(rawAcceptedScalar!)) };
+
+          const rateBundle = await getVerifiedCurrencyRates();
+          const svcCurrency = (currentRes.currency || 'XOF') as CurrencyCode;
+          const partial = computePartialOfferAcceptance({
+            existingLines,
+            acceptedByOfferId: acceptedMap,
+            serviceCurrency: svcCurrency,
+            rates: rateBundle.rates,
+          });
+          if (!partial.valid) {
+            return { applied: false, error: partial.error };
+          }
+          if (!partial.isPartial) {
+            return { applied: false };
+          }
+
+          const svc = await resolveServiceOrOfficial(currentRes.serviceId, caller.rawIdToken);
+          const setting = await store.getSystemSetting(svc?.countryCode || 'BJ', caller.rawIdToken);
+          const recalcQuote = computeAuthoritativeQuote({
+            unitPrice: svc?.priceAmount || 0,
+            priceKnown:
+              currentRes.hasPriceToVerify !== true && partial.acceptedSubtotalInServiceCurrency > 0,
+            participants: Math.max(1, Number(currentRes.participants || 1)),
+            currency: svcCurrency,
+            displayCurrency: svcCurrency,
+            setting,
+            dataOrigin: svc?.dataOrigin || 'public_directory',
+            rates: rateBundle.rates,
+            rateSource: rateBundle.source,
+            rateStatus: rateBundle.status,
+            overrideProviderSubtotal: partial.acceptedSubtotalInServiceCurrency,
+            hasPriceToVerify: Boolean(currentRes.hasPriceToVerify),
+            selectedOffersCount: partial.updatedLines.length,
+          });
+
+          updatedProviderPrice = recalcQuote.breakdown.providerPrice;
+          updatedAmaroFee = recalcQuote.breakdown.amaroFee;
+          updatedTaxAmount = recalcQuote.breakdown.taxAmount;
+          updatedTotalAmount = recalcQuote.breakdown.totalAmount;
+          updatedPricingSnapshot = recalcQuote.pricingSnapshot;
+          updatedSelectedOffersJson = JSON.stringify(partial.updatedLines);
+          updatedIsPartialAcceptance = true;
+          updatedRequestedUnitsTotal = partial.requestedUnitsTotal;
+          updatedAcceptedUnitsTotal = partial.acceptedUnitsTotal;
+          folderIdToMarkPartiallyConfirmed = currentRes.folderId;
+
+          const customNote = String(req.body?.alternativeProposal || req.body?.note || '').trim();
+          nextProposal = customNote ? `${partial.summaryFr} — ${customNote}` : partial.summaryFr;
+          nextStatus = 'alternative_proposed';
+          nextDispatchStatus = 'response_received';
+          notifKind = 'alternative';
+          notifTitle = `Confirmation partielle (${partial.acceptedUnitsTotal}/${partial.requestedUnitsTotal}) : ${currentRes.serviceTitle}`;
+          notifBody = nextProposal;
+          notifRecipientId = currentRes.clientId;
+          return { applied: true };
+        }
 
         if (action === 'client_accept_alternative') {
           if (!isClient) {
@@ -1427,6 +1757,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           nextStatus = 'cancelled';
         } else if (
           action === 'provider_accept' ||
+          action === 'provider_partial_accept' ||
           action === 'provider_reject' ||
           action === 'provider_propose_alternative'
         ) {
@@ -1441,26 +1772,45 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           if (isValidTimeHhMm(reqTime)) nextTime = reqTime;
           nextProposal = proposedNote;
 
-          if (action === 'provider_accept') {
-            nextStatus = 'accepted';
-            nextDispatchStatus = 'accepted';
-            notifKind = 'reservation';
-            notifTitle = `Disponibilité confirmée : ${existing.serviceTitle}`;
-            notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement du solde sous 48 h.`;
+          if (action === 'provider_partial_accept') {
+            const partCheck = await applyPartialAcceptanceIfPresent();
+            if (!partCheck.applied) {
+              res.status(400).json({
+                error:
+                  partCheck.error ||
+                  'Veuillez indiquer les quantités partiellement disponibles (inférieures à la demande totale et supérieures ou égales à 1).',
+              });
+              return;
+            }
+          } else if (action === 'provider_accept') {
+            const partCheck = await applyPartialAcceptanceIfPresent();
+            if (partCheck.error) {
+              res.status(400).json({ error: partCheck.error });
+              return;
+            }
+            if (!partCheck.applied) {
+              nextStatus = 'accepted';
+              nextDispatchStatus = 'accepted';
+              notifKind = 'reservation';
+              notifTitle = `Disponibilité confirmée : ${existing.serviceTitle}`;
+              notifBody = `Votre créneau du ${nextDate} à ${nextTime} est confirmé disponible. Prochaine étape : règlement du solde sous 48 h.`;
+              notifRecipientId = existing.clientId;
+            }
           } else if (action === 'provider_propose_alternative') {
             nextStatus = 'alternative_proposed';
             nextDispatchStatus = 'response_received';
             notifKind = 'alternative';
             notifTitle = `Alternative proposée : ${existing.serviceTitle}`;
             notifBody = `Nouvelle proposition prestataire (${nextDate} à ${nextTime}) : ${nextProposal || 'Veuillez consulter votre suivi de réservation.'}`;
+            notifRecipientId = existing.clientId;
           } else {
             nextStatus = 'rejected';
             nextDispatchStatus = 'rejected';
             notifKind = 'reservation';
             notifTitle = `Indisponibilité signalée : ${existing.serviceTitle}`;
             notifBody = nextProposal || 'Le créneau demandé n’est pas disponible. Vous pouvez choisir une alternative dans le catalogue.';
+            notifRecipientId = existing.clientId;
           }
-          notifRecipientId = existing.clientId;
         } else if (action === 'admin_confirm_contacted') {
           // Bloc 1 Circuit A: NEVER display "contacté" unless the administrator explicitly clicks "j'ai contacté l'établissement"
           if (!isAdmin) {
@@ -1489,7 +1839,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           if (isValidIsoDate(reqDate)) nextDate = reqDate;
           if (isValidTimeHhMm(reqTime)) nextTime = reqTime;
 
-          if (outcomeKind === 'confirmed_available') {
+          const partCheck = await applyPartialAcceptanceIfPresent();
+          if (partCheck.error) {
+            res.status(400).json({ error: partCheck.error });
+            return;
+          }
+          if (partCheck.applied) {
+            nextCoordinationStatus = 'quote_received';
+            nextCoordinationOutcome = nextProposal;
+          } else if (outcomeKind === 'confirmed_available') {
             nextCoordinationStatus = 'confirmed';
             nextStatus = 'accepted';
             nextDispatchStatus = 'accepted';
@@ -1624,6 +1982,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             coordinationStatus: nextCoordinationStatus,
             coordinationContactedAt: nextCoordinationContactedAt,
             coordinationOutcome: nextCoordinationOutcome,
+            providerPrice: updatedProviderPrice,
+            amaroFee: updatedAmaroFee,
+            taxAmount: updatedTaxAmount,
+            totalAmount: updatedTotalAmount,
+            pricingSnapshot: updatedPricingSnapshot,
+            selectedOffersJson: updatedSelectedOffersJson,
+            isPartialAcceptance: updatedIsPartialAcceptance,
+            requestedUnitsTotal: updatedRequestedUnitsTotal,
+            acceptedUnitsTotal: updatedAcceptedUnitsTotal,
+            folderIdToMarkPartiallyConfirmed,
             cancelAffiliateReferral,
             releaseStock: shouldReleaseStock
               ? {
@@ -1661,12 +2029,162 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           affiliateCancelled: cancelAffiliateReferral,
           scheduledDate: nextDate,
           scheduledTime: nextTime,
+          isPartialAcceptance: Boolean(updatedIsPartialAcceptance ?? existing.isPartialAcceptance),
+          requestedUnitsTotal: updatedRequestedUnitsTotal ?? existing.requestedUnitsTotal ?? null,
+          acceptedUnitsTotal: updatedAcceptedUnitsTotal ?? existing.acceptedUnitsTotal ?? null,
+          ...(updatedTotalAmount !== undefined
+            ? {
+                breakdown: {
+                  providerPrice: updatedProviderPrice!,
+                  amaroFee: updatedAmaroFee!,
+                  taxAmount: updatedTaxAmount!,
+                  totalAmount: updatedTotalAmount!,
+                },
+              }
+            : {}),
           receiptEligible: nextPaymentStatus === 'succeeded',
         });
       } catch (err) {
         res.status(500).json({
           error: redactSecrets(err) || 'Échec lors de la mise à jour de la réservation.',
         });
+      }
+    }
+  );
+
+  // B6: Modification des offres et quantités par le client tant que la réservation n'est pas 'confirmed'
+  app.patch(
+    '/api/amaro/reservations/:reservationId/offers',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const reservationId = String(req.params.reservationId || '').trim();
+      if (
+        !reservationId ||
+        !store.getReservation ||
+        !store.updateUnconfirmedReservationOffers
+      ) {
+        res.status(400).json({ error: 'Modification d’offres indisponible.' });
+        return;
+      }
+
+      try {
+        const existing = await store.getReservation(reservationId, caller.rawIdToken);
+        if (!existing) {
+          res.status(404).json({ error: 'Réservation introuvable.' });
+          return;
+        }
+        if (existing.clientId !== caller.uid) {
+          res.status(403).json({
+            error: 'Seul le voyageur titulaire peut modifier les offres de sa demande.',
+          });
+          return;
+        }
+        if (
+          existing.status === 'confirmed' ||
+          existing.status === 'cancelled' ||
+          existing.status === 'refunded'
+        ) {
+          res.status(409).json({
+            error:
+              'Les offres choisies ne peuvent plus être modifiées une fois la réservation confirmée, annulée ou remboursée.',
+          });
+          return;
+        }
+
+        const service = await resolveServiceOrOfficial(existing.serviceId, caller.rawIdToken);
+        if (!service) {
+          res.status(404).json({ error: 'Prestation associée introuvable.' });
+          return;
+        }
+
+        const nextParticipants = Math.max(
+          1,
+          Math.min(100, Math.round(Number(req.body?.participants ?? existing.participants ?? 1)))
+        );
+        const rawCheckOut = String(req.body?.checkOutDate || existing.checkOutDate || '').trim();
+        const checkOutDate =
+          rawCheckOut && isValidIsoDate(rawCheckOut) ? rawCheckOut : undefined;
+        const pickupLocation =
+          req.body?.pickupLocation !== undefined
+            ? String(req.body.pickupLocation).trim().slice(0, 160)
+            : existing.pickupLocation;
+        const dropoffLocation =
+          req.body?.dropoffLocation !== undefined
+            ? String(req.body.dropoffLocation).trim().slice(0, 160)
+            : existing.dropoffLocation;
+
+        const requestedLines: OfferSelectionInputLine[] = Array.isArray(req.body?.selectedOffers)
+          ? req.body.selectedOffers
+          : [];
+        const availableOffers = await resolveOffersForServerService(service, caller.rawIdToken);
+        const rateBundle = await getVerifiedCurrencyRates();
+        const stayUnits = computeStayDurationUnits(existing.scheduledDate, checkOutDate);
+
+        const selection = validateAndPriceOfferSelection({
+          category: service.category,
+          serviceCurrency: service.currency,
+          defaultUnitCapacity: service.capacity,
+          availableOffers,
+          requestedLines,
+          totalTravelers: nextParticipants,
+          defaultDurationUnits: stayUnits,
+          rates: rateBundle.rates,
+        });
+        if (!selection.valid) {
+          res.status(400).json({ error: selection.error || 'Sélection d’offres invalide.' });
+          return;
+        }
+
+        const setting = await store.getSystemSetting(service.countryCode, caller.rawIdToken);
+        const quote = computeAuthoritativeQuote({
+          unitPrice: service.priceAmount,
+          priceKnown: !selection.allPricesOnRequest,
+          participants: nextParticipants,
+          currency: service.currency,
+          displayCurrency: service.currency,
+          setting,
+          dataOrigin: service.dataOrigin,
+          rates: rateBundle.rates,
+          rateSource: rateBundle.source,
+          rateStatus: rateBundle.status,
+          overrideProviderSubtotal: selection.providerSubtotalInServiceCurrency,
+          hasPriceToVerify: selection.hasPriceToVerify,
+          selectedOffersCount: selection.selectedLines.length,
+        });
+
+        await store.updateUnconfirmedReservationOffers(
+          {
+            reservationId,
+            folderId: existing.folderId,
+            itemId: buildDeterministicItemId(reservationId),
+            participants: nextParticipants,
+            providerPrice: quote.breakdown.providerPrice,
+            amaroFee: quote.breakdown.amaroFee,
+            taxAmount: quote.breakdown.taxAmount,
+            totalAmount: quote.breakdown.totalAmount,
+            pricingSnapshot: quote.pricingSnapshot,
+            selectedOffersJson: JSON.stringify(selection.selectedLines),
+            hasPriceToVerify: quote.hasPriceToVerify,
+            requestedUnitsTotal: selection.totalSelectedUnits,
+            checkOutDate,
+            pickupLocation,
+            dropoffLocation,
+          },
+          caller.rawIdToken
+        );
+
+        res.json({
+          ok: true,
+          reservationId,
+          participants: nextParticipants,
+          requestedUnitsTotal: selection.totalSelectedUnits,
+          hasPriceToVerify: quote.hasPriceToVerify,
+          selectedOffers: selection.selectedLines,
+          breakdown: quote.breakdown,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de modification des offres.' });
       }
     }
   );
@@ -2579,6 +3097,801 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         });
       } catch (err) {
         res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  // ===========================================================================
+  // 3C. OFFRES DÉTAILLÉES PAR PRESTATAIRE (PARTIE B : B1–B7) & DISPONIBILITÉ HONNÊTE
+  // ===========================================================================
+  app.get('/api/amaro/offers', async (req: Request, res: Response) => {
+    const rl = publicApiLimiter.check(`offers-list:${getClientIp(req)}`);
+    if (!rl.allowed) {
+      res.status(429).json({ error: 'Trop de requêtes sur les offres.' });
+      return;
+    }
+    try {
+      const bearer = extractBearerToken(req) || undefined;
+      const serviceId = String(req.query.serviceId || '').trim() || undefined;
+      const offers = store.listProviderOffers
+        ? await store.listProviderOffers(serviceId, bearer)
+        : [];
+      res.json({ ok: true, offers });
+    } catch (err) {
+      res.status(500).json({ error: redactSecrets(err) });
+    }
+  });
+
+  app.get('/api/amaro/services/:serviceId/offers', async (req: Request, res: Response) => {
+    const rl = publicApiLimiter.check(`svc-offers:${getClientIp(req)}`);
+    if (!rl.allowed) {
+      res.status(429).json({ error: 'Trop de requêtes sur les offres de cette fiche.' });
+      return;
+    }
+    const serviceId = String(req.params.serviceId || '').trim();
+    if (!serviceId) {
+      res.status(400).json({ error: 'Identifiant de prestation manquant.' });
+      return;
+    }
+
+    try {
+      const bearer = extractBearerToken(req) || undefined;
+      const service = await resolveServiceOrOfficial(serviceId, bearer);
+      if (!service) {
+        res.status(404).json({ error: 'Prestation introuvable.' });
+        return;
+      }
+
+      const offers = await resolveOffersForServerService(service, bearer);
+      const activeStocks =
+        service.dataOrigin === 'verified_partner' && store.listActivePilotStocksForService
+          ? await store.listActivePilotStocksForService(service.id, bearer)
+          : [];
+      const availability = resolveHonestOfferAvailability({
+        dataOrigin: service.dataOrigin,
+        serviceId: service.id,
+        blockedDates: service.blockedDates,
+        activeStocks,
+      });
+
+      res.json({
+        ok: true,
+        serviceId: service.id,
+        dataOrigin: service.dataOrigin,
+        circuit: availability.circuit,
+        availability,
+        offers,
+      });
+    } catch (err) {
+      res.status(500).json({ error: redactSecrets(err) });
+    }
+  });
+
+  // B7: Gouvernance stricte à 3 sources :
+  // Seuls l'administrateur ('admin') ou le prestataire conventionné vérifié ('conventioned_provider')
+  // propriétaire de la prestation peuvent ajouter/modifier/supprimer une offre ici
+  // (la 3e source 'web_census' passe exclusivement par la validation admin du recensement).
+  app.post(
+    '/api/amaro/offers/upsert',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.upsertProviderOffer) {
+        res.status(501).json({ error: 'Enregistrement d’offres non configuré.' });
+        return;
+      }
+
+      const serviceId = String(req.body?.serviceId || '').trim();
+      const name = String(req.body?.name || '').trim();
+      if (!serviceId || !name) {
+        res.status(400).json({
+          error: 'Veuillez indiquer la prestation rattachée (serviceId) et le nom de l’offre.',
+        });
+        return;
+      }
+
+      try {
+        const service = await resolveServiceOrOfficial(serviceId, caller.rawIdToken);
+        if (!service) {
+          res.status(404).json({ error: 'Prestation cible introuvable.' });
+          return;
+        }
+
+        const isAdmin = await isVerifiedAdminCaller(caller);
+        let isVerifiedOwnerProvider = false;
+        if (!isAdmin) {
+          const ownsService =
+            service.dataOrigin === 'verified_partner' && service.ownerId === caller.uid;
+          const verifiedProfile = store.isVerifiedProviderOwner
+            ? await store.isVerifiedProviderOwner(
+                service.providerId,
+                caller.uid,
+                caller.rawIdToken
+              )
+            : ownsService;
+          isVerifiedOwnerProvider = Boolean(ownsService && verifiedProfile);
+        }
+
+        if (!isAdmin && !isVerifiedOwnerProvider) {
+          res.status(403).json({
+            error:
+              'Accès refusé (Règle B7) : seules trois sources peuvent créer ou modifier des offres : le recensement web validé, l’administrateur AMARO ou le prestataire conventionné titulaire de la fiche.',
+          });
+          return;
+        }
+
+        const originSource = isAdmin ? 'admin' : 'conventioned_provider';
+        const nowIso = new Date().toISOString();
+        const offerId =
+          String(req.body?.id || '').trim() ||
+          `off-${originSource === 'admin' ? 'adm' : 'prv'}-${Date.now()}-${crypto
+            .randomBytes(3)
+            .toString('hex')}`;
+
+        const existingOffers = store.listProviderOffers
+          ? await store.listProviderOffers(service.id, caller.rawIdToken)
+          : [];
+        const prev = existingOffers.find((o) => o.id === offerId);
+
+        const rawPriceState = String(req.body?.priceState || '').trim();
+        const priceState: OfferPriceState =
+          rawPriceState === 'displayed_price' ||
+          rawPriceState === 'price_to_verify' ||
+          rawPriceState === 'price_on_request'
+            ? rawPriceState
+            : Number(req.body?.priceAmount || 0) > 0
+            ? originSource === 'conventioned_provider'
+              ? 'displayed_price'
+              : 'price_to_verify'
+            : 'price_on_request';
+
+        const priceAmount =
+          priceState === 'price_on_request'
+            ? 0
+            : Math.max(0, Number(req.body?.priceAmount ?? 0));
+
+        const rawOfferKind = String(req.body?.offerKind || '').trim() as OfferKind;
+        const validOfferKinds: OfferKind[] = [
+          'room',
+          'vehicle',
+          'transfer',
+          'intercity_bus',
+          'meal_formula',
+          'visit_formula',
+          'guide_translation',
+          'wellness_care',
+          'other_service',
+        ];
+        const offerKind = validOfferKinds.includes(rawOfferKind)
+          ? rawOfferKind
+          : inferDefaultOfferKind(service.category);
+
+        const offerDoc: ProviderOfferDoc = {
+          id: offerId,
+          serviceId: service.id,
+          providerId: service.providerId,
+          category: service.category,
+          offerKind,
+          name: name.slice(0, 160),
+          shortDescription: String(req.body?.shortDescription || '').trim().slice(0, 500),
+          priceState,
+          priceAmount,
+          originalCurrency: String(req.body?.originalCurrency || service.currency || 'XOF')
+            .trim()
+            .slice(0, 10),
+          priceUnit:
+            String(req.body?.priceUnit || '').trim().slice(0, 60) ||
+            inferDefaultPriceUnit(service.category),
+          sourceName:
+            String(req.body?.sourceName || '').trim().slice(0, 140) ||
+            (originSource === 'conventioned_provider'
+              ? 'Espace Prestataire Conventionné AMARO'
+              : 'Administration AMARO'),
+          sourceUrl: String(req.body?.sourceUrl || '').trim().slice(0, 350),
+          consultedAt: nowIso.slice(0, 10),
+          needsConfirmationFromProvider:
+            service.dataOrigin !== 'verified_partner' || priceState !== 'displayed_price',
+          photoStatus:
+            req.body?.photoUrl && isAdmin ? 'verified_photo' : 'photo_to_provide',
+          ...(req.body?.photoUrl && isAdmin
+            ? { photoUrl: String(req.body.photoUrl).trim().slice(0, 400) }
+            : {}),
+          originSource,
+          history: [
+            ...(prev?.history || []),
+            {
+              updatedAtIso: nowIso,
+              actorRole: originSource,
+              actorId: caller.uid,
+              summary: prev
+                ? `Mise à jour de l’offre « ${name.slice(0, 80)} » (${priceAmount} ${
+                    req.body?.originalCurrency || 'XOF'
+                  } · ${priceState}).`
+                : `Création de l’offre « ${name.slice(0, 80)} » (${priceAmount} ${
+                    req.body?.originalCurrency || 'XOF'
+                  } · ${priceState}).`,
+            },
+          ],
+          ...(req.body?.maxGuests !== undefined
+            ? {
+                maxGuests:
+                  req.body.maxGuests === null
+                    ? null
+                    : Math.max(1, Math.min(50, Math.round(Number(req.body.maxGuests)))),
+              }
+            : {}),
+          ...(req.body?.bedsDescription
+            ? { bedsDescription: String(req.body.bedsDescription).trim().slice(0, 120) }
+            : {}),
+          ...(Array.isArray(req.body?.amenities)
+            ? {
+                amenities: req.body.amenities
+                  .map((a: unknown) => String(a).trim().slice(0, 60))
+                  .filter(Boolean)
+                  .slice(0, 20),
+              }
+            : {}),
+          ...(typeof req.body?.hasAirConditioning === 'boolean'
+            ? { hasAirConditioning: req.body.hasAirConditioning }
+            : {}),
+          ...(req.body?.seats !== undefined
+            ? {
+                seats:
+                  req.body.seats === null
+                    ? null
+                    : Math.max(1, Math.min(80, Math.round(Number(req.body.seats)))),
+              }
+            : {}),
+          ...(req.body?.transmission &&
+          ['manuelle', 'automatique', 'non précisé'].includes(String(req.body.transmission))
+            ? { transmission: req.body.transmission }
+            : {}),
+          ...(req.body?.driverOption &&
+          ['with_driver', 'without_driver', 'both', 'unspecified'].includes(
+            String(req.body.driverOption)
+          )
+            ? { driverOption: req.body.driverOption }
+            : {}),
+          ...(req.body?.rentalDurationLabel
+            ? { rentalDurationLabel: String(req.body.rentalDurationLabel).trim().slice(0, 100) }
+            : {}),
+          ...(req.body?.depositInfo
+            ? { depositInfo: String(req.body.depositInfo).trim().slice(0, 140) }
+            : {}),
+          ...(req.body?.fuelPolicy
+            ? { fuelPolicy: String(req.body.fuelPolicy).trim().slice(0, 140) }
+            : {}),
+          ...(req.body?.mileagePolicy
+            ? { mileagePolicy: String(req.body.mileagePolicy).trim().slice(0, 140) }
+            : {}),
+          ...(req.body?.licenseRequired
+            ? { licenseRequired: String(req.body.licenseRequired).trim().slice(0, 140) }
+            : {}),
+          ...(req.body?.routeOrigin
+            ? { routeOrigin: String(req.body.routeOrigin).trim().slice(0, 80) }
+            : {}),
+          ...(req.body?.routeDestination
+            ? { routeDestination: String(req.body.routeDestination).trim().slice(0, 80) }
+            : {}),
+          ...(req.body?.publishedSchedule
+            ? { publishedSchedule: String(req.body.publishedSchedule).trim().slice(0, 180) }
+            : {}),
+          ...(Array.isArray(req.body?.languages)
+            ? {
+                languages: req.body.languages
+                  .map((l: unknown) => String(l).trim().slice(0, 40))
+                  .filter(Boolean)
+                  .slice(0, 10),
+              }
+            : {}),
+          ...(req.body?.durationLabel
+            ? { durationLabel: String(req.body.durationLabel).trim().slice(0, 80) }
+            : {}),
+          ...(req.body?.formulaType
+            ? { formulaType: String(req.body.formulaType).trim().slice(0, 80) }
+            : {}),
+        };
+
+        const saved = await store.upsertProviderOffer(offerDoc, caller.rawIdToken);
+        res.status(prev ? 200 : 201).json({ ok: true, offer: saved });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec d’enregistrement de l’offre.' });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/amaro/offers/:offerId',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const offerId = String(req.params.offerId || '').trim();
+      if (!offerId || !store.deleteProviderOffer || !store.listProviderOffers) {
+        res.status(400).json({ error: 'Suppression d’offre indisponible.' });
+        return;
+      }
+
+      try {
+        const allOffers = await store.listProviderOffers(undefined, caller.rawIdToken);
+        const target = allOffers.find((o) => o.id === offerId);
+        if (!target) {
+          res.status(404).json({ error: 'Offre introuvable.' });
+          return;
+        }
+
+        const isAdmin = await isVerifiedAdminCaller(caller);
+        let isVerifiedOwnerProvider = false;
+        if (!isAdmin) {
+          const service = await resolveServiceOrOfficial(target.serviceId, caller.rawIdToken);
+          const ownsService = Boolean(
+            service && service.dataOrigin === 'verified_partner' && service.ownerId === caller.uid
+          );
+          const verifiedProfile = store.isVerifiedProviderOwner
+            ? await store.isVerifiedProviderOwner(
+                target.providerId,
+                caller.uid,
+                caller.rawIdToken
+              )
+            : ownsService;
+          isVerifiedOwnerProvider = Boolean(ownsService && verifiedProfile);
+        }
+
+        if (!isAdmin && !isVerifiedOwnerProvider) {
+          res.status(403).json({
+            error:
+              'Accès refusé (Règle B7) : seul l’administrateur ou le prestataire conventionné titulaire peut supprimer cette offre.',
+          });
+          return;
+        }
+
+        await store.deleteProviderOffer(offerId, caller.rawIdToken);
+        res.json({ ok: true, deletedOfferId: offerId });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec de suppression de l’offre.' });
+      }
+    }
+  );
+
+  // ===========================================================================
+  // 3D. ESPACE ADMINISTRATEUR « RECENSEMENT » WEB BÉNIN (PARTIE A : A5 & A6)
+  // ===========================================================================
+  app.get(
+    '/api/amaro/admin/census',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.listCensusListings) {
+        res.status(501).json({ error: 'File de recensement non configurée.' });
+        return;
+      }
+      try {
+        const allRecords = await store.listCensusListings(caller.rawIdToken);
+        const statusFilter = String(req.query.status || '').trim();
+        const categoryFilter = String(req.query.category || '').trim();
+        const cityFilter = String(req.query.cityId || '').trim();
+        const confidenceFilter = String(req.query.confidenceLevel || '').trim();
+
+        const counts = {
+          total: allRecords.length,
+          to_validate: allRecords.filter((r) => r.status === 'to_validate').length,
+          incomplete: allRecords.filter((r) => r.status === 'incomplete').length,
+          possible_duplicate: allRecords.filter((r) => r.status === 'possible_duplicate').length,
+          proposed_update: allRecords.filter((r) => r.status === 'proposed_update').length,
+          published: allRecords.filter((r) => r.status === 'published').length,
+          rejected: allRecords.filter((r) => r.status === 'rejected').length,
+        };
+
+        const filtered = allRecords.filter((r) => {
+          if (statusFilter && r.status !== statusFilter) return false;
+          if (categoryFilter && r.category !== categoryFilter) return false;
+          if (cityFilter && r.cityId !== cityFilter) return false;
+          if (confidenceFilter && r.confidenceLevel !== confidenceFilter) return false;
+          return true;
+        });
+
+        res.json({
+          ok: true,
+          methodology: CENSUS_METHODOLOGY_SUMMARY,
+          counts,
+          records: filtered,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  // A6: Import d'un lot de fiches recensées :
+  // - Aucune fiche importée n'est JAMAIS publiée directement (même si le payload tente status='published')
+  // - Détection stricte de doublons / mises à jour proposées sans écrasement de l'existant
+  // - Toute fiche sans source datée ou sans adresse reste 'incomplete' (invisible au public)
+  app.post(
+    '/api/amaro/admin/census/import',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.upsertCensusListing || !store.listCensusListings) {
+        res.status(501).json({ error: 'Import de recensement non configuré.' });
+        return;
+      }
+
+      const rawCandidates: unknown[] = Array.isArray(req.body?.candidates)
+        ? req.body.candidates.slice(0, 100)
+        : [];
+      if (rawCandidates.length === 0) {
+        res.status(400).json({ error: 'Aucune fiche candidate fournie dans candidates[].' });
+        return;
+      }
+
+      try {
+        const mergedCatalogue = await resolveMergedPublishedCatalogue(caller.rawIdToken);
+        const existingCensus = await store.listCensusListings(caller.rawIdToken);
+        const dedupPool = [
+          ...mergedCatalogue.map((s) => ({
+            id: s.id,
+            title: s.title,
+            cityId: s.cityId,
+            address: s.address,
+            contactPhone: s.contactPhone,
+            websiteUrl: s.websiteUrl,
+            priceAmount: s.priceAmount,
+            priceKnown: s.priceKnown,
+          })),
+          ...existingCensus
+            .filter((c) => c.status !== 'rejected')
+            .map((c) => ({
+              id: c.publishedServiceId || c.id,
+              title: c.businessName,
+              cityId: c.cityId,
+              address: c.neighborhoodOrAddress,
+              contactPhone: c.contactPhone !== 'non précisé' ? c.contactPhone : undefined,
+              websiteUrl: c.officialWebsite !== 'non précisé' ? c.officialWebsite : undefined,
+              priceAmount: c.priceAmount,
+              priceKnown: c.priceState !== 'price_on_request',
+            })),
+        ];
+
+        const nowIso = new Date().toISOString();
+        const imported: CensusListingDoc[] = [];
+
+        for (const item of rawCandidates) {
+          if (!item || typeof item !== 'object') continue;
+          const raw = item as Record<string, any>;
+          const id =
+            String(raw.id || '').trim() ||
+            `cens-imp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+          const category = VALID_CATEGORIES.has(String(raw.category || ''))
+            ? (raw.category as ServiceCategory)
+            : 'accommodation';
+          const rawSources: unknown[] = Array.isArray(raw.sources) ? raw.sources : [];
+          const cleanSources = rawSources
+            .filter((s): s is Record<string, any> => Boolean(s && typeof s === 'object'))
+            .map((s) => ({
+              label: String(s.label || 'Source web').trim().slice(0, 140),
+              url: String(s.url || '').trim().slice(0, 400),
+              consultedAt: String(s.consultedAt || CENSUS_CONSULTATION_DATE).trim().slice(0, 20),
+            }))
+            .filter((s) => Boolean(s.url && s.consultedAt));
+
+          const candidateBase: Omit<
+            CensusListingDoc,
+            'status' | 'matchedExistingServiceId' | 'matchedDuplicateReason' | 'proposedDiffs'
+          > = {
+            id,
+            businessName: String(raw.businessName || '').trim().slice(0, 160),
+            category,
+            subCategory: String(raw.subCategory || 'Établissement recensé').trim().slice(0, 120),
+            cityId: String(raw.cityId || '').trim().toLowerCase().slice(0, 60),
+            department: String(raw.department || 'non précisé').trim().slice(0, 80),
+            neighborhoodOrAddress: String(raw.neighborhoodOrAddress || 'non précisé')
+              .trim()
+              .slice(0, 220),
+            gpsLat: typeof raw.gpsLat === 'number' ? raw.gpsLat : null,
+            gpsLng: typeof raw.gpsLng === 'number' ? raw.gpsLng : null,
+            contactPhone: String(raw.contactPhone || 'non précisé').trim().slice(0, 80),
+            contactPhoneTested: false,
+            contactWhatsapp: String(raw.contactWhatsapp || 'non précisé').trim().slice(0, 80),
+            contactWhatsappTested: false,
+            contactEmail: String(raw.contactEmail || 'non précisé').trim().slice(0, 120),
+            contactEmailTested: false,
+            officialWebsite: String(raw.officialWebsite || 'non précisé').trim().slice(0, 350),
+            socialPageUrl: String(raw.socialPageUrl || 'non précisé').trim().slice(0, 350),
+            factualDescription: String(raw.factualDescription || '').trim().slice(0, 1500),
+            openingHours: String(raw.openingHours || 'non précisé').trim().slice(0, 180),
+            spokenLanguages: Array.isArray(raw.spokenLanguages)
+              ? raw.spokenLanguages.map((l: unknown) => String(l).trim()).filter(Boolean)
+              : ['Français'],
+            paymentMeans: Array.isArray(raw.paymentMeans)
+              ? raw.paymentMeans.map((p: unknown) => String(p).trim()).filter(Boolean)
+              : ['non précisé'],
+            priceState:
+              raw.priceState === 'displayed_price' ||
+              raw.priceState === 'price_to_verify' ||
+              raw.priceState === 'price_on_request'
+                ? raw.priceState
+                : 'price_on_request',
+            priceAmount: Math.max(0, Number(raw.priceAmount ?? 0)),
+            originalCurrency: String(raw.originalCurrency || 'XOF').trim().slice(0, 10),
+            priceUnit:
+              String(raw.priceUnit || '').trim().slice(0, 50) || inferDefaultPriceUnit(category),
+            ...(raw.priceVerifyReason
+              ? { priceVerifyReason: String(raw.priceVerifyReason).trim().slice(0, 260) }
+              : {}),
+            photoStatus: 'photo_to_provide',
+            confidenceLevel:
+              raw.confidenceLevel === 'two_concordant_sources' ||
+              raw.confidenceLevel === 'single_source' ||
+              raw.confidenceLevel === 'old_or_ambiguous'
+                ? raw.confidenceLevel
+                : cleanSources.length >= 2
+                ? 'two_concordant_sources'
+                : 'single_source',
+            sources: cleanSources,
+            offers: Array.isArray(raw.offers)
+              ? raw.offers
+                  .filter((o: unknown): o is Record<string, any> =>
+                    Boolean(o && typeof o === 'object' && (o as any).name)
+                  )
+                  .map((o: Record<string, any>, idx: number) => ({
+                    id: String(o.id || `off-imp-${id}-${idx}`),
+                    serviceId: `svc-${id}`,
+                    providerId: `prov-${id}`,
+                    category,
+                    offerKind: (o.offerKind || inferDefaultOfferKind(category)) as OfferKind,
+                    name: String(o.name).trim().slice(0, 160),
+                    shortDescription: String(o.shortDescription || '').trim().slice(0, 400),
+                    priceState:
+                      o.priceState === 'displayed_price' ||
+                      o.priceState === 'price_to_verify' ||
+                      o.priceState === 'price_on_request'
+                        ? o.priceState
+                        : 'price_to_verify',
+                    priceAmount: Math.max(0, Number(o.priceAmount ?? 0)),
+                    originalCurrency: String(o.originalCurrency || 'XOF').trim().slice(0, 10),
+                    priceUnit:
+                      String(o.priceUnit || '').trim().slice(0, 50) ||
+                      inferDefaultPriceUnit(category),
+                    sourceName: cleanSources[0]?.label || 'Recensement web',
+                    sourceUrl: cleanSources[0]?.url || '',
+                    consultedAt: cleanSources[0]?.consultedAt || CENSUS_CONSULTATION_DATE,
+                    needsConfirmationFromProvider: true,
+                    photoStatus: 'photo_to_provide' as const,
+                    originSource: 'web_census' as const,
+                    history: [
+                      {
+                        updatedAtIso: nowIso,
+                        actorRole: 'web_census' as const,
+                        actorId: caller.uid,
+                        summary: 'Offre importée en file de validation du recensement.',
+                      },
+                    ],
+                    ...(o.maxGuests !== undefined ? { maxGuests: Number(o.maxGuests) } : {}),
+                    ...(o.seats !== undefined ? { seats: Number(o.seats) } : {}),
+                  }))
+              : [],
+            toVerifyFlags: Array.isArray(raw.toVerifyFlags)
+              ? raw.toVerifyFlags.map((f: unknown) => String(f).trim()).filter(Boolean)
+              : ['Coordonnées non testées — à vérifier avant premier envoi'],
+            history: [
+              {
+                atIso: nowIso,
+                actorId: caller.uid,
+                action: 'IMPORT_CANDIDATE',
+                note: 'Importée en file de validation (aucune publication directe au catalogue).',
+              },
+            ],
+            updatedAtIso: nowIso,
+          };
+
+          const classification = classifyCensusCandidateAgainstCatalogue(
+            candidateBase,
+            dedupPool
+          );
+
+          // Règle A6 absolue : JAMAIS 'published' lors de l'import
+          const safeStatus =
+            classification.status === 'published' ? 'to_validate' : classification.status;
+
+          const finalDoc: CensusListingDoc = {
+            ...candidateBase,
+            status: safeStatus,
+            ...(classification.matchedExistingServiceId
+              ? { matchedExistingServiceId: classification.matchedExistingServiceId }
+              : {}),
+            ...(classification.matchedDuplicateReason
+              ? { matchedDuplicateReason: classification.matchedDuplicateReason }
+              : {}),
+            ...(classification.proposedDiffs
+              ? { proposedDiffs: classification.proposedDiffs }
+              : {}),
+          };
+
+          await store.upsertCensusListing(finalDoc, caller.rawIdToken);
+          imported.push(finalDoc);
+          dedupPool.push({
+            id: finalDoc.id,
+            title: finalDoc.businessName,
+            cityId: finalDoc.cityId,
+            address: finalDoc.neighborhoodOrAddress,
+            contactPhone:
+              finalDoc.contactPhone !== 'non précisé' ? finalDoc.contactPhone : undefined,
+            websiteUrl:
+              finalDoc.officialWebsite !== 'non précisé' ? finalDoc.officialWebsite : undefined,
+            priceAmount: finalDoc.priceAmount,
+            priceKnown: finalDoc.priceState !== 'price_on_request',
+          });
+        }
+
+        res.status(201).json({
+          ok: true,
+          importedCount: imported.length,
+          directlyPublishedCount: 0,
+          records: imported,
+        });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) || 'Échec d’import du recensement.' });
+      }
+    }
+  );
+
+  // A6: Décision unitaire ou en lot du propriétaire sur les fiches recensées
+  app.post(
+    '/api/amaro/admin/census/decision',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (
+        !store.listCensusListings ||
+        !store.upsertCensusListing ||
+        !store.publishCensusListingToCircuitA
+      ) {
+        res.status(501).json({ error: 'Validation du recensement non configurée.' });
+        return;
+      }
+
+      const action = String(req.body?.action || '').trim();
+      const note = String(req.body?.note || '').trim().slice(0, 300);
+      const rawIds: string[] = Array.isArray(req.body?.censusIds)
+        ? req.body.censusIds.map((x: unknown) => String(x).trim()).filter(Boolean)
+        : req.body?.censusId
+        ? [String(req.body.censusId).trim()]
+        : [];
+
+      if (
+        rawIds.length === 0 ||
+        ![
+          'validate_publish_circuit_a',
+          'apply_proposed_update',
+          'mark_incomplete',
+          'reject',
+          'complete_and_move_to_validate',
+        ].includes(action)
+      ) {
+        res.status(400).json({
+          error:
+            'Paramètres invalides : fournissez censusId / censusIds et une action valide.',
+        });
+        return;
+      }
+
+      try {
+        const all = await store.listCensusListings(caller.rawIdToken);
+        const byId = new Map<string, CensusListingDoc>(all.map((r) => [r.id, r]));
+        const nowIso = new Date().toISOString();
+        const processed: Array<{ censusId: string; status: string; serviceId?: string }> = [];
+
+        for (const cid of rawIds) {
+          const doc = byId.get(cid);
+          if (!doc) continue;
+
+          if (action === 'validate_publish_circuit_a') {
+            if (doc.status === 'incomplete') {
+              res.status(400).json({
+                error: `La fiche « ${doc.businessName} » est incomplète (adresse ou source manquante) et ne peut pas être rendue visible au public avant d’être complétée.`,
+              });
+              return;
+            }
+            const slug = cid
+              .replace(/^cens-(bj-)?/, '')
+              .replace(/[^a-zA-Z0-9_-]/g, '-')
+              .slice(0, 72);
+            const serviceId = doc.publishedServiceId || `dir-web-${slug}`;
+            const providerId = `prov-web-${slug}`;
+            const pub = await store.publishCensusListingToCircuitA(
+              {
+                censusDoc: doc,
+                serviceId,
+                providerId,
+                adminUid: caller.uid,
+              },
+              caller.rawIdToken
+            );
+            processed.push({ censusId: cid, status: 'published', serviceId: pub.serviceId });
+          } else if (action === 'apply_proposed_update') {
+            const targetServiceId =
+              String(req.body?.targetServiceId || doc.matchedExistingServiceId || '').trim();
+            if (!targetServiceId || !store.applyCensusProposedUpdate) {
+              res.status(400).json({
+                error: `Aucune fiche existante cible (matchedExistingServiceId) identifiée pour « ${doc.businessName} ».`,
+              });
+              return;
+            }
+            const applied = await store.applyCensusProposedUpdate(
+              {
+                censusDoc: doc,
+                targetServiceId,
+                adminUid: caller.uid,
+              },
+              caller.rawIdToken
+            );
+            processed.push({
+              censusId: cid,
+              status: 'published',
+              serviceId: applied.serviceId,
+            });
+          } else if (action === 'complete_and_move_to_validate') {
+            const nextAddress = String(
+              req.body?.neighborhoodOrAddress || doc.neighborhoodOrAddress
+            )
+              .trim()
+              .slice(0, 220);
+            const nextPhone = String(req.body?.contactPhone || doc.contactPhone)
+              .trim()
+              .slice(0, 80);
+            if (!nextAddress || nextAddress.toLowerCase() === 'non précisé') {
+              res.status(400).json({
+                error: 'Veuillez renseigner une adresse ou un quartier précis pour sortir de l’état « à compléter ».',
+              });
+              return;
+            }
+            const updated: CensusListingDoc = {
+              ...doc,
+              neighborhoodOrAddress: nextAddress,
+              contactPhone: nextPhone || 'non précisé',
+              status: 'to_validate',
+              updatedAtIso: nowIso,
+              history: [
+                ...(doc.history || []),
+                {
+                  atIso: nowIso,
+                  actorId: caller.uid,
+                  action: 'COMPLETED_BY_ADMIN',
+                  note: note || 'Champs manquants complétés par l’administrateur ; prêt à valider.',
+                },
+              ],
+            };
+            await store.upsertCensusListing(updated, caller.rawIdToken);
+            processed.push({ censusId: cid, status: 'to_validate' });
+          } else {
+            const nextStatus = action === 'mark_incomplete' ? 'incomplete' : 'rejected';
+            const updated: CensusListingDoc = {
+              ...doc,
+              status: nextStatus,
+              updatedAtIso: nowIso,
+              history: [
+                ...(doc.history || []),
+                {
+                  atIso: nowIso,
+                  actorId: caller.uid,
+                  action: action.toUpperCase(),
+                  note:
+                    note ||
+                    (nextStatus === 'rejected'
+                      ? 'Fiche rejetée par le propriétaire.'
+                      : 'Fiche renvoyée en « à compléter » (invisible au public).'),
+                },
+              ],
+            };
+            await store.upsertCensusListing(updated, caller.rawIdToken);
+            processed.push({ censusId: cid, status: nextStatus });
+          }
+        }
+
+        res.json({ ok: true, action, processedCount: processed.length, processed });
+      } catch (err) {
+        res.status(500).json({
+          error: redactSecrets(err) || 'Échec de traitement sur la file de recensement.',
+        });
       }
     }
   );
