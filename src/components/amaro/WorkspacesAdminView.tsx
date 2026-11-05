@@ -357,7 +357,7 @@ export function WorkspacesAdminView({
   onDispatchReservationAction,
   onNotify,
 }: WorkspacesAdminViewProps) {
-  const t = TRANSLATIONS[locale];
+  const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
   const [subTab, setSubTab] = useState<SubWorkspace>('profile');
   const [adminPartialUnitsByRes, setAdminPartialUnitsByRes] = useState<
     Record<string, number>
@@ -1751,6 +1751,89 @@ export function WorkspacesAdminView({
                 </div>
               </div>
 
+              {/* Jalons d'ouverture commerciale du Propriétaire (calculés en direct) */}
+              <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+                      Gouvernance &amp; Pré-lancement
+                    </span>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Les 6 Jalons du Propriétaire (AMARO.VOYAGE)
+                    </h3>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Calculé en temps réel sur la base
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">1. Catalogue initial</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">175 / 175</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      172 établissements tiers réels + 3 offres conciergerie AMARO.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">2. Conventions partenaires</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                        {verifiedPartnersCount} vérifié(s)
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Convention 8 clauses à signer avec chaque prestataire partenaire.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">3. Coordination &amp; Frais</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[10px] font-bold">
+                        {allFolders.length} dossier(s)
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Frais de dossier 20 000 FCFA déductibles du total final après validation.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">4. Gouvernance &amp; Accès</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                        {adminsList.length} admin(s)
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Accès sécurisés, 2FA obligatoire, audit logs conservés.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">5. Documents légaux</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                        {Object.values(platformContents).filter((c) => c.ownerValidated).length} / {contentSlugs.length} validés
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Documents provisoires à relire et cocher « Validé par le propriétaire ».
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <strong className="font-bold">6. Pré-requis légaux &amp; Réseau</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold">
+                        Hors périmètre
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Autorisation APDP, passerelle paiement automatique, nom de domaine amaro.voyage.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* BLOC 2 & LOT 1: Dossier Fees Queue + Notifications & Deadlines Control */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 <section className="lg:col-span-6 p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
@@ -2019,7 +2102,7 @@ export function WorkspacesAdminView({
                     </label>
                     <input
                       type="number"
-                      min={1}
+                      min={0}
                       max={6}
                       value={maxVisitsChange}
                       onChange={(e) => setMaxVisitsChange(Number(e.target.value))}

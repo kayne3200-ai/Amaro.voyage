@@ -761,12 +761,155 @@ function normalizeDomain(urlStr: string): string {
   }
 }
 
+const GENERIC_BRAND_STOPWORDS = new Set([
+  'hotel',
+  'hotels',
+  'lodge',
+  'lodges',
+  'ecolodge',
+  'campement',
+  'accueil',
+  'residence',
+  'residences',
+  'villa',
+  'villas',
+  'cotiere',
+  'cotier',
+  'maison',
+  'hotes',
+  'auberge',
+  'resort',
+  'spa',
+  'plage',
+  'beach',
+  'restaurant',
+  'maquis',
+  'bar',
+  'cafe',
+  'centre',
+  'agence',
+  'location',
+  'transport',
+  'transports',
+  'tourisme',
+  'tours',
+  'tour',
+  'voyages',
+  'voyage',
+  'services',
+  'service',
+  'groupe',
+  'association',
+  'nationale',
+  'international',
+  'internationale',
+  'benin',
+  'beninoise',
+  'africain',
+  'africaine',
+  'african',
+  'parc',
+  'national',
+  'circuits',
+  'circuit',
+  'communautaires',
+  'communautaire',
+  'interpretes',
+  'traducteurs',
+  'interurbain',
+  'autocar',
+  'bus',
+  'location',
+  'voiture',
+  'vehicules',
+  'cotonou',
+  'ouidah',
+  'ganvie',
+  'porto',
+  'novo',
+  'abomey',
+  'calavi',
+  'grand',
+  'popo',
+  'possotome',
+  'bohicon',
+  'dassa',
+  'zoume',
+  'savalou',
+  'parakou',
+  'nikki',
+  'djougou',
+  'natitingou',
+  'boukoumbe',
+  'tanguieta',
+  'pendjari',
+  'kandi',
+  'malanville',
+  'ketou',
+  'allada',
+  'lokossa',
+  'aux',
+  'des',
+  'les',
+  'une',
+  'sur',
+  'chez',
+  'par',
+  'pour',
+  'dans',
+  'avec',
+]);
+
+const AGGREGATOR_DOMAINS = new Set([
+  'petitfute.com',
+  'tripadvisor.fr',
+  'tripadvisor.com',
+  'booking.com',
+  'expedia.fr',
+  'expedia.com',
+  'hotels.com',
+  'evendo.com',
+  'tripinafrica.com',
+  'goafricaonline.com',
+  'showroomafrica.com',
+  'benin360.com',
+  'nkomonapp.com',
+  'beninticketxpress.com',
+  'guidestao.com',
+  'tatacora.com',
+  'routedestata.bj',
+  'visitabomey.com',
+  'visitersavalou.com',
+  'tourisme-benin.bj',
+  'voyage-benin.com',
+]);
+
+function extractDistinctiveTokens(raw: string): string[] {
+  return normalizeForMatch(raw)
+    .split(' ')
+    .filter((tok) => tok.length >= 3 && !GENERIC_BRAND_STOPWORDS.has(tok));
+}
+
+function isProprietaryOperatorDomain(domain: string): boolean {
+  if (!domain) return false;
+  const baseHost = domain.split('/')[0];
+  if (AGGREGATOR_DOMAINS.has(baseHost)) return false;
+  if (
+    baseHost.includes('facebook.com') ||
+    baseHost.includes('instagram.com') ||
+    baseHost.includes('linkedin.com')
+  ) {
+    return domain.includes('/');
+  }
+  return true;
+}
+
 /**
- * A6 — Détection stricte de doublons et classement à l'import du recensement :
- * - Compare par nom normalisé, ville, téléphone (8 derniers chiffres) et site web.
+ * A6 & R3 — Détection stricte de doublons et classement à l'import du recensement :
+ * - Compare par nom normalisé, variantes d'enseigne/sigle, ville, adresse, téléphone (8 derniers chiffres) et site/source dédiés.
  * - N'écrase JAMAIS une fiche existante :
- *   - Si correspondance exacte avec infos complémentaires -> `proposed_update`
- *   - Si correspondance proche ou par coordonnée -> `possible_duplicate`
+ *   - Si correspondance exacte (ou même enseigne officielle) avec infos complémentaires -> `proposed_update`
+ *   - Si correspondance proche, variante de nom, même campus/domaine ou doute -> `possible_duplicate`
  *   - Si incomplet (sans source ou sans nom/ville/localisation) -> `incomplete`
  *   - Sinon -> `to_validate` (JAMAIS `published` directement !)
  */
@@ -779,9 +922,11 @@ export function classifyCensusCandidateAgainstCatalogue(
     id: string;
     title: string;
     cityId: string;
+    category?: string;
     address?: string;
     contactPhone?: string;
     websiteUrl?: string;
+    sourceUrl?: string;
     priceAmount?: number;
     priceKnown?: boolean;
   }>
@@ -810,26 +955,119 @@ export function classifyCensusCandidateAgainstCatalogue(
   }
 
   const candNormName = normalizeForMatch(candidate.businessName);
+  const candLeadSegment = normalizeForMatch(
+    candidate.businessName.split(/[—–\-/(]/)[0] || candidate.businessName
+  );
+  const candDistinctTokens = extractDistinctiveTokens(candidate.businessName);
   const candPhone = normalizePhoneDigits(candidate.contactPhone || candidate.contactWhatsapp);
-  const candDomain = normalizeDomain(candidate.officialWebsite);
+  const candDomains = new Set<string>();
+  const rawOfficialDom = normalizeDomain(candidate.officialWebsite);
+  if (isProprietaryOperatorDomain(rawOfficialDom)) candDomains.add(rawOfficialDom);
+  const rawSocialDom = normalizeDomain(candidate.socialPageUrl);
+  if (isProprietaryOperatorDomain(rawSocialDom)) candDomains.add(rawSocialDom);
+  for (const s of candidate.sources || []) {
+    const sDom = normalizeDomain(s.url);
+    if (isProprietaryOperatorDomain(sDom)) candDomains.add(sDom);
+  }
 
-  for (const existing of existingCatalogue) {
+  const candHasAuberge = /\bauberge\b/.test(candNormName);
+
+  // Two-pass evaluation: prefer exact/same-category matches first, then cross-category campus/domain matches
+  const sortedCatalogue = [...existingCatalogue].sort((a, b) => {
+    const aSameCat = a.category && a.category === candidate.category ? 1 : 0;
+    const bSameCat = b.category && b.category === candidate.category ? 1 : 0;
+    if (aSameCat !== bSameCat) return bSameCat - aSameCat;
+    const aSameCity = a.cityId.toLowerCase() === candidate.cityId.toLowerCase() ? 1 : 0;
+    const bSameCity = b.cityId.toLowerCase() === candidate.cityId.toLowerCase() ? 1 : 0;
+    return bSameCity - aSameCity;
+  });
+
+  for (const existing of sortedCatalogue) {
     const exNormName = normalizeForMatch(existing.title);
+    const exLeadSegment = normalizeForMatch(
+      existing.title.split(/[—–\-/(]/)[0] || existing.title
+    );
+    const exDistinctTokens = extractDistinctiveTokens(existing.title);
     const sameCity = existing.cityId.toLowerCase() === candidate.cityId.toLowerCase();
+    const sameCategory = !existing.category || existing.category === candidate.category;
     const exPhone = normalizePhoneDigits(existing.contactPhone || '');
-    const exDomain = normalizeDomain(existing.websiteUrl || '');
+
+    const exDomains = new Set<string>();
+    const exWebDom = normalizeDomain(existing.websiteUrl || '');
+    if (isProprietaryOperatorDomain(exWebDom)) exDomains.add(exWebDom);
+    const exSrcDom = normalizeDomain(existing.sourceUrl || '');
+    if (isProprietaryOperatorDomain(exSrcDom)) exDomains.add(exSrcDom);
+
+    let sharedOperatorDomain = '';
+    for (const d of candDomains) {
+      if (exDomains.has(d)) {
+        sharedOperatorDomain = d;
+        break;
+      }
+    }
 
     const exactNameAndCity =
-      sameCity && candNormName.length >= 3 && candNormName === exNormName;
+      sameCity &&
+      sameCategory &&
+      candNormName.length >= 3 &&
+      (candNormName === exNormName ||
+        (candLeadSegment.length >= 6 && candLeadSegment === exLeadSegment));
+
     const phoneMatch = Boolean(candPhone && exPhone && candPhone === exPhone);
-    const websiteMatch = Boolean(candDomain && exDomain && candDomain === exDomain);
+    const websiteMatch = Boolean(sharedOperatorDomain);
+
     const partialNameSameCity =
       sameCity &&
       candNormName.length >= 5 &&
       exNormName.length >= 5 &&
       (candNormName.includes(exNormName) || exNormName.includes(candNormName));
 
-    if (exactNameAndCity || phoneMatch || websiteMatch || partialNameSameCity) {
+    // Shared distinctive brand/acronym token in the same city (e.g. "Germain" in Ganvié, "ATT" in Cotonou, "ANITEB", "Songhai", "Cotonou Drive" vs "Benin Drive")
+    const sharedDistinctiveTokens = candDistinctTokens.filter((tok) =>
+      exDistinctTokens.includes(tok)
+    );
+    const acronymOrBrandMatch =
+      (sameCity &&
+        sharedDistinctiveTokens.some(
+          (tok) => tok.length >= 4 || ['att', 'ubt'].includes(tok)
+        )) ||
+      (sameCategory &&
+        sharedDistinctiveTokens.some((tok) =>
+          ['aniteb', 'ecobenin', 'songhai', 'att'].includes(tok)
+        ));
+
+    // City auberge variant (e.g. "Auberge de Dassa-Zoumè" vs "Auberge des Collines de Dassa")
+    const aubergeCityVariant =
+      sameCity &&
+      sameCategory &&
+      candHasAuberge &&
+      /\bauberge\b/.test(exNormName) &&
+      candDistinctTokens.length === 0;
+
+    // Close car-rental naming doubt in Cotonou ("Cotonou Drive" vs "Bénin Drive — Location de Véhicules")
+    const rentalDriveVariantSameCity =
+      sameCity &&
+      candidate.category === 'transport' &&
+      existing.category === 'transport' &&
+      sharedDistinctiveTokens.includes('drive');
+
+    const exactAssociationOrLodgeIdentity =
+      sameCategory &&
+      ((sameCity &&
+        candNormName.replace(/\b(le|la|les|l)\b/g, '').trim() ===
+          exNormName.replace(/\b(le|la|les|l)\b/g, '').trim()) ||
+        sharedDistinctiveTokens.some((tok) => ['aniteb'].includes(tok)));
+
+    if (
+      exactNameAndCity ||
+      exactAssociationOrLodgeIdentity ||
+      phoneMatch ||
+      websiteMatch ||
+      partialNameSameCity ||
+      acronymOrBrandMatch ||
+      aubergeCityVariant ||
+      rentalDriveVariantSameCity
+    ) {
       const diffs: CensusProposedDiff[] = [];
       const primarySource = candidate.sources[0];
 
@@ -871,7 +1109,7 @@ export function classifyCensusCandidateAgainstCatalogue(
         });
       }
 
-      if (exactNameAndCity && diffs.length > 0) {
+      if ((exactNameAndCity || exactAssociationOrLodgeIdentity) && diffs.length > 0) {
         return {
           status: 'proposed_update',
           matchedExistingServiceId: existing.id,
@@ -883,8 +1121,21 @@ export function classifyCensusCandidateAgainstCatalogue(
       const reasonParts: string[] = [];
       if (exactNameAndCity) reasonParts.push('même nom et même ville');
       else if (partialNameSameCity) reasonParts.push('nom proche dans la même ville');
+      if (acronymOrBrandMatch) {
+        reasonParts.push(
+          `variante d’enseigne ou sigle commun (${sharedDistinctiveTokens.join(', ')})`
+        );
+      }
+      if (aubergeCityVariant) {
+        reasonParts.push('variante de dénomination d’auberge dans la même ville');
+      }
+      if (rentalDriveVariantSameCity) {
+        reasonParts.push('dénomination commerciale proche de location automobile à Cotonou');
+      }
       if (phoneMatch) reasonParts.push('même numéro de téléphone');
-      if (websiteMatch) reasonParts.push('même site web');
+      if (websiteMatch) {
+        reasonParts.push(`même domaine ou site source (${sharedOperatorDomain})`);
+      }
 
       return {
         status: 'possible_duplicate',

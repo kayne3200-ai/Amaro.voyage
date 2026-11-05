@@ -296,6 +296,18 @@ function AmaroPlatform() {
   const [myTravelerReviews, setMyTravelerReviews] = useState<TravelerReviewDoc[]>([]);
   const [clientReservations, setClientReservations] = useState<ReservationDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [sessionDraft, setSessionDraft] = useState<AssistantDraftItinerary | null>(() => {
+    try {
+      const stored = sessionStorage.getItem(PENDING_ASSISTANT_DRAFT_KEY);
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const handleUpdateSessionDraft = useCallback((draft: AssistantDraftItinerary | null) => {
+    setSessionDraft(draft);
+  }, []);
   const [lastBrainDiagnostic, setLastBrainDiagnostic] = useState<{
     valid: boolean;
     involvesCityChange: boolean;
@@ -1495,14 +1507,20 @@ function AmaroPlatform() {
       }
 
       const folderId = makeSafeId('folder');
-      const primaryCityId = draft.cities[0] || 'cotonou';
+      const primaryCityId = draft.preferredCities?.[0] || draft.cities?.[0] || 'cotonou';
       const startDate =
         draft.startDate || new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
       const endDate = draft.endDate || startDate;
-      const estimatedTotal = Math.max(0, Number(draft.knownBudgetXof || 0));
-      const dailyBudget = Math.round(
-        estimatedTotal / Math.max(1, draft.daysCount || 1)
+      const estimatedTotal = Math.max(
+        0,
+        Number(draft.estimatedTotalXof || draft.knownBudgetXof || 0)
       );
+      const daysCount = Math.max(1, draft.daysCount || 1);
+      const dailyBudget = Math.round(estimatedTotal / daysCount);
+      const rawSteps =
+        draft.dailySteps && draft.dailySteps.length > 0
+          ? draft.dailySteps
+          : draft.steps || [];
 
       try {
         await setDoc(doc(db, 'journey_folders', folderId), {
@@ -1516,7 +1534,7 @@ function AmaroPlatform() {
           totalBudget: estimatedTotal > 0 ? estimatedTotal : 250_000,
           dailyBudget: dailyBudget > 0 ? dailyBudget : 45_000,
           currency: 'XOF',
-          preferencesNotes: `Généré via l’Assistant AMARO (${draft.intentionSummary || 'Découverte'})`.slice(
+          preferencesNotes: `Généré via l’Assistant AMARO (${draft.summary || draft.intentionSummary || 'Découverte'})`.slice(
             0,
             950
           ),
@@ -1526,8 +1544,8 @@ function AmaroPlatform() {
           updatedAt: serverTimestamp(),
         });
 
-        for (const step of draft.steps) {
-          if (step.isFreeTimeBlock || !step.serviceId) continue;
+        for (const step of rawSteps) {
+          if ((step as any).isFreeTimeBlock || !step.serviceId) continue;
           const itemId = makeSafeId('step');
           const [hh, mm] = (step.startTime || '09:00').split(':').map(Number);
           const endTotal = ((hh || 9) * 60 + (mm || 0) + (step.durationMinutes || 90)) % 1440;
@@ -1536,29 +1554,40 @@ function AmaroPlatform() {
             `${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(
               endTotal % 60
             ).padStart(2, '0')}`;
+          const cost =
+            step.priceKnown !== false
+              ? Math.max(0, Number(step.priceAmount || (step as any).estimatedCostXof || 0))
+              : 0;
 
           await setDoc(doc(db, 'journey_folders', folderId, 'items', itemId), {
             folderId,
             ownerId: authUser.uid,
             serviceId: step.serviceId,
-            providerId: 'dir-assistant',
+            providerId: step.providerId || 'dir-assistant',
             serviceTitle: step.serviceTitle.slice(0, 155),
             category: step.category,
             cityId: step.cityId,
-            date: step.date,
+            date: step.date || startDate,
             startTime: step.startTime || '09:00',
             endTime,
             durationMinutes: Math.max(15, Math.round(step.durationMinutes || 90)),
-            estimatedCost: step.priceKnown ? Math.max(0, Number(step.estimatedCostXof || 0)) : 0,
+            estimatedCost: cost,
             currency: 'XOF',
             stage: 'envisaged',
             notes: (step.notes || '').slice(0, 580),
+            hasPriceToVerify: Boolean(step.hasPriceToVerify),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
         }
 
         setSelectedFolderId(folderId);
+        setSessionDraft(null);
+        try {
+          sessionStorage.removeItem(PENDING_ASSISTANT_DRAFT_KEY);
+        } catch {
+          // ignore
+        }
         setActiveTab('journey');
         showToast(
           'Votre proposition d’itinéraire a été transformée en dossier de voyage modifiable.'
@@ -1581,7 +1610,11 @@ function AmaroPlatform() {
       pendingDraftRestoredRef.current = authUser.uid;
       sessionStorage.removeItem(PENDING_ASSISTANT_DRAFT_KEY);
       const parsed = JSON.parse(raw) as AssistantDraftItinerary;
-      if (parsed && Array.isArray(parsed.steps)) {
+      if (
+        parsed &&
+        ((Array.isArray(parsed.dailySteps) && parsed.dailySteps.length > 0) ||
+          (Array.isArray(parsed.steps) && parsed.steps.length > 0))
+      ) {
         void handleApplyAssistantDraft(parsed);
       }
     } catch {
@@ -3787,6 +3820,13 @@ function AmaroPlatform() {
             travelerReviews={mergedTravelerReviews}
             onSubmitTravelerReview={handleSubmitTravelerReview}
             onSendProviderThankYou={handleSendProviderThankYou}
+            sessionDraft={sessionDraft}
+            onApplyAssistantDraft={handleApplyAssistantDraft}
+            onOpenExplorer={(cityId, category, itemId) => {
+              setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
+              setActiveTab('explorer');
+            }}
+            onOpenAssistant={() => setActiveTab('assistant')}
           />
         )}
 
@@ -3800,6 +3840,8 @@ function AmaroPlatform() {
             clientDisplayName={userPublic?.displayName || authUser?.displayName || ''}
             emergencyNumbers={emergencyNumbers}
             supportWhatsappNumber={countrySetting?.amaroWhatsappNumber}
+            sessionDraft={sessionDraft}
+            onUpdateSessionDraft={handleUpdateSessionDraft}
             onOpenExplorer={(cityId, category, itemId) => {
               setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
               setActiveTab('explorer');

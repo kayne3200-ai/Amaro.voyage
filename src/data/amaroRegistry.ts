@@ -9,18 +9,18 @@ import {
   BENIN_TOURIST_SITES_DIRECTORY,
 } from './beninSitesAndServices';
 
-import cotonouCoastImg from '../assets/images/benin_cotonou_coastline_1793469936805.jpg';
-import calaviLagoonImg from '../assets/images/benin_calavi_lagoon_1793469937987.jpg';
-import parakouHeritageImg from '../assets/images/benin_parakou_heritage_1793470068682.jpg';
-import beninDiningImg from '../assets/images/benin_hospitality_dining_1793470068680.jpg';
-import ouidahMemorialImg from '../assets/images/ouidah_memorial_coast_1793486768331.jpg';
-import ganvieStiltImg from '../assets/images/ganvie_stilt_village_1793486769287.jpg';
-import abomeyRoyalImg from '../assets/images/abomey_royal_earth_1793486770531.jpg';
-import pendjariWildlifeImg from '../assets/images/pendjari_savanna_wildlife_1793486771402.jpg';
-import atacoraTataImg from '../assets/images/atacora_kota_tata_1793486772783.jpg';
-import portonovoHeritageImg from '../assets/images/portonovo_afrobrazilian_1793486774149.jpg';
-import grandpopoCoastImg from '../assets/images/grandpopo_bouche_roy_1793486970721.jpg';
-import dassaHillsImg from '../assets/images/dassa_hills_ketou_1793486988427.jpg';
+const cotonouCoastImg = new URL('../assets/images/benin_cotonou_coastline_1793469936805.jpg', import.meta.url).href;
+const calaviLagoonImg = new URL('../assets/images/benin_calavi_lagoon_1793469937987.jpg', import.meta.url).href;
+const parakouHeritageImg = new URL('../assets/images/benin_parakou_heritage_1793470068682.jpg', import.meta.url).href;
+const beninDiningImg = new URL('../assets/images/benin_hospitality_dining_1793470068680.jpg', import.meta.url).href;
+const ouidahMemorialImg = new URL('../assets/images/ouidah_memorial_coast_1793486768331.jpg', import.meta.url).href;
+const ganvieStiltImg = new URL('../assets/images/ganvie_stilt_village_1793486769287.jpg', import.meta.url).href;
+const abomeyRoyalImg = new URL('../assets/images/abomey_royal_earth_1793486770531.jpg', import.meta.url).href;
+const pendjariWildlifeImg = new URL('../assets/images/pendjari_savanna_wildlife_1793486771402.jpg', import.meta.url).href;
+const atacoraTataImg = new URL('../assets/images/atacora_kota_tata_1793486772783.jpg', import.meta.url).href;
+const portonovoHeritageImg = new URL('../assets/images/portonovo_afrobrazilian_1793486774149.jpg', import.meta.url).href;
+const grandpopoCoastImg = new URL('../assets/images/grandpopo_bouche_roy_1793486970721.jpg', import.meta.url).href;
+const dassaHillsImg = new URL('../assets/images/dassa_hills_ketou_1793486988427.jpg', import.meta.url).href;
 
 export const EDITORIAL_IMAGES: Record<
   string,
@@ -401,7 +401,7 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
   },
 ];
 
-// Unified Real Public Directory of Benin (168 real documented entries: 110 Accommodations + 17 Heritage/Natural Sites + 41 Transports/Linguistic/Complementary Services)
+// Unified Real Public Directory of Benin (175 real documented entries: 110 Accommodations + 21 Heritage/Natural Sites + 44 Transports/Linguistic/Complementary Services [172 third-party establishments + 3 AMARO human assistance offers])
 export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
   ...BENIN_ACCOMMODATIONS_DIRECTORY,
   ...BENIN_TOURIST_SITES_DIRECTORY,

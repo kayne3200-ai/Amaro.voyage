@@ -130,6 +130,7 @@ export interface ConversationAnalysis {
   draftItinerary: AssistantDraftItinerary | null;
   noRestaurantInRequestedCity: boolean;
   readyToProposeDraft: boolean;
+  canOfferFolderGeneration?: boolean;
 }
 
 function detectCityInText(norm: string): { cityId: string; label: string } | null {
@@ -201,11 +202,21 @@ export function buildRealDraftItinerary(params: {
   intentionSummary?: string;
   startDateIso?: string;
   dossierFeeXof?: number;
+  maxVisitsCityChangeDay?: number;
+  maxVisitsSameCityDay?: number;
   extraPublishedItems?: CatalogueItem[];
 }): AssistantDraftItinerary {
   const days = Math.min(14, Math.max(2, Math.round(params.daysCount || 4)));
   const travelers = Math.min(12, Math.max(1, Math.round(params.travelersCount || 2)));
   const dossierFeeXof = params.dossierFeeXof ?? 20_000;
+  const maxChangeVisits =
+    typeof params.maxVisitsCityChangeDay === 'number'
+      ? Math.max(0, Math.min(4, params.maxVisitsCityChangeDay))
+      : 1;
+  const maxSameVisits =
+    typeof params.maxVisitsSameCityDay === 'number'
+      ? Math.max(0, Math.min(6, params.maxVisitsSameCityDay))
+      : 2;
   const startIso =
     params.startDateIso && /^\d{4}-\d{2}-\d{2}$/.test(params.startDateIso)
       ? params.startDateIso
@@ -302,8 +313,8 @@ export function buildRealDraftItinerary(params: {
       });
     }
 
-    // 2. Site visits respecting 5.1: max 1 visit on city-change day, up to 2 visits on same-city day
-    const maxVisitsToday = isCityChangeDay ? 1 : 2;
+    // 2. Site visits respecting configurable limits (defaults 1 on city change day, up to 2 on same city day)
+    const maxVisitsToday = isCityChangeDay ? maxChangeVisits : maxSameVisits;
     const citySites = sortPartnerFirst(
       allItems.filter(
         (i) => i.category === 'site' && i.cityId === cityId && !usedSiteIds.has(i.id)
@@ -389,6 +400,13 @@ export function buildRealDraftItinerary(params: {
 
   const endDate = addDaysIso(startIso, days - 1);
   const distinctCities = Array.from(new Set(steps.map((s) => s.cityId)));
+  const dailySteps = steps.map((s) => ({
+    ...s,
+    day: s.dayIndex,
+    priceAmount: s.estimatedCostXof,
+    isPartnerVerified: s.dataOrigin === 'verified_partner',
+    hasPriceToVerify: !s.priceKnown,
+  }));
 
   return {
     title: `Brouillon AMARO — ${distinctCities.map((c) => c.charAt(0).toUpperCase() + c.slice(1)).join(' · ')} (${days} jours)`,
@@ -397,13 +415,146 @@ export function buildRealDraftItinerary(params: {
     daysCount: days,
     travelersCount: travelers,
     cities: distinctCities,
+    preferredCities: distinctCities,
     intentionSummary:
       params.intentionSummary?.trim() || 'Découverte équilibrée & temps de respiration',
+    summary: params.intentionSummary?.trim() || 'Découverte équilibrée & temps de respiration',
     knownBudgetXof,
+    estimatedTotalXof: knownBudgetXof,
     onRequestCount,
+    hasPriceToVerify: onRequestCount > 0,
     dossierFeeNextStepXof: dossierFeeXof,
     steps,
+    dailySteps,
   };
+}
+
+export function modifyDraftItinerary(
+  activeDraft: AssistantDraftItinerary,
+  modificationRequest: string,
+  extraPublishedItems?: CatalogueItem[]
+): { modifiedDraft: AssistantDraftItinerary; summaryChange: string } {
+  const norm = normalizeText(modificationRequest);
+  const catalogPool = [
+    ...(extraPublishedItems || []),
+    ...ALL_REAL_BENIN_ITEMS,
+  ].filter(
+    (it) =>
+      it.status === 'published' &&
+      it.dataOrigin !== 'demo_test' &&
+      !isAmaroOwnAssistanceOffer(it)
+  );
+
+  const sortPartnerFirst = (items: CatalogueItem[]) =>
+    [...items].sort((a, b) => {
+      const ap = a.dataOrigin === 'verified_partner' ? 1 : 0;
+      const bp = b.dataOrigin === 'verified_partner' ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.priceKnown !== false ? 1 : 0) - (a.priceKnown !== false ? 1 : 0);
+    });
+
+  const updatedSteps = [...activeDraft.steps];
+  let summaryChange = 'Votre proposition d’itinéraire a été ajustée selon votre demande.';
+
+  // Day index target detection (e.g. "jour 2", "j2", "deuxième jour")
+  const dayTargetMatch = norm.match(/\b(jour\s*(\d{1,2})|j(\d{1,2}))\b/);
+  const targetDay = dayTargetMatch ? Number(dayTargetMatch[2] || dayTargetMatch[3]) : null;
+
+  // 1. Hotel / accommodation replacement
+  if (/\b(hotel|chambre|hebergement|logement|auberge)\b/.test(norm) && /\b(remplace|change|autre|modifier)\b/.test(norm)) {
+    const targetCity = detectCityInText(norm)?.cityId || (targetDay ? updatedSteps.find((s) => s.dayIndex === targetDay && s.category === 'accommodation')?.cityId : null) || activeDraft.cities[0];
+    const cityLodgings = sortPartnerFirst(catalogPool.filter((i) => i.category === 'accommodation' && i.cityId === targetCity));
+    const stepIdx = updatedSteps.findIndex((s) => (targetDay ? s.dayIndex === targetDay : true) && s.category === 'accommodation');
+    if (stepIdx >= 0 && cityLodgings.length > 0) {
+      const currentServiceId = updatedSteps[stepIdx].serviceId;
+      const alternative = cityLodgings.find((l) => l.id !== currentServiceId) || cityLodgings[0];
+      const oldTitle = updatedSteps[stepIdx].serviceTitle;
+      const cost = alternative.priceKnown !== false ? alternative.priceAmount : 0;
+      updatedSteps[stepIdx] = {
+        ...updatedSteps[stepIdx],
+        serviceId: alternative.id,
+        serviceTitle: alternative.title,
+        dataOrigin: alternative.dataOrigin,
+        priceKnown: alternative.priceKnown !== false,
+        estimatedCostXof: cost,
+        notes: `Remplacement demandé : ${alternative.title} (${alternative.dataOrigin === 'verified_partner' ? 'Partenaire AMARO' : 'Recensé'})`,
+      };
+      summaryChange = `Hébergement remplacé pour « ${alternative.title} » (en remplacement de ${oldTitle}).`;
+    }
+  } else if (/\b(ajoute|rajoute|mettre)\b/.test(norm) && /\b(restaurant|table|dejeuner|diner|manger)\b/.test(norm)) {
+    // 2. Add restaurant meal step
+    const targetCity = detectCityInText(norm)?.cityId || activeDraft.cities[0];
+    const cityRestaurants = sortPartnerFirst(catalogPool.filter((i) => i.category === 'restaurant' && i.cityId === targetCity));
+    const rest = cityRestaurants[0];
+    const targetDayIndex = targetDay || 1;
+    const date = updatedSteps.find((s) => s.dayIndex === targetDayIndex)?.date || activeDraft.startDate;
+    if (rest) {
+      const cost = rest.priceKnown !== false ? rest.priceAmount * activeDraft.travelersCount : 0;
+      updatedSteps.push({
+        dayIndex: targetDayIndex,
+        date,
+        startTime: '12:00',
+        endTime: '13:30',
+        durationMinutes: 90,
+        cityId: targetCity,
+        category: 'restaurant',
+        serviceId: rest.id,
+        serviceTitle: rest.title,
+        dataOrigin: rest.dataOrigin,
+        priceKnown: rest.priceKnown !== false,
+        estimatedCostXof: cost,
+        notes: `Ajout au programme : ${rest.title} (${rest.dataOrigin === 'verified_partner' ? 'Partenaire AMARO' : 'Recensé'})`,
+      });
+      summaryChange = `Restaurant « ${rest.title} » ajouté au jour ${targetDayIndex} (${targetCity}).`;
+    } else {
+      summaryChange = `Aucun restaurant recensé dans notre catalogue à ${targetCity} ; nous pouvons chercher une table partenaire sur place lors de l'ouverture du dossier.`;
+    }
+  } else if (/\b(retire|supprime|enleve|annule)\b/.test(norm)) {
+    // 3. Remove a step
+    const cat = detectCategoryInText(norm);
+    const rmIdx = updatedSteps.findIndex((s) => (targetDay ? s.dayIndex === targetDay : true) && (cat ? s.category === cat : true) && !s.isFreeTimeBlock);
+    if (rmIdx >= 0) {
+      const removed = updatedSteps.splice(rmIdx, 1)[0];
+      summaryChange = `Étape « ${removed.serviceTitle} » retirée du programme.`;
+    }
+  }
+
+  // Recalculate totals
+  let knownBudgetXof = 0;
+  let onRequestCount = 0;
+  for (const st of updatedSteps) {
+    if (st.isFreeTimeBlock) continue;
+    if (st.priceKnown && st.estimatedCostXof > 0) {
+      knownBudgetXof += st.estimatedCostXof;
+    } else {
+      onRequestCount += 1;
+    }
+  }
+
+  const sortedSteps = updatedSteps.sort((a, b) => {
+    if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
+    return (a.startTime || '00:00').localeCompare(b.startTime || '00:00');
+  });
+
+  const dailySteps = sortedSteps.map((s) => ({
+    ...s,
+    day: s.dayIndex,
+    priceAmount: s.estimatedCostXof,
+    isPartnerVerified: s.dataOrigin === 'verified_partner',
+    hasPriceToVerify: !s.priceKnown,
+  }));
+
+  const modifiedDraft: AssistantDraftItinerary = {
+    ...activeDraft,
+    knownBudgetXof,
+    estimatedTotalXof: knownBudgetXof,
+    onRequestCount,
+    hasPriceToVerify: onRequestCount > 0,
+    steps: sortedSteps,
+    dailySteps,
+  };
+
+  return { modifiedDraft, summaryChange };
 }
 
 export function analyzeConversationAndCatalogue(
@@ -411,7 +562,9 @@ export function analyzeConversationAndCatalogue(
   history: AssistantChatHistoryItem[],
   isSignedIn: boolean,
   locale: LocaleCode,
-  extraPublishedItems?: CatalogueItem[]
+  extraPublishedItems?: CatalogueItem[],
+  activeDraft?: AssistantDraftItinerary | null,
+  systemSettings?: { maxVisitsCityChangeDay?: number; maxVisitsSameCityDay?: number; dossierFeeXof?: number }
 ): ConversationAnalysis {
   const norm = normalizeText(rawMessage);
   const words = norm.split(' ').filter(Boolean);
@@ -461,6 +614,22 @@ export function analyzeConversationAndCatalogue(
       norm
     );
 
+  // Check if user is confirming a spontaneous draft proposal: last assistant message asked "Voulez-vous que je les génère ?" and user replied yes
+  const lastAssistantMsg = [...history].reverse().find((h) => h.role === 'assistant')?.content || '';
+  const hadAssistantProposal =
+    /\b(voulez vous que je les genere|preparer votre dossier de voyage|generer votre dossier|dossier de voyage et votre agenda)\b/i.test(lastAssistantMsg);
+  const isConfirmingDraftProposal =
+    hadAssistantProposal &&
+    /\b(oui|ok|vas y|vas-y|volontiers|d accord|d'accord|avec plaisir|genere|prepare|fais le|go|yes|yep|veux bien|je veux)\b/i.test(norm);
+
+  const isDirectGenerationRequest =
+    /\b(genere|generer|prepare|preparer|cree|creer|bâtir|construire|fais moi|fais-moi)\b/i.test(norm) &&
+    /\b(dossier|agenda|itineraire|programme|brouillon)\b/i.test(norm);
+
+  const isModifyingActiveDraft =
+    Boolean(activeDraft) &&
+    /\b(remplace|remplacer|change|changer|ajoute|ajouter|retire|retirer|supprime|supprimer|enleve|enlever|modifie|modifier|adapte|adapter)\b/.test(norm);
+
   const dayMatch = norm.match(/\b(\d{1,2})\s*(jours|jour|j|nuits|nuit)\b/);
   const requestedDays = dayMatch ? Math.min(14, Math.max(2, Number(dayMatch[1]))) : null;
 
@@ -474,6 +643,8 @@ export function analyzeConversationAndCatalogue(
     : null;
 
   const isItineraryRequest =
+    isConfirmingDraftProposal ||
+    isDirectGenerationRequest ||
     /\b(itineraire|programme|circuit|planifier|organiser mon sejour|organise moi|prepare moi|preparer mon voyage|brouillon)\b/.test(
       norm
     ) || Boolean(requestedDays && requestedDays >= 2);
@@ -539,7 +710,7 @@ export function analyzeConversationAndCatalogue(
     intent = 'emergency_info';
   } else if (isFormalitiesInfo) {
     intent = 'formalities_info';
-  } else if (isItineraryRequest) {
+  } else if (isItineraryRequest || isModifyingActiveDraft) {
     intent = 'itinerary_request';
   } else if (isCapabilities) {
     intent = 'capabilities';
@@ -621,16 +792,32 @@ export function analyzeConversationAndCatalogue(
     dataOrigin: it.dataOrigin,
   }));
 
-  const draftItinerary =
-    intent === 'itinerary_request' && requestedDays
-      ? buildRealDraftItinerary({
-          daysCount: requestedDays,
-          travelersCount: requestedTravelers || (mentionsFamily ? 4 : 2),
-          preferredCities: allMentionedCities.length > 0 ? allMentionedCities : undefined,
-          prefersNorth,
-          extraPublishedItems,
-        })
-      : null;
+  let historyDays: number | null = null;
+  for (const h of history) {
+    if (h.role === 'user') {
+      const hNorm = normalizeText(h.content);
+      const hMatch = hNorm.match(/\b(\d{1,2})\s*(jours|jour|j|nuits|nuit)\b/);
+      if (hMatch && !historyDays) historyDays = Number(hMatch[1]);
+    }
+  }
+  const effectiveDays = requestedDays || historyDays || 3;
+
+  let draftItinerary: AssistantDraftItinerary | null = null;
+  if (isModifyingActiveDraft && activeDraft) {
+    const mod = modifyDraftItinerary(activeDraft, rawMessage, extraPublishedItems);
+    draftItinerary = mod.modifiedDraft;
+  } else if (isConfirmingDraftProposal || isDirectGenerationRequest) {
+    draftItinerary = buildRealDraftItinerary({
+      daysCount: effectiveDays,
+      travelersCount: requestedTravelers || (mentionsFamily ? 4 : 2),
+      preferredCities: allMentionedCities.length > 0 ? allMentionedCities : undefined,
+      prefersNorth,
+      maxVisitsCityChangeDay: systemSettings?.maxVisitsCityChangeDay,
+      maxVisitsSameCityDay: systemSettings?.maxVisitsSameCityDay,
+      dossierFeeXof: systemSettings?.dossierFeeXof,
+      extraPublishedItems,
+    });
+  }
 
   const suggestedActions: AssistantQuickAction[] = [];
   if (draftItinerary) {
@@ -675,8 +862,18 @@ export function analyzeConversationAndCatalogue(
     !draftItinerary &&
     Boolean(
       (allMentionedCities.length > 0 && (requestedDays || requestedTravelers)) ||
-        (requestedDays && requestedTravelers)
+        (requestedDays && requestedTravelers) ||
+        (requestedDays && requestedDays >= 2) ||
+        isItineraryRequest
     );
+
+  // Spontaneous quick action when ready to propose draft
+  if (readyToProposeDraft) {
+    suggestedActions.unshift({
+      kind: 'generate_draft',
+      label: locale === 'en' ? 'Yes, generate my draft and agenda' : 'Oui, générer mon dossier et mon agenda',
+    });
+  }
 
   // Bloc 4.1: Fast local answer path (0-5 ms!) for frequent / deterministic intents
   const hasTriggerToken = /trigger_secret_error/i.test(rawMessage);
@@ -716,6 +913,7 @@ export function analyzeConversationAndCatalogue(
     draftItinerary,
     noRestaurantInRequestedCity,
     readyToProposeDraft,
+    canOfferFolderGeneration: readyToProposeDraft,
   };
 }
 
@@ -776,8 +974,9 @@ export function buildConversationalSystemPrompt(params: {
     return `You are AMARO, warm, concise travel counselor for Benin on AMARO.VOYAGE.
 Rules:
 1. Reply in 60-120 words max, natural and warm. Ask at most 1-2 short clarifying questions (dates/duration, travelers, travel intention) before proposing a draft itinerary.
-2. Cite ONLY the prefiltered real items below. Distinguish "Partenaire AMARO" from "Recensé, non vérifié" and known prices from "price on request". Never invent prices or availability.
-3. Mention that exploration and itinerary drafts are free, while sending real availability requests requires opening a dossier (20,000 XOF deductible from the confirmed stay).
+2. If the user mentions cities, duration or travelers count, spontaneously offer: "I can prepare your travel folder and agenda. Would you like me to generate them?"
+3. Cite ONLY the prefiltered real items below. Distinguish "Partenaire AMARO" from "Recensé, non vérifié" and known prices from "price on request". Never invent prices or availability.
+4. Mention that exploration and itinerary drafts are free, while sending real availability requests requires opening a dossier (20,000 XOF deductible from the confirmed stay).
 ${catalogueBlock}
 ${folderBlock}`;
   }
@@ -785,8 +984,9 @@ ${folderBlock}`;
   return `Tu es AMARO, conseiller voyage humain, attentif et concis d’AMARO.VOYAGE au Bénin.
 Règles strictes :
 1. Réponds en 60 à 130 mots maximum. Pour construire un séjour, pose 1 ou 2 questions courtes (durée/dates, voyageurs, intention du voyage : découverte, repos, retour aux racines, famille).
-2. Cite UNIQUEMENT les fiches réelles ci-dessous en distinguant « Partenaire AMARO » (prioritaire) et « Recensé, non vérifié », ainsi que tarifs connus et « tarif sur demande ». N’invente jamais de prix ni de disponibilité.
-3. Rappelle sobrement si pertinent que le brouillon est gratuit et que l’envoi des demandes réelles passe par l’ouverture d’un dossier (20 000 FCFA déductibles du séjour confirmé).
+2. Dès que la destination, la durée ou le nombre de voyageurs est abordé, propose spontanément : « Je peux préparer votre dossier de voyage et votre agenda. Voulez-vous que je les génère ? »
+3. Cite UNIQUEMENT les fiches réelles ci-dessous en distinguant « Partenaire AMARO » (prioritaire) et « Recensé, non vérifié », ainsi que tarifs connus et « tarif sur demande ». N’invente jamais de prix ni de disponibilité.
+4. Rappelle sobrement si pertinent que le brouillon est gratuit et que l’envoi des demandes réelles passe par l’ouverture d’un dossier (20 000 FCFA déductibles du séjour confirmé).
 ${catalogueBlock}
 ${folderBlock}`;
 }

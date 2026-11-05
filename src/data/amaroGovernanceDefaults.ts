@@ -492,4 +492,16 @@ export const DEFAULT_PLATFORM_CONTENT: Record<string, PlatformContentDoc> = {
     }),
     body: `Objectifs par période : ${OWNER_PLACEHOLDER}.`,
   },
+  numeros_urgence_benin: {
+    id: 'numeros_urgence_benin',
+    slug: 'numeros-urgence-benin',
+    title: 'Numéros d’urgence officiels Bénin (5.5)',
+    version: '1.0',
+    isProvisional: true,
+    ownerValidated: false,
+    updatedBy: 'system_default',
+    updatedAtIso: '2026-11-02T00:00:00.000Z',
+    structuredJson: JSON.stringify(DEFAULT_EMERGENCY_NUMBERS_BJ),
+    body: `Liste unique des numéros d’urgence au Bénin avec source et date de vérification (${OWNER_PLACEHOLDER} tant que non confirmé).`,
+  },
 };

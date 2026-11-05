@@ -594,6 +594,11 @@ export interface AssistantDraftStep {
   estimatedCostXof: number;
   isFreeTimeBlock?: boolean;
   notes: string;
+  day?: number;
+  priceAmount?: number;
+  isPartnerVerified?: boolean;
+  providerId?: string;
+  hasPriceToVerify?: boolean;
 }
 
 export interface AssistantDraftItinerary {
@@ -603,11 +608,16 @@ export interface AssistantDraftItinerary {
   daysCount: number;
   travelersCount: number;
   cities: string[];
+  preferredCities?: string[];
   intentionSummary: string;
+  summary?: string;
   knownBudgetXof: number;
+  estimatedTotalXof?: number;
   onRequestCount: number;
+  hasPriceToVerify?: boolean;
   dossierFeeNextStepXof: number;
   steps: AssistantDraftStep[];
+  dailySteps?: AssistantDraftStep[];
 }
 
 // ===========================================================================
@@ -894,7 +904,9 @@ export type OfferKind =
   | 'transfer'
   | 'intercity_bus'
   | 'meal_formula'
+  | 'table_formula'
   | 'visit_formula'
+  | 'guided_visit'
   | 'guide_translation'
   | 'wellness_care'
   | 'other_service';
@@ -936,6 +948,7 @@ export interface ProviderOfferDoc {
   seats?: number | null;
   transmission?: 'manuelle' | 'automatique' | 'non précisé';
   driverOption?: 'with_driver' | 'without_driver' | 'both' | 'unspecified';
+  withDriver?: boolean;
   rentalDurationLabel?: string;
   depositInfo?: string;
   fuelPolicy?: string;
@@ -948,6 +961,7 @@ export interface ProviderOfferDoc {
   languages?: string[];
   durationLabel?: string;
   formulaType?: string;
+  coverageZone?: string;
 }
 
 export interface SelectedOfferLine {
@@ -1021,6 +1035,8 @@ export interface CensusListingDoc {
   priceVerifyReason?: string;
   photoStatus: 'photo_to_provide';
   confidenceLevel: OfferConfidenceLevel;
+  sourceUrl?: string;
+  consultedAt?: string;
   sources: CensusSourceRef[];
   rejectedSourcesNotes?: string[];
   offers: ProviderOfferDoc[];

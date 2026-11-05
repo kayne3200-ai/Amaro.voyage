@@ -185,7 +185,7 @@ export function ExplorerView({
   onOpenLegalDoc,
   externalJump,
 }: ExplorerViewProps) {
-  const t = TRANSLATIONS[locale];
+  const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
   const allowDemoData = Boolean(countrySetting?.includeDemoData);
 
   const [space, setSpace] = useState<ExplorerSpace>('overview');

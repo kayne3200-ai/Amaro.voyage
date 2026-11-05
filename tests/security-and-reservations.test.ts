@@ -33,11 +33,16 @@ import {
   redactSecrets,
   type TokenVerifierFn,
 } from '../src/server/securityMiddleware';
-import { INITIAL_BENIN_WEB_CENSUS_RECORDS } from '../src/data/beninWebCensusSeed';
+import {
+  BENIN_WEB_CENSUS_SEED,
+  INITIAL_BENIN_WEB_CENSUS_RECORDS,
+} from '../src/data/beninWebCensusSeed';
 import {
   CIRCUIT_A_HONEST_AVAILABILITY_TEXT,
   GENERIC_FALLBACK_ROOM_LABEL,
+  classifyCensusCandidateAgainstCatalogue,
 } from '../src/lib/offerEngine';
+import { BENIN_PUBLIC_DIRECTORY } from '../src/data/amaroRegistry';
 import type {
   AccountGovernanceDoc,
   CensusListingDoc,
@@ -2193,7 +2198,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     }
   });
 
-  it('14. Journey Brain (Parties 8 & 9) : autorise jusqu’à 3 visites même ville, autorise trajet + hôtel le jour d’un changement de ville sans visite, et autorise un VTC urbain ponctuel (Yango/Gozem) en parallèle du loueur principal', async () => {
+  it('14. R1 & Journey Brain : règle stricte des visites (1 visite max en plus du trajet un jour de changement de ville, 2 visites max par jour dans une même ville) et compatibilité VTC urbain ponctuel (Yango/Gozem) en parallèle du loueur principal', async () => {
     store.reset();
 
     // 14a. Relocation day: transport in Cotonou + hotel check-in in Ouidah -> ALLOWED (valid=true), but adding a tourist site visit on that relocation day -> BLOCKED (valid=false)
@@ -4135,4 +4140,245 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(admBody.offer.originSource, 'admin');
     assert.equal(admBody.offer.history.length, 2);
   });
+
+  it('34. R1 — Paramètres dynamiques Journey Brain modifiables par l’administrateur (maxVisitsCityChangeDay et maxVisitsSameCityDay, valeurs par défaut 1 et 2)', async () => {
+    store.reset();
+
+    // 34a. Verify default behavior: 1 visit allowed on transfer day, 2nd blocked
+    const defaultTransferVisitRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'trans-avis-berline-cotonou',
+            category: 'transport',
+            cityId: 'cotonou',
+            date: '2026-12-01',
+            startTime: '08:00',
+            endTime: '11:00',
+            durationMinutes: 180,
+          },
+          {
+            serviceId: 'acc-casa-del-papa-ouidah',
+            category: 'accommodation',
+            cityId: 'ouidah',
+            date: '2026-12-01',
+            startTime: '12:00',
+            endTime: '14:00',
+            durationMinutes: 120,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-temple-des-pythons',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-01',
+          startTime: '15:00',
+          endTime: '16:00',
+          durationMinutes: 60,
+        },
+      }),
+    });
+    assert.equal(defaultTransferVisitRes.status, 200);
+    const defaultTransferBody: any = await defaultTransferVisitRes.json();
+    assert.equal(defaultTransferBody.valid, true);
+
+    // 34b. Administrator configures stricter rule: maxVisitsCityChangeDay = 0 (no visits on relocation days)
+    store.settings.set('BJ', {
+      countryCode: 'BJ',
+      commissionPercent: 10,
+      serviceFeeFlat: 1000,
+      taxPercent: 18,
+      currency: 'XOF',
+      maxVisitsCityChangeDay: 0,
+      maxVisitsSameCityDay: 2,
+    });
+
+    const strictTransferVisitRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        existingItems: [
+          {
+            serviceId: 'trans-avis-berline-cotonou',
+            category: 'transport',
+            cityId: 'cotonou',
+            date: '2026-12-01',
+            startTime: '08:00',
+            endTime: '11:00',
+            durationMinutes: 180,
+          },
+          {
+            serviceId: 'acc-casa-del-papa-ouidah',
+            category: 'accommodation',
+            cityId: 'ouidah',
+            date: '2026-12-01',
+            startTime: '12:00',
+            endTime: '14:00',
+            durationMinutes: 120,
+          },
+        ],
+        candidate: {
+          serviceId: 'site-ouidah-temple-des-pythons',
+          category: 'site',
+          cityId: 'ouidah',
+          date: '2026-12-01',
+          startTime: '15:00',
+          endTime: '16:00',
+          durationMinutes: 60,
+        },
+      }),
+    });
+    assert.equal(strictTransferVisitRes.status, 200);
+    const strictTransferBody: any = await strictTransferVisitRes.json();
+    assert.equal(strictTransferBody.valid, false);
+    assert.match(strictTransferBody.conflicts.join(' '), /changement de ville/i);
+  });
+
+  it('35. R3 — Détection des doublons du recensement (tokens de marque, téléphones, domaines) classant exactement 5 fiches du Lot 1 en doublons_possibles', async () => {
+    // Les 21 fiches candidates du Lot 1 examinées pour doublons (hors mises à jour et incomplètes)
+    const lot1Candidates = INITIAL_BENIN_WEB_CENSUS_RECORDS.slice(0, 25).filter((r) =>
+      ['to_validate', 'possible_duplicate'].includes(r.status)
+    );
+    assert.equal(lot1Candidates.length, 21);
+
+    const catalogueSimplified = BENIN_PUBLIC_DIRECTORY.map((d) => ({
+      id: d.id,
+      title: d.title,
+      cityId: d.cityId,
+      category: d.category,
+      contactPhone: d.contactPhone,
+      sourceUrl: d.sourceUrl,
+      websiteUrl: d.websiteUrl,
+    }));
+
+    const results = lot1Candidates.map((rec) => ({
+      rec,
+      classification: classifyCensusCandidateAgainstCatalogue(rec, catalogueSimplified),
+    }));
+
+    const possibleDuplicates = results.filter((r) => r.classification.status === 'possible_duplicate');
+    const toValidate = results.filter((r) => r.classification.status === 'to_validate');
+
+    assert.equal(possibleDuplicates.length, 5);
+    assert.equal(toValidate.length, 16);
+
+    const dupIds = possibleDuplicates.map((d) => d.rec.id).sort();
+    assert.deepEqual(dupIds, [
+      'cens-bj-acc-auberge-dassa-zoume',
+      'cens-bj-acc-hotel-germain-ganvie',
+      'cens-bj-rest-centre-songhai-porto-novo',
+      'cens-bj-site-ecobenin-circuits',
+      'cens-bj-trans-att-autocar-interurbain',
+    ]);
+  });
+
+  it('36. R5 — Assistant IA : proposition spontanée exacte, génération directe sur « oui », modification du brouillon et streaming SSE', async () => {
+    store.reset();
+    const testHeaders = {
+      'Content-Type': 'application/json',
+      'x-forwarded-for': '198.51.100.136',
+    };
+
+    // 36a. Spontaneous proposal question exact copy when user asks for advice without explicitly asking to build
+    const adviseRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+      method: 'POST',
+      headers: testHeaders,
+      body: JSON.stringify({
+        message: 'Bonjour, je souhaite voyager 3 jours entre Cotonou et Ouidah avec un budget modéré.',
+        history: [],
+        locale: 'fr',
+      }),
+    });
+    assert.equal(adviseRes.status, 200);
+    const adviseBody: any = await adviseRes.json();
+    assert.equal(adviseBody.canOfferFolderGeneration, true);
+    assert.match(
+      adviseBody.reply,
+      /Je peux préparer votre dossier de voyage et votre agenda\. Voulez-vous que je les génère \?/
+    );
+
+    // 36b. User replies "oui" -> generates full draft itinerary based on real catalogue items
+    const generateRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+      method: 'POST',
+      headers: testHeaders,
+      body: JSON.stringify({
+        message: 'Oui, je veux bien que vous les prépariez.',
+        history: [
+          { role: 'user', content: 'Bonjour, je souhaite voyager 3 jours entre Cotonou et Ouidah.' },
+          {
+            role: 'assistant',
+            content: 'Je peux préparer votre dossier de voyage et votre agenda. Voulez-vous que je les génère ?',
+          },
+        ],
+        locale: 'fr',
+      }),
+    });
+    assert.equal(generateRes.status, 200);
+    const genBody: any = await generateRes.json();
+    assert.ok(genBody.draftItinerary);
+    assert.equal(genBody.draftItinerary.daysCount, 3);
+    assert.ok(genBody.draftItinerary.dailySteps.length > 0);
+    assert.ok(genBody.draftItinerary.estimatedTotalXof > 0);
+
+    // 36c. Modify active draft through conversation
+    const modifyRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+      method: 'POST',
+      headers: testHeaders,
+      body: JSON.stringify({
+        message: 'Pouvez-vous ajouter une étape à Ouidah le jour 2 ?',
+        history: [],
+        activeDraft: genBody.draftItinerary,
+        locale: 'fr',
+      }),
+    });
+    assert.equal(modifyRes.status, 200);
+    const modBody: any = await modifyRes.json();
+    assert.ok(modBody.draftItinerary);
+
+    // 36d. SSE streaming endpoint verification
+    const sseRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+      method: 'POST',
+      headers: { ...testHeaders, 'x-forwarded-for': '198.51.100.137' },
+      body: JSON.stringify({
+        message: 'Quelles sont les villes principales du Bénin ?',
+        history: [],
+        locale: 'fr',
+        stream: true,
+      }),
+    });
+    assert.equal(sseRes.status, 200);
+    assert.match(sseRes.headers.get('content-type') || '', /text\/event-stream/);
+    const sseText = await sseRes.text();
+    assert.match(sseText, /event: token/);
+    assert.match(sseText, /event: result/);
+  });
+
+  it('37. R8 — Recensement Lot 2 : 17 fiches réelles sourcées en attente de validation propriétaire, non publiées au catalogue et sans aucun doublon créé', async () => {
+    // 37a. Lot 1 (25 fiches initiales dont 21 candidates) + Lot 2 (17 fiches) = 42 fiches de recensement
+    assert.equal(BENIN_WEB_CENSUS_SEED.length, 42);
+
+    const lot2Records = BENIN_WEB_CENSUS_SEED.filter((r) => r.id.startsWith('cens-bj-lot2-'));
+    assert.equal(lot2Records.length, 17);
+
+    // 37b. All Lot 2 records have valid public sources and are unpublished (to_validate or possible_duplicate)
+    for (const rec of lot2Records) {
+      const srcUrl = rec.sourceUrl || (rec.sources && rec.sources[0]?.url);
+      const consAt = rec.consultedAt || (rec.sources && rec.sources[0]?.consultedAt);
+      assert.ok(srcUrl && srcUrl.startsWith('http'));
+      assert.ok(consAt);
+      assert.ok(['to_validate', 'possible_duplicate', 'proposed_update', 'incomplete'].includes(rec.status));
+      assert.notEqual(rec.status, 'published');
+      assert.equal(rec.publishedServiceId, undefined);
+    }
+
+    // 37c. Active catalogue has exactly 175 real sheets (172 third-party + 3 AMARO assistance), none of Lot 2 published
+    assert.equal(BENIN_PUBLIC_DIRECTORY.length, 175);
+    const activeIds = new Set(BENIN_PUBLIC_DIRECTORY.map((d) => d.id));
+    for (const rec of lot2Records) {
+      assert.equal(activeIds.has(rec.id), false);
+    }
+  });
 });
+

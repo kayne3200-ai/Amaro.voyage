@@ -36,6 +36,8 @@ interface AssistantRescueViewProps {
   locale: LocaleCode;
   activeFolder: JourneyFolderDoc | null;
   folderItems: JourneyItemDoc[];
+  sessionDraft?: AssistantDraftItinerary | null;
+  onUpdateSessionDraft?: (draft: AssistantDraftItinerary | null) => void;
   isSignedIn?: boolean;
   clientDisplayName?: string;
   emergencyNumbers?: EmergencyNumberEntry[];
@@ -80,6 +82,8 @@ export function AssistantRescueView({
   locale,
   activeFolder,
   folderItems,
+  sessionDraft,
+  onUpdateSessionDraft,
   isSignedIn,
   clientDisplayName,
   emergencyNumbers = DEFAULT_EMERGENCY_NUMBERS_BJ,
@@ -93,6 +97,10 @@ export function AssistantRescueView({
   const [inputPrompt, setInputPrompt] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [isApplyingDraft, setIsApplyingDraft] = useState<boolean>(false);
+  const [activeDraftState, setActiveDraftState] = useState<AssistantDraftItinerary | null>(
+    sessionDraft || null
+  );
+
   const [messages, setMessages] = useState<ChatTurn[]>(() => {
     try {
       const saved = sessionStorage.getItem(SESSION_CHAT_KEY);
@@ -108,6 +116,7 @@ export function AssistantRescueView({
 
   // Dynamic Rescue incident form state
   const [incidentType, setIncidentType] = useState<string>('retard_vol_transport');
+  const [incidentStepId, setIncidentStepId] = useState<string>('');
   const [incidentCity, setIncidentCity] = useState<string>(
     activeFolder?.primaryCityId || 'cotonou'
   );
@@ -128,6 +137,12 @@ export function AssistantRescueView({
   } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (sessionDraft) {
+      setActiveDraftState(sessionDraft);
+    }
+  }, [sessionDraft]);
 
   useEffect(() => {
     try {
@@ -158,8 +173,11 @@ export function AssistantRescueView({
   const handleResetConversation = () => {
     const fresh = [makeInitialWelcome(locale)];
     setMessages(fresh);
+    setActiveDraftState(null);
+    onUpdateSessionDraft?.(null);
     try {
       sessionStorage.removeItem(SESSION_CHAT_KEY);
+      sessionStorage.removeItem(PENDING_ASSISTANT_DRAFT_KEY);
     } catch {
       // ignore
     }
@@ -168,31 +186,35 @@ export function AssistantRescueView({
   const handleGenerateOrApplyDraft = async (existingDraft?: AssistantDraftItinerary) => {
     setIsApplyingDraft(true);
     try {
-      let draft = existingDraft;
+      let draft = existingDraft || activeDraftState;
       if (!draft) {
         const res = await authorizedFetch('/api/amaro/assistant/generate-draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            cityId: activeFolder?.primaryCityId || 'cotonou',
+            preferredCities: activeFolder?.primaryCityId ? [activeFolder.primaryCityId] : ['cotonou', 'ouidah'],
             daysCount: 3,
             travelersCount: activeFolder?.travelersCount || 2,
           }),
         });
         if (res.ok) {
           const body = await res.json();
-          draft = body.draft as AssistantDraftItinerary;
+          draft = (body.draftItinerary || body.draft) as AssistantDraftItinerary;
         }
       }
       if (!draft) return;
 
+      setActiveDraftState(draft);
+      onUpdateSessionDraft?.(draft);
+      try {
+        sessionStorage.setItem(PENDING_ASSISTANT_DRAFT_KEY, JSON.stringify(draft));
+      } catch {
+        // ignore
+      }
+
       if (!isSignedIn) {
-        try {
-          sessionStorage.setItem(PENDING_ASSISTANT_DRAFT_KEY, JSON.stringify(draft));
-        } catch {
-          // ignore
-        }
-        onRequireSignIn?.();
+        // Allow unauthenticated preview directly in Journey Hub without hard blocking
+        onOpenJourney?.();
         return;
       }
 
@@ -207,8 +229,8 @@ export function AssistantRescueView({
   };
 
   const handleTriggerQuickAction = (action: AssistantQuickAction, turnDraft?: AssistantDraftItinerary) => {
-    if (action.kind === 'generate_draft_folder') {
-      void handleGenerateOrApplyDraft(turnDraft);
+    if (action.kind === 'generate_draft' || action.kind === 'generate_draft_folder') {
+      void handleGenerateOrApplyDraft(turnDraft || activeDraftState || undefined);
     } else if (action.kind === 'explore_benin') {
       onOpenExplorer?.();
     } else if (action.kind === 'filter_city') {
@@ -268,6 +290,7 @@ export function AssistantRescueView({
             }
           : null;
 
+      const assistantMsgId = `${Date.now()}-a`;
       const res = await authorizedFetch('/api/amaro/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -276,8 +299,100 @@ export function AssistantRescueView({
           history: priorHistory,
           locale,
           journeyContext,
+          activeDraft: activeDraftState || sessionDraft || null,
+          stream: true,
         }),
       });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let streamedContent = '';
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantMsgId,
+            role: 'assistant',
+            content: '',
+            timestamp: new Date().toLocaleTimeString('fr-FR', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          },
+        ]);
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+
+          for (const block of parts) {
+            const lines = block.split('\n');
+            let event = 'message';
+            let dataStr = '';
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                event = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                dataStr = line.slice(6).trim();
+              }
+            }
+            if (!dataStr) continue;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (event === 'token' && parsed.text) {
+                streamedContent += parsed.text;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsgId ? { ...m, content: streamedContent } : m
+                  )
+                );
+              } else if (event === 'result') {
+                if (parsed.draftItinerary) {
+                  setActiveDraftState(parsed.draftItinerary);
+                  onUpdateSessionDraft?.(parsed.draftItinerary);
+                  try {
+                    sessionStorage.setItem(
+                      PENDING_ASSISTANT_DRAFT_KEY,
+                      JSON.stringify(parsed.draftItinerary)
+                    );
+                  } catch {
+                    // ignore
+                  }
+                }
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsgId
+                      ? {
+                          ...m,
+                          content: parsed.reply || streamedContent,
+                          suggestedItems: Array.isArray(parsed.suggestedItems)
+                            ? parsed.suggestedItems
+                            : undefined,
+                          suggestedActions: Array.isArray(parsed.suggestedActions)
+                            ? parsed.suggestedActions
+                            : undefined,
+                          draftItinerary: parsed.draftItinerary || undefined,
+                          canOfferFolderGeneration: Boolean(
+                            parsed.canOfferFolderGeneration
+                          ),
+                        }
+                      : m
+                  )
+                );
+              }
+            } catch {
+              // ignore parse errors on partial frames
+            }
+          }
+        }
+        return;
+      }
 
       let data: any = null;
       try {
@@ -295,7 +410,7 @@ export function AssistantRescueView({
         setMessages((prev) => [
           ...prev,
           {
-            id: `${Date.now()}-a`,
+            id: assistantMsgId,
             role: 'assistant',
             content: politeFallback,
             timestamp: new Date().toLocaleTimeString('fr-FR', {
@@ -307,10 +422,23 @@ export function AssistantRescueView({
         return;
       }
 
+      if (data.draftItinerary) {
+        setActiveDraftState(data.draftItinerary);
+        onUpdateSessionDraft?.(data.draftItinerary);
+        try {
+          sessionStorage.setItem(
+            PENDING_ASSISTANT_DRAFT_KEY,
+            JSON.stringify(data.draftItinerary)
+          );
+        } catch {
+          // ignore
+        }
+      }
+
       setMessages((prev) => [
         ...prev,
         {
-          id: `${Date.now()}-a`,
+          id: assistantMsgId,
           role: 'assistant',
           content: String(data.reply),
           timestamp: new Date().toLocaleTimeString('fr-FR', {
@@ -461,6 +589,33 @@ export function AssistantRescueView({
           </div>
 
           <form onSubmit={(e) => void handleReportIncident(e)} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {folderItems.length > 0 && (
+              <div className="sm:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Étape concernée de votre voyage (optionnel) :
+                </label>
+                <select
+                  value={incidentStepId}
+                  onChange={(e) => {
+                    const stepId = e.target.value;
+                    setIncidentStepId(stepId);
+                    const found = folderItems.find((it) => it.id === stepId);
+                    if (found) {
+                      if (found.cityId) setIncidentCity(found.cityId);
+                      if (found.category) setIncidentCategory(found.category);
+                    }
+                  }}
+                  className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                >
+                  <option value="">Sélectionner une étape de l’agenda (ou saisir librement ci-dessous)</option>
+                  {folderItems.map((it) => (
+                    <option key={it.id} value={it.id}>
+                      {it.date ? `${it.date} · ` : ''}{it.serviceTitle} ({it.cityId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <select
               value={incidentType}
               onChange={(e) => setIncidentType(e.target.value)}

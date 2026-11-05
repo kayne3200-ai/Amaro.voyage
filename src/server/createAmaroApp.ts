@@ -3918,6 +3918,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       ? req.body.preferredCities
       : Array.isArray(req.body?.cityIds)
       ? req.body.cityIds
+      : req.body?.cityId
+      ? [String(req.body.cityId)]
       : ['cotonou', 'ouidah'];
     const rawCities: string[] = rawCitiesInput.map(String).slice(0, 6);
     const daysCount = Math.max(2, Math.min(14, Number(req.body?.daysCount || 4)));
@@ -3933,15 +3935,19 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     const rawStart = String(req.body?.startDateIso || req.body?.startDate || '').trim();
     const startDateIso = isValidIsoDate(rawStart) ? rawStart : undefined;
 
+    const bjSetting = await store.getSystemSetting('BJ').catch(() => null);
+
     const draft = buildRealDraftItinerary({
       preferredCities: rawCities,
       daysCount,
       travelersCount,
       intentionSummary,
       startDateIso,
-      dossierFeeXof: 20_000,
+      maxVisitsCityChangeDay: bjSetting?.maxVisitsCityChangeDay,
+      maxVisitsSameCityDay: bjSetting?.maxVisitsSameCityDay,
+      dossierFeeXof: bjSetting?.dossierFeeXof ?? 20_000,
     });
-    res.json({ ok: true, draftItinerary: draft });
+    res.json({ ok: true, draftItinerary: draft, draft });
   });
 
   app.post('/api/amaro/assistant', async (req: Request, res: Response) => {
@@ -3974,6 +3980,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     const prompt = String(req.body?.message ?? '').trim();
     const locale: 'fr' | 'en' = req.body?.locale === 'en' ? 'en' : 'fr';
     const rawContext = req.body?.journeyContext ?? null;
+    const rawActiveDraft = req.body?.activeDraft && typeof req.body.activeDraft === 'object' && Array.isArray((req.body.activeDraft as any).steps)
+      ? (req.body.activeDraft as AssistantDraftItinerary)
+      : null;
+    const shouldStream = Boolean(req.body?.stream);
     const rawHistory: unknown[] = Array.isArray(req.body?.history)
       ? req.body.history.slice(-8)
       : [];
@@ -4012,15 +4022,41 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       serializedContext = JSON.stringify(rawContext).slice(0, 2_500);
     }
 
+    const bjSetting = await store.getSystemSetting('BJ').catch(() => null);
+
     const analysis = analyzeConversationAndCatalogue(
       prompt,
       cleanHistory,
       Boolean(verifiedUid),
-      locale
+      locale,
+      undefined,
+      rawActiveDraft,
+      {
+        maxVisitsCityChangeDay: bjSetting?.maxVisitsCityChangeDay,
+        maxVisitsSameCityDay: bjSetting?.maxVisitsSameCityDay,
+        dossierFeeXof: bjSetting?.dossierFeeXof ?? 20_000,
+      }
     );
 
+    const sendPayload = (payload: any) => {
+      if (shouldStream) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        // Progressive flush of the full text in realistic words
+        const words = String(payload.reply || '').split(' ');
+        for (const w of words) {
+          res.write(`event: token\ndata: ${JSON.stringify({ text: `${w} ` })}\n\n`);
+        }
+        res.write(`event: result\ndata: ${JSON.stringify(payload)}\n\n`);
+        res.end();
+      } else {
+        res.json(payload);
+      }
+    };
+
     if (analysis.intent === 'unclear_gibberish') {
-      res.json({
+      sendPayload({
         reply: buildResilientHumanReply(analysis, locale),
         suggestedItems: [],
         suggestedActions: analysis.suggestedActions,
@@ -4034,10 +4070,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       return;
     }
 
-    const cacheKey = `${locale}|${Boolean(verifiedUid)}|${prompt.toLowerCase()}|${cleanHistory.length}`;
+    const cacheKey = `${locale}|${Boolean(verifiedUid)}|${prompt.toLowerCase()}|${cleanHistory.length}|${Boolean(rawActiveDraft)}`;
     const cached = assistantResponseCache.get(cacheKey);
-    if (cached && Date.now() - cached.cachedAt < 10 * 60_000 && !deps.geminiResponder) {
-      res.json({
+    if (cached && Date.now() - cached.cachedAt < 10 * 60_000 && !deps.geminiResponder && !rawActiveDraft) {
+      sendPayload({
         reply: cached.reply,
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,
@@ -4055,16 +4091,20 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     // Bloc 4 fast path: deterministic catalogue / itinerary answers respond immediately (<15 ms) without waiting on external LLM latency
     if (analysis.canAnswerLocally && !deps.geminiResponder) {
       const fastReply = buildResilientHumanReply(analysis, locale);
-      assistantResponseCache.set(cacheKey, {
+      if (!rawActiveDraft) {
+        assistantResponseCache.set(cacheKey, {
+          reply: fastReply,
+          draftItinerary: analysis.draftItinerary,
+          cachedAt: Date.now(),
+        });
+      }
+      sendPayload({
         reply: fastReply,
-        draftItinerary: analysis.draftItinerary,
-        cachedAt: Date.now(),
-      });
-      res.json({
-        reply: fastReply,
+        canOfferFolderGeneration: analysis.canOfferFolderGeneration,
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,
         draftItinerary: analysis.draftItinerary,
+        draft: analysis.draftItinerary,
         activeCityId: analysis.activeCityId,
         activeCategory: analysis.activeCategory,
         latencyMs: Math.round(performance.now() - startedMs),
@@ -4090,11 +4130,19 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           history: cleanHistory,
         });
         const cleanReply = redactSecrets(reply).trim();
-        res.json({
-          reply: cleanReply || buildResilientHumanReply(analysis, locale),
+        const finalReply =
+          analysis.canOfferFolderGeneration &&
+          !cleanReply.includes('Je peux préparer votre dossier de voyage')
+            ? `${cleanReply}\n\nJe peux préparer votre dossier de voyage et votre agenda. Voulez-vous que je les génère ?`
+            : cleanReply || buildResilientHumanReply(analysis, locale);
+
+        sendPayload({
+          reply: finalReply,
+          canOfferFolderGeneration: analysis.canOfferFolderGeneration,
           suggestedItems: analysis.suggestedItems,
           suggestedActions: analysis.suggestedActions,
           draftItinerary: analysis.draftItinerary,
+          draft: analysis.draftItinerary,
           activeCityId: analysis.activeCityId,
           activeCategory: analysis.activeCategory,
           latencyMs: Math.round(performance.now() - startedMs),
@@ -4106,11 +4154,13 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
       const apiKey = process.env.GEMINI_API_KEY?.trim();
       if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        res.json({
+        sendPayload({
           reply: buildResilientHumanReply(analysis, locale),
+          canOfferFolderGeneration: analysis.canOfferFolderGeneration,
           suggestedItems: analysis.suggestedItems,
           suggestedActions: analysis.suggestedActions,
           draftItinerary: analysis.draftItinerary,
+          draft: analysis.draftItinerary,
           activeCityId: analysis.activeCityId,
           activeCategory: analysis.activeCategory,
           degradedFallback: true,
@@ -4141,6 +4191,49 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         },
       ];
 
+      // Streaming with Gemini API if requested
+      if (shouldStream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const streamResult = await ai.models.generateContentStream({
+          model: 'gemini-3.8-flash',
+          contents: multiTurnContents,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        });
+
+        let accumulated = '';
+        for await (const chunk of streamResult) {
+          const textChunk = chunk.text || '';
+          accumulated += textChunk;
+          res.write(`data: ${JSON.stringify({ type: 'chunk', delta: textChunk })}\n\n`);
+        }
+
+        const cleanAccumulated = redactSecrets(accumulated).trim() || buildResilientHumanReply(analysis, locale);
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'done',
+            payload: {
+              reply: cleanAccumulated,
+              suggestedItems: analysis.suggestedItems,
+              suggestedActions: analysis.suggestedActions,
+              draftItinerary: analysis.draftItinerary,
+              activeCityId: analysis.activeCityId,
+              activeCategory: analysis.activeCategory,
+              latencyMs: Math.round(performance.now() - startedMs),
+              model: 'gemini-3.8-flash',
+              generatedAt: new Date().toISOString(),
+            },
+          })}\n\n`
+        );
+        res.end();
+        return;
+      }
+
       // Low thinking latency + 3.2s deadline guard so traveler never waits >3.5s
       const response = await Promise.race([
         ai.models.generateContent({
@@ -4158,12 +4251,14 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
       const cleanText =
         redactSecrets(response.text || '').trim() || buildResilientHumanReply(analysis, locale);
-      assistantResponseCache.set(cacheKey, {
-        reply: cleanText,
-        draftItinerary: analysis.draftItinerary,
-        cachedAt: Date.now(),
-      });
-      res.json({
+      if (!rawActiveDraft) {
+        assistantResponseCache.set(cacheKey, {
+          reply: cleanText,
+          draftItinerary: analysis.draftItinerary,
+          cachedAt: Date.now(),
+        });
+      }
+      sendPayload({
         reply: cleanText,
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,
@@ -4175,7 +4270,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         generatedAt: new Date().toISOString(),
       });
     } catch {
-      res.json({
+      sendPayload({
         reply: buildResilientHumanReply(analysis, locale),
         suggestedItems: analysis.suggestedItems,
         suggestedActions: analysis.suggestedActions,

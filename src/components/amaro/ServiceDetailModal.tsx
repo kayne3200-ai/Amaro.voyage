@@ -140,7 +140,7 @@ export function ServiceDetailModal({
   }, [item, resolvedOffers]);
 
   if (!item) return null;
-  const t = TRANSLATIONS[locale];
+  const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
   const imgMeta = EDITORIAL_IMAGES[item.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
   const photoSrc = item.customPhotoUrl?.trim() ? item.customPhotoUrl.trim() : imgMeta.src;
   const isPhotoVerified = Boolean(item.photoVerified && item.customPhotoUrl?.trim());

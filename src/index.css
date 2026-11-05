@@ -26,19 +26,26 @@
 @media print {
   header,
   nav,
+  footer,
+  button:not(.print-keep),
   .no-print {
     display: none !important;
   }
 
+  html,
   body,
   main {
     background: #ffffff !important;
     color: #0f172a !important;
+    font-size: 11pt;
   }
 
   .print-logbook-sheet {
     border: 1px solid #cbd5e1 !important;
     box-shadow: none !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
     break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

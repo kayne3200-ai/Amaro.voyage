@@ -28,6 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AssistantDraftItinerary,
   CatalogueItem,
   CurrencyCode,
   FolderExpenseEntry,
@@ -219,6 +220,10 @@ interface JourneyHubViewProps {
       selectedOffers: Array<{ offerId: string; quantity: number }>;
     }
   ) => Promise<void>;
+  sessionDraft?: AssistantDraftItinerary | null;
+  onApplyAssistantDraft?: (draft: AssistantDraftItinerary) => Promise<void>;
+  onOpenExplorer?: (cityId?: string, category?: ServiceCategory, serviceId?: string) => void;
+  onOpenAssistant?: () => void;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
@@ -319,8 +324,12 @@ export function JourneyHubView({
   onSendProviderThankYou,
   providerOffers = [],
   onClientUpdateReservationOffers,
+  sessionDraft = null,
+  onApplyAssistantDraft,
+  onOpenExplorer,
+  onOpenAssistant,
 }: JourneyHubViewProps) {
-  const t = TRANSLATIONS[locale];
+  const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
 
   const [subTab, setSubTab] = useState<JourneySubTab>('agenda');
   const [lifecyclePhase, setLifecyclePhase] = useState<JourneyLifecyclePhase>('avant');
@@ -1035,6 +1044,89 @@ export function JourneyHubView({
   if (!isSignedIn) {
     return (
       <div className="max-w-4xl mx-auto px-4 md:px-8 py-12 pb-24 space-y-6">
+        {sessionDraft && (
+          <div className="p-6 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-slate-900 dark:to-slate-800 border-2 border-amber-300 dark:border-amber-700 rounded-2xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="px-2.5 py-1 rounded bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-200 text-xs font-bold uppercase tracking-wider">
+                Brouillon d’itinéraire conservé
+              </span>
+              <span className="font-mono text-xs text-slate-500">
+                {sessionDraft.preferredCities?.join(' · ') || 'Bénin'}
+              </span>
+            </div>
+            <div>
+              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                {sessionDraft.title}
+              </h2>
+              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+                {sessionDraft.summary}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
+                <span className="text-[11px] text-slate-500 block">Durée</span>
+                <strong className="font-mono text-sm">{sessionDraft.daysCount} jours</strong>
+              </div>
+              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
+                <span className="text-[11px] text-slate-500 block">Voyageurs</span>
+                <strong className="font-mono text-sm">{sessionDraft.travelersCount} pers.</strong>
+              </div>
+              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 sm:col-span-2">
+                <span className="text-[11px] text-slate-500 block">Budget estimé</span>
+                <strong className="font-mono text-sm text-teal-700 dark:text-teal-400">
+                  {formatMoney(sessionDraft.estimatedTotalXof || 0, 'XOF')}
+                </strong>
+                <span className="text-[10px] text-slate-400 block truncate">
+                  {sessionDraft.hasPriceToVerify ? 'Prix à vérifier inclus' : 'Frais de dossier déductibles'}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-2 pt-2 border-t border-amber-200 dark:border-slate-700">
+              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Programme proposé ({(sessionDraft.dailySteps || sessionDraft.steps || []).length} étapes réelles) :
+              </span>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                {(sessionDraft.dailySteps || sessionDraft.steps || []).map((st, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 rounded-lg bg-white/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-bold text-slate-900 dark:text-slate-100">
+                        Jour {st.day} ({st.cityId}) :
+                      </span>{' '}
+                      <span className="text-slate-700 dark:text-slate-300 truncate">
+                        {st.serviceTitle}
+                      </span>
+                    </div>
+                    <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      {st.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé, non vérifié'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={onRequireSignIn}
+                className="min-h-[44px] px-5 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+              >
+                Se connecter pour créer ce voyage dans mon dossier permanent
+              </button>
+              {onOpenAssistant && (
+                <button
+                  type="button"
+                  onClick={onOpenAssistant}
+                  className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                >
+                  Modifier par la conversation
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="p-6 sm:p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
           <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
             Espace Voyage Personnel Permanent · Carnet Électronique &amp; Budget Guardian (100 % Gratuit)
@@ -1248,7 +1340,14 @@ export function JourneyHubView({
                   ? countrySetting.supportWhatsappNumber
                   : '';
               const digits = rawWa.replace(/[^0-9]/g, '');
-              if (digits.length < 8) return null;
+              if (digits.length < 8) {
+                return (
+                  <span className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-500 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>WhatsApp support : {OWNER_PLACEHOLDER}</span>
+                  </span>
+                );
+              }
               return (
                 <a
                   href={`https://wa.me/${digits}?text=${encodeURIComponent(
@@ -2097,7 +2196,7 @@ export function JourneyHubView({
               </div>
             )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 tabular-nums">
               {[
                 {
                   label: '1. Estimées (agenda)',
@@ -2130,7 +2229,12 @@ export function JourneyHubView({
                   sub: 'Restituées',
                 },
                 {
-                  label: '7. Reste à payer',
+                  label: '7. Terrain (réel)',
+                  val: budgetBreakdown.realRecordedExpenses,
+                  sub: 'Dépenses sur place',
+                },
+                {
+                  label: '8. Reste à payer',
                   val: budgetBreakdown.remainingToPay,
                   sub:
                     budgetBreakdown.dossierFeeDeducted > 0
