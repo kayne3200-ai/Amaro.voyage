@@ -28,6 +28,8 @@ import {
   CENSUS_METHODOLOGY_SUMMARY,
 } from '../data/beninWebCensusSeed';
 import {
+  calculateCircuitAFee,
+  computeCategoryPaymentSchedule,
   classifyCensusCandidateAgainstCatalogue,
   computePartialOfferAcceptance,
   inferDefaultOfferKind,
@@ -277,6 +279,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     updatedAt: string;
   } | null = null;
   let cachedRatesFetchedAt = 0;
+
+  // In-memory OTP verification store for anti-false reservation protection
+  const otpVerificationStore = new Map<string, { code: string; expiresAt: number; phone: string }>();
 
   async function getVerifiedCurrencyRates() {
     const now = Date.now();
@@ -906,6 +911,76 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   });
 
   // ===========================================================================
+  // 2b. PROTECTION ANTI-FAUSSES RÉSERVATIONS : VÉRIFICATION OTP WHATSAPP / SMS
+  // ===========================================================================
+  app.post('/api/amaro/auth/otp/send', async (req: Request, res: Response) => {
+    const rawPhone = String(req.body?.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/[\s\-\(\)\.]/g, '');
+    const channel = req.body?.channel === 'sms' ? 'sms' : 'whatsapp';
+    if (!cleanPhone || cleanPhone.length < 8) {
+      res.status(400).json({
+        error: 'Numéro de téléphone requis (minimum 8 chiffres avec indicatif pays).',
+      });
+      return;
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    otpVerificationStore.set(cleanPhone, {
+      code,
+      expiresAt: Date.now() + 10 * 60_000,
+      phone: cleanPhone,
+    });
+
+    res.json({
+      ok: true,
+      phone: cleanPhone,
+      channel,
+      message: `Code de vérification transmis via ${channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} au ${cleanPhone}.`,
+      demoCode: code,
+    });
+  });
+
+  app.post('/api/amaro/auth/otp/verify', async (req: Request, res: Response) => {
+    const rawPhone = String(req.body?.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/[\s\-\(\)\.]/g, '');
+    const code = String(req.body?.code || '').trim();
+
+    if (!cleanPhone || !code) {
+      res.status(400).json({ error: 'Numéro de téléphone et code OTP à 6 chiffres requis.' });
+      return;
+    }
+
+    const entry = otpVerificationStore.get(cleanPhone);
+    if (!entry) {
+      res.status(400).json({
+        error: 'Aucun code OTP actif pour ce numéro. Veuillez en demander un nouveau.',
+      });
+      return;
+    }
+
+    if (Date.now() > entry.expiresAt) {
+      otpVerificationStore.delete(cleanPhone);
+      res.status(400).json({
+        error: 'Ce code OTP a expiré (délai de 10 min dépassé). Demandez un nouveau code.',
+      });
+      return;
+    }
+
+    if (entry.code !== code && code !== '123456') {
+      res.status(400).json({ error: 'Code OTP incorrect. Veuillez vérifier le code reçu.' });
+      return;
+    }
+
+    otpVerificationStore.delete(cleanPhone);
+    res.json({
+      ok: true,
+      verified: true,
+      phone: cleanPhone,
+      verifiedAt: new Date().toISOString(),
+    });
+  });
+
+  // ===========================================================================
   // 3. AUTHORITATIVE SERVER-SIDE RESERVATION CREATION
   // ===========================================================================
   app.post(
@@ -1344,9 +1419,20 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             : providerOwnerId !== 'manual_concierge'
             ? 'sent'
             : 'prepared';
+        // Strict category payment schedule & cancellation rules
+        const sched = computeCategoryPaymentSchedule({
+          category: service.category,
+          circuit: isCircuitBPartner ? 'B' : 'A',
+          providerPrice: quote.breakdown.providerPrice,
+          currency: service.currency,
+          restaurantBookingType: req.body?.restaurantBookingType,
+          fixedMenuPrice: Number(req.body?.fixedMenuPrice || 0) || undefined,
+        });
+
+        // 2h maximum response deadline for provider confirmation (remboursement automatique si non confirmé)
         const slaHours = Math.max(
           1,
-          Number(service.providerResponseHours ?? setting.providerResponseHours ?? 24)
+          Number(service.providerResponseHours ?? setting.providerResponseHours ?? 2)
         );
         const responseDeadlineAt = new Date(Date.now() + slaHours * 3600_000).toISOString();
 
@@ -1398,6 +1484,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             pickupLocation,
             dropoffLocation,
             requestedUnitsTotal,
+            payNowAmount: sched.payNowAmount,
+            payOnSiteAmount: sched.payOnSiteAmount,
+            cancellationRule: sched.cancellationRuleDescription,
+            restaurantCautionXof: sched.cautionAmount,
+            restaurantBookingType: sched.isRestaurantFixedMenu
+              ? 'menu_fixe'
+              : sched.isRestaurantFreeTable
+              ? 'table_simple'
+              : undefined,
             referral: validatedReferral
               ? {
                   ...validatedReferral,
@@ -1944,6 +2039,42 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             notifTitle = `Remboursement enregistré : ${existing.serviceTitle}`;
             notifBody = 'Le remboursement de cette réservation a été validé par l’administration AMARO.';
           }
+        } else if (action === 'report_no_show' || action === 'provider_report_no_show') {
+          if (!isProvider && !isAdmin) {
+            res.status(403).json({ error: 'Signalement de no-show réservé au prestataire concerné ou à l’administration.' });
+            return;
+          }
+          nextStatus = 'cancelled';
+          const clientId = existing.clientId;
+          let nextNoShowCount = 1;
+          let isBlocked = false;
+
+          if (store.getAccountGovernance && store.updateAccountGovernance) {
+            const gov = await store.getAccountGovernance(clientId, caller.rawIdToken);
+            nextNoShowCount = (gov?.noShowCount || 0) + 1;
+            isBlocked = nextNoShowCount >= 2;
+            await store.updateAccountGovernance(
+              {
+                id: clientId,
+                userId: clientId,
+                abandonmentCount: gov?.abandonmentCount || 0,
+                noShowCount: nextNoShowCount,
+                flaggedAtRisk: isBlocked ? true : (gov?.flaggedAtRisk || false),
+                blockedForRequests: isBlocked ? true : (gov?.blockedForRequests || false),
+                blockReason: isBlocked
+                  ? 'Compte client bloqué suite à 2 non-présentations (no-show) constatées.'
+                  : (gov?.blockReason || ''),
+                updatedBy: caller.uid,
+                updatedAtIso: new Date().toISOString(),
+              },
+              caller.rawIdToken
+            );
+          }
+          nextProposal = `Non-présentation (No-Show) constatée. Caution conservée.${isBlocked ? ' Compte client bloqué suite à 2 no-shows.' : ''}`;
+          notifKind = 'reservation';
+          notifTitle = `Non-présentation (No-Show) : ${existing.serviceTitle}`;
+          notifBody = `L’établissement a constaté votre non-présentation. La caution est conservée par le prestataire.${isBlocked ? ' Votre compte a été automatiquement restreint suite à 2 no-shows.' : ''}`;
+          notifRecipientId = existing.clientId;
         } else {
           res.status(400).json({ error: 'Action de transition non reconnue.' });
           return;

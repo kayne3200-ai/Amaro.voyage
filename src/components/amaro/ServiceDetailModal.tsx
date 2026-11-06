@@ -24,7 +24,7 @@ import type {
   StandingLevel,
   TravelerReviewDoc,
 } from '../../types/amaro';
-import { EDITORIAL_IMAGES } from '../../data/amaroRegistry';
+import { EDITORIAL_IMAGES, resolveItemEditorialImage } from '../../data/amaroRegistry';
 import { ACTIVATION_LEVEL_LABELS } from '../../data/pilotConventioningData';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { ListingTrustBadge } from './ListingTrustBadge';
@@ -33,9 +33,13 @@ import {
   isSacredOrCeremonialItem,
 } from '../../data/amaroGovernanceDefaults';
 import {
+  calculateCircuitAFee,
+  computeCategoryPaymentSchedule,
   CIRCUIT_A_HONEST_AVAILABILITY_TEXT,
+  CLIENT_TAXES_AND_FEES_LABEL,
   GENERIC_FALLBACK_ROOM_LABEL,
   OFFER_PRICE_STATE_LABELS,
+  PROVIDER_COMMISSION_LABEL,
   resolveHonestOfferAvailability,
   resolveServiceOffers,
   validateAndPriceOfferSelection,
@@ -66,6 +70,8 @@ export interface ServiceBookingPrefill {
   pickupLocation?: string;
   dropoffLocation?: string;
   quantitiesByOfferId?: Record<string, number>;
+  restaurantBookingType?: 'table_simple' | 'menu_fixe';
+  fixedMenuPrice?: number;
   notes?: string;
 }
 
@@ -141,8 +147,8 @@ export function ServiceDetailModal({
 
   if (!item) return null;
   const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
-  const imgMeta = EDITORIAL_IMAGES[item.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
-  const photoSrc = item.customPhotoUrl?.trim() ? item.customPhotoUrl.trim() : imgMeta.src;
+  const imgMeta = resolveItemEditorialImage(item);
+  const photoSrc = imgMeta.src;
   const isPhotoVerified = Boolean(item.photoVerified && item.customPhotoUrl?.trim());
   const isAmaroAssistance = isAmaroOwnAssistanceOffer(item);
   const isPartnerVerified =
@@ -249,6 +255,9 @@ export function ServiceDetailModal({
     return `${rawStr} · ${off.priceUnit}`;
   };
 
+  const [restaurantBookingType, setRestaurantBookingType] = useState<'table_simple' | 'menu_fixe'>('table_simple');
+  const [fixedMenuPrice, setFixedMenuPrice] = useState<number>(15000);
+
   const buildPrefillPayload = (): ServiceBookingPrefill => ({
     date: prefillDate,
     time: prefillTime,
@@ -257,6 +266,8 @@ export function ServiceDetailModal({
     pickupLocation: item.category === 'transport' ? pickupLocation.trim() : undefined,
     dropoffLocation: item.category === 'transport' ? dropoffLocation.trim() : undefined,
     quantitiesByOfferId: { ...quantitiesByOfferId },
+    restaurantBookingType: item.category === 'restaurant' ? restaurantBookingType : undefined,
+    fixedMenuPrice: item.category === 'restaurant' && restaurantBookingType === 'menu_fixe' ? fixedMenuPrice : undefined,
   });
 
   return (
@@ -270,9 +281,12 @@ export function ServiceDetailModal({
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover"
           />
-          {!isPhotoVerified && (
+          {isPhotoVerified && (
             <div className="absolute top-3 left-3">
-              <ListingTrustBadge variant="non_contractual_photo" />
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Cliché officiel certifié</span>
+              </span>
             </div>
           )}
           <button
@@ -726,54 +740,174 @@ export function ServiceDetailModal({
                 </div>
               )}
 
+              {/* Restaurant Specific Case 1 (Table simple) vs Case 2 (Menu fixe) */}
+              {item.category === 'restaurant' && (
+                <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                  <span className="text-xs font-semibold block text-slate-800 dark:text-slate-200">
+                    Formule de réservation restaurant :
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRestaurantBookingType('table_simple')}
+                      className={`p-2.5 rounded-lg text-left transition-colors border ${
+                        restaurantBookingType === 'table_simple'
+                          ? 'bg-white dark:bg-slate-900 border-teal-600 dark:border-teal-400 text-teal-950 dark:text-teal-200 shadow-xs'
+                          : 'bg-transparent border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      <strong className="block">Cas 1 : Table simple (0 FCFA)</strong>
+                      <span className="text-[11px] block text-slate-500">
+                        Caution de 5 000 FCFA déduite de votre addition sur place.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestaurantBookingType('menu_fixe')}
+                      className={`p-2.5 rounded-lg text-left transition-colors border ${
+                        restaurantBookingType === 'menu_fixe'
+                          ? 'bg-white dark:bg-slate-900 border-teal-600 dark:border-teal-400 text-teal-950 dark:text-teal-200 shadow-xs'
+                          : 'bg-transparent border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      <strong className="block">Cas 2 : Menu fixe</strong>
+                      <span className="text-[11px] block text-slate-500">
+                        Paiement du menu à l’avance (+ Taxes et frais Amaro). Boissons sur place.
+                      </span>
+                    </button>
+                  </div>
+                  {restaurantBookingType === 'menu_fixe' && (
+                    <div className="pt-1 flex items-center gap-2 text-xs">
+                      <label className="text-slate-600 dark:text-slate-400 font-medium">
+                        Prix du menu par personne :
+                      </label>
+                      <input
+                        type="number"
+                        min="2000"
+                        step="500"
+                        value={fixedMenuPrice}
+                        onChange={(e) => setFixedMenuPrice(Math.max(2000, Number(e.target.value) || 15000))}
+                        className="w-28 px-2 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-right font-mono font-bold"
+                      />
+                      <span className="font-mono text-slate-500">FCFA</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {!selectionValidation.valid ? (
                 <div className="flex items-start gap-2 text-red-700 dark:text-red-300 font-medium">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>{selectionValidation.error}</span>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200 dark:border-slate-800 tabular-nums">
-                  <span className="text-slate-600 dark:text-slate-300">
-                    Sélection :{' '}
-                    <strong>
-                      {selectionValidation.totalSelectedUnits} unité
-                      {selectionValidation.totalSelectedUnits > 1 ? 's' : ''}
-                    </strong>{' '}
-                    (capacité cumulée : {selectionValidation.totalSelectedCapacity} pers. pour{' '}
-                    {participants} voyageur{participants > 1 ? 's' : ''})
-                  </span>
-                  <div className="text-right">
-                    <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
-                      {selectionValidation.providerSubtotalInServiceCurrency > 0
-                        ? `${selectionValidation.providerSubtotalInServiceCurrency.toLocaleString('fr-FR')} ${item.currency === 'XOF' ? 'FCFA' : item.currency}`
-                        : OFFER_PRICE_STATE_LABELS.price_on_request}
-                      {displayCurrency !== item.currency &&
-                      rates &&
-                      selectionValidation.providerSubtotalInServiceCurrency > 0
-                        ? ` (~${(
-                            (selectionValidation.providerSubtotalInServiceCurrency /
-                              rates[item.currency]) *
-                            rates[displayCurrency]
-                          ).toFixed(2)} ${displayCurrency})`
-                        : ''}
-                    </span>
-                    {selectionValidation.hasPriceToVerify && (
-                      <span className="block text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-                        Estimation (inclut au moins une offre à Prix à vérifier ou Tarif sur demande)
-                      </span>
-                    )}
-                  </div>
-                </div>
+                (() => {
+                  const rawBasePrice =
+                    item.category === 'restaurant' && restaurantBookingType === 'table_simple'
+                      ? 0
+                      : selectionValidation.providerSubtotalInServiceCurrency > 0
+                      ? selectionValidation.providerSubtotalInServiceCurrency
+                      : (item.priceKnown !== false && item.priceAmount > 0 ? item.priceAmount * participants : 0);
+
+                  const sched = computeCategoryPaymentSchedule({
+                    category: item.category,
+                    circuit: isPartnerVerified ? 'B' : 'A',
+                    providerPrice: rawBasePrice,
+                    currency: item.currency,
+                    restaurantBookingType: item.category === 'restaurant' ? restaurantBookingType : undefined,
+                    fixedMenuPrice: item.category === 'restaurant' && restaurantBookingType === 'menu_fixe' ? fixedMenuPrice : undefined,
+                  });
+
+                  return (
+                    <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      {/* Circuit Remuneration Transparency */}
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-900 dark:text-slate-100">
+                            {isPartnerVerified
+                              ? 'Circuit B — Prestataire Partenaire Conventionné'
+                              : 'Circuit A — Prestataire Recensé (Non-conventionné)'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                            {isPartnerVerified ? 'Commission partenaire 10%' : 'Marge individuelle transparente'}
+                          </span>
+                        </div>
+
+                        {/* Mandatory Formula Display */}
+                        {isPartnerVerified ? (
+                          <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                            <p className="font-mono font-semibold text-emerald-800 dark:text-emerald-300">
+                              Prix affiché au client = {sched.providerPrice.toLocaleString('fr-FR')} FCFA (Prix réel direct du prestataire, sans aucun ajout).
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Rémunération Amaro : Commission de 10% ({sched.commissionCircuitB?.toLocaleString('fr-FR')} FCFA) reversée par le partenaire après le séjour, en arrière-plan.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                            <p className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                              Prix prestataire : {sched.providerPrice.toLocaleString('fr-FR')} FCFA + Taxes et frais de service Amaro : {sched.amaroFee.toLocaleString('fr-FR')} FCFA = Total : {sched.totalClientPrice.toLocaleString('fr-FR')} FCFA
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Formule Circuit A : 6% du prix prestataire + 500 FCFA (plafonné à 4 000 FCFA, arrondi à la centaine).
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* The 2 Separated Totals: À PAYER MAINTENANT vs À PAYER SUR PLACE */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 space-y-1">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800 dark:text-teal-300 block">
+                            À PAYER MAINTENANT
+                          </span>
+                          <strong className="font-mono text-lg text-teal-950 dark:text-teal-100 block">
+                            {sched.payNowAmount.toLocaleString('fr-FR')} FCFA
+                          </strong>
+                          <span className="text-[11px] text-teal-900/80 dark:text-teal-300/80 block leading-tight">
+                            {item.category === 'accommodation'
+                              ? 'Paiement total à la réservation.'
+                              : item.category === 'transport'
+                              ? 'Paiement total à la réservation.'
+                              : item.category === 'site' || item.category === 'translation'
+                              ? 'Acompte de 30% (+ Taxes et frais Amaro).'
+                              : sched.isRestaurantFixedMenu
+                              ? 'Menu fixe réglé à la réservation.'
+                              : 'Caution de garantie de 5 000 FCFA (déduite de l’addition).'}
+                          </span>
+                        </div>
+
+                        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
+                            À PAYER SUR PLACE
+                          </span>
+                          <strong className="font-mono text-lg text-slate-900 dark:text-slate-100 block">
+                            {sched.payOnSiteAmount > 0
+                              ? `${sched.payOnSiteAmount.toLocaleString('fr-FR')} FCFA`
+                              : '0 FCFA'}
+                          </strong>
+                          <span className="text-[11px] text-slate-600 dark:text-slate-400 block leading-tight">
+                            {sched.payOnSiteDescription}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Category Specific Cancellation Policy */}
+                      <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900 text-xs text-amber-950 dark:text-amber-200 space-y-0.5">
+                        <strong className="font-bold flex items-center gap-1.5">
+                          <Info className="w-3.5 h-3.5 shrink-0" />
+                          <span>Règle d’annulation &amp; de présence ({item.category.toUpperCase()}) :</span>
+                        </strong>
+                        <p className="leading-relaxed text-[11px]">
+                          {sched.cancellationRuleDescription}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()
               )}
             </div>
           </section>
-
-          {/* Cancellation Policy if documented */}
-          {item.cancellationPolicy && (
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              <strong>Conditions d’annulation :</strong> {item.cancellationPolicy}
-            </p>
-          )}
 
           {/* 14-Point Structured Heritage & Natural Site Sheet */}
           {ed && (

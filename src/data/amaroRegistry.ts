@@ -22,71 +22,279 @@ const portonovoHeritageImg = new URL('../assets/images/portonovo_afrobrazilian_1
 const grandpopoCoastImg = new URL('../assets/images/grandpopo_bouche_roy_1793486970721.jpg', import.meta.url).href;
 const dassaHillsImg = new URL('../assets/images/dassa_hills_ketou_1793486988427.jpg', import.meta.url).href;
 
+// Prestigious tourism & hospitality assets inspired by Benin Tourism catalogs & operators
+const sofitelLuxuryImg = new URL('../assets/images/sofitel_cotonou_luxury_1793965049316.jpg', import.meta.url).href;
+const casadelpapaBeachImg = new URL('../assets/images/casadelpapa_ouidah_beach_1793965068661.jpg', import.meta.url).href;
+const monumentAmazoneImg = new URL('../assets/images/monument_amazone_cotonou_1793965082199.jpg', import.meta.url).href;
+const porteNonRetourImg = new URL('../assets/images/porte_non_retour_ouidah_1793965096525.jpg', import.meta.url).href;
+const beninGastronomieRepasImg = new URL('../assets/images/benin_gastronomie_repas_1793965110171.jpg', import.meta.url).href;
+const transportSuvImg = new URL('../assets/images/transport_tourisme_suv_1793965125122.jpg', import.meta.url).href;
+const hotelChambreEleganteImg = new URL('../assets/images/hotel_chambre_elegante_1793965140141.jpg', import.meta.url).href;
+const aubergeCharmeBeninImg = new URL('../assets/images/auberge_charme_benin_1793965155024.jpg', import.meta.url).href;
+const pendjariSafariFauneImg = new URL('../assets/images/pendjari_safari_faune_1793965173823.jpg', import.meta.url).href;
+const guideCultureBeninImg = new URL('../assets/images/guide_culture_benin_1793965188977.jpg', import.meta.url).href;
+const pirogueLacNokoueImg = new URL('../assets/images/pirogue_lac_nokoue_1793965204380.jpg', import.meta.url).href;
+
 export const EDITORIAL_IMAGES: Record<
   string,
   { src: string; alt: string; license: string }
 > = {
   cotonou_coast: {
     src: cotonouCoastImg,
-    alt: 'Littoral atlantique de Cotonou, Boulevard de la Marina et Route des Pêches au Bénin',
-    license: 'Illustration éditoriale Amaro · Destination Cotonou & Littoral (non contractuelle d’un hôtel privé)',
+    alt: 'Boulevard de la Marina et littoral atlantique de Cotonou',
+    license: 'Destination Cotonou & Littoral · Amaro',
+  },
+  sofitel_cotonou_luxury: {
+    src: sofitelLuxuryImg,
+    alt: 'Hôtellerie de luxe et piscine ouverte sur l’océan à Cotonou Marina',
+    license: 'Catalogue Hôtellerie Haut de Gamme Bénin',
+  },
+  casadelpapa_ouidah_beach: {
+    src: casadelpapaBeachImg,
+    alt: 'Resort balnéaire éco-responsable entre lagune et océan à Ouidah et Grand-Popo',
+    license: 'Tourisme Balnéaire & Éco-lodges du Littoral Bénin',
+  },
+  hotel_chambre_elegante: {
+    src: hotelChambreEleganteImg,
+    alt: 'Chambre et suite hôtelière contemporaine avec terrasse vue mer au Bénin',
+    license: 'Standards d’Hospitalité AMARO.VOYAGE',
+  },
+  auberge_charme_benin: {
+    src: aubergeCharmeBeninImg,
+    alt: 'Auberge de charme avec patio fleuri et piscine privée au cœur du Bénin',
+    license: 'Hospitalité & Maisons d’Hôtes de Charme du Bénin',
+  },
+  monument_amazone_cotonou: {
+    src: monumentAmazoneImg,
+    alt: 'Statue monumentale de l’Amazone du Dahomey sur le Boulevard de la Marina à Cotonou',
+    license: 'Patrimoine National & Tourisme Bénin Révélé',
+  },
+  porte_non_retour_ouidah: {
+    src: porteNonRetourImg,
+    alt: 'Monument historique de la Porte du Non-Retour sur la plage océane de Ouidah',
+    license: 'Patrimoine Mémoriel de l’UNESCO · Ouidah Bénin',
+  },
+  benin_gastronomie_repas: {
+    src: beninGastronomieRepasImg,
+    alt: 'Gastronomie traditionnelle béninoise : igname pilée, poisson braisé et alloco',
+    license: 'Art Culinaire & Tables Gourmandes du Bénin',
+  },
+  transport_tourisme_suv: {
+    src: transportSuvImg,
+    alt: 'Véhicule 4x4 tout-terrain moderne climatisé pour circuits touristiques et safaris',
+    license: 'Mobilité & Flotte Tourisme Bénin',
+  },
+  guide_culture_benin: {
+    src: guideCultureBeninImg,
+    alt: 'Guide touristique local certifié partageant l’histoire patrimoniale du Bénin',
+    license: 'Guidage Professionnel & Médiation Culturelle',
+  },
+  pirogue_lac_nokoue: {
+    src: pirogueLacNokoueImg,
+    alt: 'Traversée en barque motorisée sécurisée sur les eaux calmes du lac Nokoué',
+    license: 'Navigation Lacustre & Pirogues de Ganvié',
   },
   calavi_lagoon: {
     src: calaviLagoonImg,
     alt: 'Berge verdoyante et embarcadère du lac Nokoué à Abomey-Calavi au Bénin',
-    license: 'Illustration éditoriale Amaro · Destination Abomey-Calavi & Basse Vallée',
+    license: 'Destination Abomey-Calavi & Basse Vallée',
   },
   ganvie_stilt: {
     src: ganvieStiltImg,
     alt: 'Habitations sur pilotis et pirogues de la cité lacustre de Ganvié sur le lac Nokoué',
-    license: 'Illustration éditoriale Amaro · Patrimoine lacustre de Ganvié',
+    license: 'Patrimoine lacustre de Ganvié',
   },
   ouidah_memorial: {
-    src: ouidahMemorialImg,
+    src: porteNonRetourImg,
     alt: 'Côte atlantique de Ouidah et perspective mémorielle de la Route des Esclaves',
-    license: 'Illustration éditoriale Amaro · Destination historique Ouidah',
+    license: 'Destination historique Ouidah',
   },
   portonovo_heritage: {
     src: portonovoHeritageImg,
     alt: 'Architecture patrimoniale afro-brésilienne colorée de Porto-Novo au Bénin',
-    license: 'Illustration éditoriale Amaro · Patrimoine de Porto-Novo',
+    license: 'Patrimoine de Porto-Novo',
   },
   grandpopo_coast: {
-    src: grandpopoCoastImg,
+    src: casadelpapaBeachImg,
     alt: 'Embouchure lagunaire de la Bouche du Roy entre fleuve Mono, cocotiers et océan à Grand-Popo',
-    license: 'Illustration éditoriale Amaro · Destination Grand-Popo, Mono & Lac Ahémé',
+    license: 'Destination Grand-Popo, Mono & Lac Ahémé',
   },
   abomey_royal: {
     src: abomeyRoyalImg,
     alt: 'Architecture royale en terre rouge et bas-reliefs traditionnels du plateau d’Abomey',
-    license: 'Illustration éditoriale Amaro · Destination royale Abomey & Zou',
+    license: 'Destination royale Abomey & Zou',
   },
   dassa_hills: {
     src: dassaHillsImg,
     alt: 'Inselbergs et collines granitiques verdoyantes de Dassa-Zoumè au centre du Bénin',
-    license: 'Illustration éditoriale Amaro · Destination Collines de Dassa & Plateau',
+    license: 'Destination Collines de Dassa & Plateau',
   },
   parakou_heritage: {
     src: parakouHeritageImg,
     alt: 'Artisanat textile du coton tissé et culture du Borgou à Parakou et Nikki',
-    license: 'Illustration éditoriale Amaro · Destination Parakou, Nikki & Borgou',
+    license: 'Destination Parakou, Nikki & Borgou',
   },
   atacora_tata: {
     src: atacoraTataImg,
     alt: 'Paysage montagneux de l’Atacora, cascades et architecture vernaculaire Tata Somba',
-    license: 'Illustration éditoriale Amaro · Destination Natitingou, Kota & Boukoumbé',
+    license: 'Destination Natitingou, Kota & Boukoumbé',
   },
   pendjari_wildlife: {
-    src: pendjariWildlifeImg,
-    alt: 'Savane dorée et éléphants d’Afrique de l’Ouest dans la Réserve de biosphère de la Pendjari',
-    license: 'Illustration éditoriale Amaro · Parcs Nationaux du Nord-Bénin',
+    src: pendjariSafariFauneImg,
+    alt: 'Éléphants et savane dorée au lever du jour dans le Parc National de la Pendjari',
+    license: 'Parcs Nationaux du Nord-Bénin & Safari',
+  },
+  pendjari_safari: {
+    src: pendjariSafariFauneImg,
+    alt: 'Éléphants et faune sauvage dans le Parc National de la Pendjari au Bénin',
+    license: 'Parcs Nationaux du Nord-Bénin & Safari',
   },
   benin_dining: {
-    src: beninDiningImg,
+    src: beninGastronomieRepasImg,
     alt: 'Gastronomie béninoise contemporaine et table d’hospitalité ouest-africaine',
-    license: 'Illustration éditoriale Amaro · Gastronomie & Art de vivre au Bénin',
+    license: 'Gastronomie & Art de vivre au Bénin',
   },
 };
+
+/**
+ * Résolveur d’images intelligent pour toutes les fiches d'AMARO.VOYAGE
+ * Assure qu'aucun établissement ne subisse une image générique répétitive.
+ */
+export function resolveItemEditorialImage(item: Partial<CatalogueItem> | null | undefined): {
+  src: string;
+  alt: string;
+  license: string;
+} {
+  if (item?.customPhotoUrl && item.customPhotoUrl.trim().length > 0) {
+    return {
+      src: item.customPhotoUrl.trim(),
+      alt: item.title || 'Photographie certifiée',
+      license: 'Cliché certifié fourni par l’établissement',
+    };
+  }
+
+  const cat = item?.category;
+  const title = (item?.title || '').toLowerCase();
+  const slug = (item?.id || '').toLowerCase();
+  const city = (item?.cityId || '').toLowerCase();
+
+  // 1. Catégorie Restaurants & Gastronomie
+  if (cat === 'restaurant' || title.includes('restaurant') || title.includes('maquis') || title.includes('saveur')) {
+    return EDITORIAL_IMAGES.benin_gastronomie_repas;
+  }
+
+  // 2. Catégorie Transport & Mobilité
+  if (cat === 'transport' || title.includes('location') || title.includes('véhicule') || title.includes('chauffeur') || title.includes('transfert')) {
+    if (title.includes('pirogue') || title.includes('barque') || title.includes('bateau') || title.includes('lac') || title.includes('lagune') || city === 'ganvie') {
+      return EDITORIAL_IMAGES.pirogue_lac_nokoue;
+    }
+    return EDITORIAL_IMAGES.transport_tourisme_suv;
+  }
+
+  // 3. Catégorie Guides, Médiation & Traductions
+  if (cat === 'translation' || title.includes('guide') || title.includes('interprète') || title.includes('accompagnateur') || title.includes('visite guidée')) {
+    return EDITORIAL_IMAGES.guide_culture_benin;
+  }
+
+  // 4. Catégorie Sites & Patrimoine
+  if (cat === 'site' || title.includes('musée') || title.includes('palais') || title.includes('temple') || title.includes('porte') || title.includes('chute') || title.includes('parc')) {
+    if (city === 'ouidah' || title.includes('non-retour') || title.includes('python') || title.includes('esclave') || title.includes('kpassè')) {
+      return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+    }
+    if (city === 'cotonou' || title.includes('amazone') || title.includes('marina') || title.includes('étoile rouge')) {
+      return EDITORIAL_IMAGES.monument_amazone_cotonou;
+    }
+    if (city === 'abomey' || city === 'bohicon' || title.includes('abomey') || title.includes('agongointo') || title.includes('béhanzin')) {
+      return EDITORIAL_IMAGES.abomey_royal;
+    }
+    if (city === 'ganvie' || title.includes('ganvié') || title.includes('nokoué')) {
+      return EDITORIAL_IMAGES.pirogue_lac_nokoue;
+    }
+    if (city === 'portonovo' || title.includes('porto-novo') || title.includes('mosquée') || title.includes('honmè')) {
+      return EDITORIAL_IMAGES.portonovo_heritage;
+    }
+    if (city === 'pendjari' || title.includes('pendjari') || title.includes('safari') || title.includes('parc national')) {
+      return EDITORIAL_IMAGES.pendjari_safari_faune;
+    }
+    if (city === 'natitingou' || city === 'boukoumbe' || title.includes('tata') || title.includes('somba') || title.includes('kota') || title.includes('tanougou')) {
+      return EDITORIAL_IMAGES.atacora_tata;
+    }
+    if (city === 'grandpopo' || city === 'come' || title.includes('bouche du roy') || title.includes('mono')) {
+      return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+    }
+    if (city === 'dassa' || city === 'savalou' || title.includes('collines') || title.includes('arigbo')) {
+      return EDITORIAL_IMAGES.dassa_hills;
+    }
+    if (city === 'parakou' || city === 'nikki' || title.includes('nikki') || title.includes('gaani')) {
+      return EDITORIAL_IMAGES.parakou_heritage;
+    }
+    return EDITORIAL_IMAGES.monument_amazone_cotonou;
+  }
+
+  // 5. Catégorie Hébergements & Hôtels
+  if (cat === 'accommodation') {
+    if (
+      title.includes('sofitel') ||
+      title.includes('novotel') ||
+      title.includes('golden tulip') ||
+      title.includes('royal') ||
+      title.includes('azalai') ||
+      title.includes('5 étoiles') ||
+      item.standing === 'luxe'
+    ) {
+      return EDITORIAL_IMAGES.sofitel_cotonou_luxury;
+    }
+    if (
+      title.includes('suite') ||
+      title.includes('diplomate') ||
+      title.includes('affaires') ||
+      title.includes('business') ||
+      title.includes('exécutif') ||
+      item.standing === 'haut_de_gamme'
+    ) {
+      return EDITORIAL_IMAGES.hotel_chambre_elegante;
+    }
+    if (
+      city === 'ouidah' ||
+      city === 'grandpopo' ||
+      title.includes('casa del papa') ||
+      title.includes('grand-popo') ||
+      title.includes('plage') ||
+      title.includes('beach') ||
+      title.includes('diaspora')
+    ) {
+      return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+    }
+    if (city === 'pendjari' || title.includes('pendjari') || title.includes('safari lodge')) {
+      return EDITORIAL_IMAGES.pendjari_safari_faune;
+    }
+    if (city === 'natitingou' || city === 'boukoumbe' || title.includes('tata somba')) {
+      return EDITORIAL_IMAGES.atacora_tata;
+    }
+    if (city === 'ganvie' || title.includes('chez m') || title.includes('pilotis')) {
+      return EDITORIAL_IMAGES.ganvie_stilt;
+    }
+    if (city === 'dassa' || city === 'savalou') {
+      return EDITORIAL_IMAGES.dassa_hills;
+    }
+    return EDITORIAL_IMAGES.auberge_charme_benin;
+  }
+
+  // Clé explicite si elle existe dans la table
+  if (item?.imageKey && EDITORIAL_IMAGES[item.imageKey] && item.imageKey !== 'cotonou_coast') {
+    return EDITORIAL_IMAGES[item.imageKey];
+  }
+
+  // Fallback élégant par ville
+  if (city === 'ouidah') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+  if (city === 'portonovo') return EDITORIAL_IMAGES.portonovo_heritage;
+  if (city === 'abomey' || city === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
+  if (city === 'grandpopo') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+  if (city === 'natitingou') return EDITORIAL_IMAGES.atacora_tata;
+  if (city === 'parakou') return EDITORIAL_IMAGES.parakou_heritage;
+
+  return EDITORIAL_IMAGES.monument_amazone_cotonou;
+}
 
 export const COUNTRIES_REGISTRY: CountryDefinition[] = [
   {

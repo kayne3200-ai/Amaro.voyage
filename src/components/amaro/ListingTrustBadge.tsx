@@ -39,15 +39,7 @@ export function ListingTrustBadge({
   compact = false,
 }: ListingTrustBadgeProps) {
   if (variant === 'non_contractual_photo') {
-    return (
-      <span
-        title="Photographie régionale d’ambiance : l’établissement n’a pas encore fourni de cliché contractuel vérifié."
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-900/75 text-slate-100 border border-white/15"
-      >
-        <ImageOff className="w-3 h-3 shrink-0 text-amber-300" />
-        <span>Illustration non contractuelle</span>
-      </span>
-    );
+    return null;
   }
 
   const isAmaroAssistance =
@@ -99,13 +91,13 @@ export function ListingTrustBadge({
         </span>
       )}
 
-      {showPhotoNotice && !hasVerifiedRealPhoto && (
+      {showPhotoNotice && hasVerifiedRealPhoto && (
         <span
-          title="Photographie régionale d’ambiance : l’établissement n’a pas encore fourni de cliché contractuel vérifié."
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-900/75 text-slate-100 border border-white/15"
+          title="Cliché certifié fourni par l’établissement partenaire."
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs"
         >
-          <ImageOff className="w-3 h-3 shrink-0 text-amber-300" />
-          <span>Illustration non contractuelle</span>
+          <CheckCircle2 className="w-3 h-3 shrink-0 text-emerald-400" />
+          <span>Cliché certifié</span>
         </span>
       )}
     </div>

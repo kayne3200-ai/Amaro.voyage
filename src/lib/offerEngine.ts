@@ -1,5 +1,6 @@
 import type {
   CatalogueItem,
+  CategoryPaymentSchedule,
   CensusListingDoc,
   CensusProposedDiff,
   CensusRecordStatus,
@@ -1159,4 +1160,272 @@ export function parseSelectedOffersJson(raw?: string): SelectedOfferLine[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * RÈGLE DE NOMMAGE STRICTE :
+ * - Pour le CLIENT, sur le site : "Taxes et frais de service Amaro"
+ * - Pour le PRESTATAIRE, dans le contrat et l'admin : "Commission Amaro"
+ * - Dans le tableau de bord admin : "Frais Amaro" pour Circuit A et "Commission" pour Circuit B.
+ */
+export const CLIENT_TAXES_AND_FEES_LABEL = 'Taxes et frais de service Amaro';
+export const PROVIDER_COMMISSION_LABEL = 'Commission Amaro';
+export const ADMIN_CIRCUIT_A_FEE_LABEL = 'Frais Amaro';
+export const ADMIN_CIRCUIT_B_COMMISSION_LABEL = 'Commission';
+
+/**
+ * Formule Circuit A (catalogue non conventionné) :
+ * Frais Amaro = 6% du prix prestataire + 500f, plafonné à 4.000f maximum.
+ * Arrondir au 100f supérieur.
+ * Exemples vérifiés :
+ * - Hôtel 60.000f -> +4.000f = 64.000f affiché
+ * - Transport 12.000f -> +1.200f = 13.200f affiché
+ * - Guide 25.000f -> +2.000f = 27.000f affiché
+ */
+export function calculateCircuitAFee(providerPrice: number): number {
+  if (!providerPrice || providerPrice <= 0) return 0;
+  const raw = providerPrice * 0.06 + 500;
+  const capped = Math.min(4000, raw);
+  return Math.min(4000, Math.round(capped / 100) * 100);
+}
+
+/**
+ * Logique de rémunération et de réservation par catégorie :
+ * - HÔTEL : Paiement total à la réservation. Annulation gratuite jusqu'à 48h avant, après 48h frais Amaro conservés.
+ * - TRANSPORT : Paiement total à la réservation. Annulation jusqu'à 24h avant, après 24h frais Amaro conservés.
+ * - SITE / GUIDE : Paiement d'un acompte de 30% à la réservation, 70% restant à payer sur place.
+ * - RESTAURANT :
+ *   Cas 1 (Table simple) : Prix 0f, caution 5.000f à la réservation déduite de l'addition sur place. Si no-show, caution conservée.
+ *   Cas 2 (Menu fixe) : Menu payé d'avance (+ frais Amaro), boissons & extras sur place.
+ */
+export function computeCategoryPaymentSchedule(params: {
+  category: ServiceCategory;
+  circuit: 'A' | 'B';
+  providerPrice: number;
+  currency?: CurrencyCode;
+  restaurantBookingType?: 'table_simple' | 'menu_fixe';
+  fixedMenuPrice?: number;
+}): CategoryPaymentSchedule {
+  const { category, circuit, currency = 'XOF', restaurantBookingType = 'table_simple' } = params;
+  let effectiveProviderPrice = Math.max(0, params.providerPrice || 0);
+
+  if (category === 'restaurant' && restaurantBookingType === 'menu_fixe' && effectiveProviderPrice === 0) {
+    effectiveProviderPrice = params.fixedMenuPrice || 15000;
+  }
+
+  const isCircuitA = circuit === 'A';
+  const amaroFee = isCircuitA ? calculateCircuitAFee(effectiveProviderPrice) : 0;
+  const commissionCircuitB = !isCircuitA ? Math.round(effectiveProviderPrice * 0.10) : 0;
+  const totalClientPrice = effectiveProviderPrice + amaroFee;
+
+  const curLabel = currency === 'XOF' ? 'FCFA' : currency;
+
+  if (category === 'accommodation') {
+    return {
+      category,
+      circuit,
+      providerPrice: effectiveProviderPrice,
+      amaroFee,
+      totalClientPrice,
+      payNowAmount: totalClientPrice,
+      payOnSiteAmount: 0,
+      cancellationRuleDescription:
+        'Paiement total à la réservation. Annulation gratuite jusqu’à 48h avant le séjour. En cas d’annulation à moins de 48h, les taxes et frais de service Amaro sont conservés.',
+      payOnSiteDescription: '0 FCFA à régler sur place (hébergement intégralement réglé).',
+      displayBreakdownFormula: isCircuitA
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+        : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (aucun frais client ajouté)`,
+      commissionCircuitB,
+    };
+  }
+
+  if (category === 'transport') {
+    return {
+      category,
+      circuit,
+      providerPrice: effectiveProviderPrice,
+      amaroFee,
+      totalClientPrice,
+      payNowAmount: totalClientPrice,
+      payOnSiteAmount: 0,
+      cancellationRuleDescription:
+        'Paiement total à la réservation. Annulation sans frais jusqu’à 24h avant le départ. En cas d’annulation à moins de 24h, les taxes et frais de service Amaro sont conservés.',
+      payOnSiteDescription: '0 FCFA à régler sur place (transport intégralement réglé).',
+      displayBreakdownFormula: isCircuitA
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+        : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (aucun frais client ajouté)`,
+      commissionCircuitB,
+    };
+  }
+
+  if (category === 'site' || category === 'translation') {
+    const depositPercent = 30;
+    const providerDeposit = Math.round(effectiveProviderPrice * 0.30);
+    const payNowAmount = providerDeposit + amaroFee;
+    const payOnSiteAmount = Math.round(effectiveProviderPrice * 0.70);
+
+    return {
+      category,
+      circuit,
+      providerPrice: effectiveProviderPrice,
+      amaroFee,
+      totalClientPrice,
+      depositRatePercent: depositPercent,
+      payNowAmount,
+      payOnSiteAmount,
+      cancellationRuleDescription:
+        'Acompte de 30% à la réservation (+ taxes et frais de service Amaro). Solde de 70% restant à régler directement sur place auprès du guide ou à l’entrée du site.',
+      payOnSiteDescription: `70% restant à payer sur place (${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel}) directement auprès du prestataire.`,
+      displayBreakdownFormula: isCircuitA
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel} (Acompte 30% : ${payNowAmount.toLocaleString('fr-FR')} ${curLabel} · Solde 70% sur place : ${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel})`
+        : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (Acompte 30% : ${payNowAmount.toLocaleString('fr-FR')} ${curLabel} · Solde 70% sur place : ${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel})`,
+      commissionCircuitB,
+    };
+  }
+
+  if (category === 'restaurant') {
+    if (restaurantBookingType === 'menu_fixe') {
+      return {
+        category,
+        circuit,
+        providerPrice: effectiveProviderPrice,
+        amaroFee,
+        totalClientPrice,
+        payNowAmount: totalClientPrice,
+        payOnSiteAmount: 0,
+        isRestaurantFixedMenu: true,
+        cancellationRuleDescription:
+          'Paiement du menu fixe à la réservation (+ taxes et frais de service Amaro). Boissons et extras payés directement sur place.',
+        payOnSiteDescription: 'Boissons et extras payés sur place selon vos consommations.',
+        displayBreakdownFormula: isCircuitA
+          ? `Prix prestataire (menu fixe) : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+          : `Prix menu fixe conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (boissons sur place)`,
+        commissionCircuitB,
+      };
+    }
+
+    // Cas 1: Table simple (réservation gratuite avec caution obligatoire de 5.000 FCFA)
+    const cautionAmount = 5000;
+    return {
+      category,
+      circuit,
+      providerPrice: 0,
+      amaroFee: 0,
+      totalClientPrice: 0,
+      payNowAmount: cautionAmount,
+      payOnSiteAmount: 0,
+      cautionAmount,
+      isRestaurantFreeTable: true,
+      cancellationRuleDescription:
+        'Réservation de table gratuite. Caution obligatoire de 5 000 FCFA versée à la réservation. Si vous venez, la caution est déduite de votre addition finale. En cas de non-présentation (no-show), la caution est conservée par le restaurant.',
+      payOnSiteDescription:
+        'Repas payé sur place selon vos choix à la carte (caution de 5 000 FCFA déduite de votre addition finale).',
+      displayBreakdownFormula:
+        'Prix affiché : 0 FCFA (Réservation gratuite) · Caution de garantie : 5 000 FCFA (déductible de l’addition)',
+      commissionCircuitB: 0,
+    };
+  }
+
+  // Fallback
+  return {
+    category,
+    circuit,
+    providerPrice: effectiveProviderPrice,
+    amaroFee,
+    totalClientPrice,
+    payNowAmount: totalClientPrice,
+    payOnSiteAmount: 0,
+    cancellationRuleDescription: 'Paiement à la réservation selon conditions du prestataire.',
+    payOnSiteDescription: '0 FCFA à régler sur place.',
+    displayBreakdownFormula: isCircuitA
+      ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+      : `Prix direct prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel}`,
+    commissionCircuitB,
+  };
+}
+
+/**
+ * AFFICHAGE DU PRIX GLOBAL :
+ * Calcule deux totaux distincts et transparents :
+ * - "À PAYER MAINTENANT = Hôtel + Transport + Caution Restaurant + Frais de dossier 20.000f + Taxes et frais de service Amaro"
+ * - "À PAYER SUR PLACE = Repas Restaurant selon choix + 70% Guide restant"
+ */
+export function calculateGlobalJourneyTotals(params: {
+  schedules: CategoryPaymentSchedule[];
+  dossierFeeXof?: number;
+  dossierFeeStatus?: string;
+}): {
+  payNowTotal: number;
+  payOnSiteTotal: number;
+  hotelTotal: number;
+  transportTotal: number;
+  restaurantCautionTotal: number;
+  fixedMenuTotal: number;
+  guideDepositTotal: number;
+  guideOnSiteTotal: number;
+  amaroFeesTotal: number;
+  dossierFeeXof: number;
+  dossierFeeDeducted: boolean;
+  circuitBCommissionsTotal: number;
+} {
+  const dossierFee = params.dossierFeeXof ?? 20000;
+  const dossierFeeDeducted = params.dossierFeeStatus === 'validated';
+
+  let hotelTotal = 0;
+  let transportTotal = 0;
+  let restaurantCautionTotal = 0;
+  let fixedMenuTotal = 0;
+  let guideDepositTotal = 0;
+  let guideOnSiteTotal = 0;
+  let amaroFeesTotal = 0;
+  let circuitBCommissionsTotal = 0;
+
+  for (const s of params.schedules) {
+    amaroFeesTotal += s.amaroFee || 0;
+    circuitBCommissionsTotal += s.commissionCircuitB || 0;
+
+    if (s.category === 'accommodation') {
+      hotelTotal += s.providerPrice;
+    } else if (s.category === 'transport') {
+      transportTotal += s.providerPrice;
+    } else if (s.category === 'restaurant') {
+      if (s.isRestaurantFixedMenu) {
+        fixedMenuTotal += s.providerPrice;
+      } else {
+        restaurantCautionTotal += s.cautionAmount || 5000;
+      }
+    } else if (s.category === 'site' || s.category === 'translation') {
+      const deposit = Math.round(s.providerPrice * 0.30);
+      guideDepositTotal += deposit;
+      guideOnSiteTotal += Math.round(s.providerPrice * 0.70);
+    } else {
+      hotelTotal += s.providerPrice;
+    }
+  }
+
+  const payNowTotal =
+    hotelTotal +
+    transportTotal +
+    restaurantCautionTotal +
+    fixedMenuTotal +
+    guideDepositTotal +
+    amaroFeesTotal +
+    (dossierFeeDeducted ? 0 : dossierFee);
+
+  const payOnSiteTotal = guideOnSiteTotal;
+
+  return {
+    payNowTotal,
+    payOnSiteTotal,
+    hotelTotal,
+    transportTotal,
+    restaurantCautionTotal,
+    fixedMenuTotal,
+    guideDepositTotal,
+    guideOnSiteTotal,
+    amaroFeesTotal,
+    dossierFeeXof: dossierFee,
+    dossierFeeDeducted,
+    circuitBCommissionsTotal,
+  };
 }

@@ -48,10 +48,10 @@ export function BeninExploreSection({
   ];
 
   const departmentImageById: Record<string, string> = {
-    littoral: 'cotonou_coast',
-    atlantique: 'ouidah_memorial',
+    littoral: 'monument_amazone_cotonou',
+    atlantique: 'porte_non_retour_ouidah',
     oueme: 'portonovo_heritage',
-    mono: 'grandpopo_coast',
+    mono: 'casadelpapa_ouidah_beach',
     couffo: 'grandpopo_coast',
     plateau: 'dassa_hills',
     zou: 'abomey_royal',
@@ -59,7 +59,7 @@ export function BeninExploreSection({
     borgou: 'parakou_heritage',
     atacora: 'atacora_tata',
     donga: 'parakou_heritage',
-    alibori: 'pendjari_wildlife',
+    alibori: 'pendjari_safari_faune',
   };
 
   return (

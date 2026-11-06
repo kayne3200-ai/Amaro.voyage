@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Award,
@@ -53,7 +53,14 @@ import type {
 } from '../../types/amaro';
 import { FIREBASE_CLOUD_META } from '../../lib/firebase';
 import { authorizedFetch } from '../../lib/apiClient';
-import { parseSelectedOffersJson } from '../../lib/offerEngine';
+import {
+  ADMIN_CIRCUIT_A_FEE_LABEL,
+  ADMIN_CIRCUIT_B_COMMISSION_LABEL,
+  calculateCircuitAFee,
+  CLIENT_TAXES_AND_FEES_LABEL,
+  parseSelectedOffersJson,
+  PROVIDER_COMMISSION_LABEL,
+} from '../../lib/offerEngine';
 import {
   BENIN_PUBLIC_DIRECTORY,
   COUNTRIES_REGISTRY,
@@ -613,6 +620,103 @@ export function WorkspacesAdminView({
     filesCount: number;
     pushedAt: string;
   } | null>(null);
+
+  // PARTIE 5 : Tableau admin — Afficher par jour le total "Frais Amaro gagnés" + "Commissions à recevoir" + "Frais de dossier reçus"
+  const dailyFinancialReport = useMemo(() => {
+    const byDate: Record<
+      string,
+      {
+        date: string;
+        circuitAFeesEarned: number;
+        circuitBCommissionsReceivable: number;
+        dossierFeesReceived: number;
+        reservationsCount: number;
+        dossiersCount: number;
+      }
+    > = {};
+
+    const getBucket = (dateStr: string) => {
+      const clean = dateStr && /^\d{4}-\d{2}-\d{2}/.test(dateStr) ? dateStr.slice(0, 10) : 'Non daté';
+      if (!byDate[clean]) {
+        byDate[clean] = {
+          date: clean,
+          circuitAFeesEarned: 0,
+          circuitBCommissionsReceivable: 0,
+          dossierFeesReceived: 0,
+          reservationsCount: 0,
+          dossiersCount: 0,
+        };
+      }
+      return byDate[clean];
+    };
+
+    // 1. Process all active reservations
+    for (const r of allReservations) {
+      if (['cancelled', 'rejected', 'refunded'].includes(r.status)) continue;
+      const bucket = getBucket(r.scheduledDate || (r as any).createdAt || '');
+      bucket.reservationsCount += 1;
+      const provPrice = Number(r.providerPrice || 0);
+
+      if (r.circuitType === 'circuit_b_partner') {
+        // Circuit B : Commission de 10% reversée par le partenaire après le séjour
+        bucket.circuitBCommissionsReceivable += Math.round(provPrice * 0.10);
+      } else {
+        // Circuit A : Frais Amaro = 6% + 500f, plafonné à 4000f
+        const fee = Number(r.amaroFee !== undefined ? r.amaroFee : calculateCircuitAFee(provPrice));
+        bucket.circuitAFeesEarned += fee;
+      }
+    }
+
+    // 2. Process all validated dossier fees (20 000 FCFA par dossier validé)
+    const dossierFeeVal = countrySetting?.dossierFeeXof ?? 20000;
+    for (const f of allFolders) {
+      if (f.dossierFeeStatus === 'validated') {
+        const dDate = f.dossierVerifiedAt || f.dossierDeclaredAt || (f as any).createdAt || new Date().toISOString();
+        const bucket = getBucket(dDate);
+        bucket.dossierFeesReceived += dossierFeeVal;
+        bucket.dossiersCount += 1;
+      }
+    }
+
+    const sortedDates = Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date));
+
+    const totalCircuitAFees = sortedDates.reduce((s, d) => s + d.circuitAFeesEarned, 0);
+    const totalCircuitBCommissions = sortedDates.reduce((s, d) => s + d.circuitBCommissionsReceivable, 0);
+    const totalDossierFees = sortedDates.reduce((s, d) => s + d.dossierFeesReceived, 0);
+    const totalAmaroRevenue = totalCircuitAFees + totalCircuitBCommissions + totalDossierFees;
+
+    return {
+      dailyRows: sortedDates,
+      totalCircuitAFees,
+      totalCircuitBCommissions,
+      totalDossierFees,
+      totalAmaroRevenue,
+    };
+  }, [allReservations, allFolders, countrySetting]);
+
+  const handleReportNoShow = async (reservationId: string) => {
+    if (!window.confirm('Confirmer le signalement de non-présentation (No-Show) pour cette réservation ? La caution sera conservée. Si le client atteint 2 no-shows, son compte sera automatiquement bloqué.')) {
+      return;
+    }
+    try {
+      const res = await authorizedFetch(`/api/amaro/reservations/${encodeURIComponent(reservationId)}/transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'report_no_show' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        onNotify(data.error || 'Erreur lors du signalement de no-show.');
+        return;
+      }
+      onNotify('No-show enregistré. La caution est conservée.' + (data.clientBlocked ? ' Compte client bloqué suite à 2 no-shows.' : ''));
+      if (onRecheckFirestore) {
+        await onRecheckFirestore();
+      }
+    } catch {
+      onNotify('Erreur réseau lors du signalement no-show.');
+    }
+  };
 
   const loadGitHubStatusAndRepos = async (sid: string) => {
     if (!isSignedIn || !isAdmin) {
@@ -1751,6 +1855,131 @@ export function WorkspacesAdminView({
                 </div>
               </div>
 
+              {/* Tableau de Bord Financier Journalier AMARO (Mission Rémunération & Réservations) */}
+              <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+                      Gestion Financière &amp; Revenus
+                    </span>
+                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                      Tableau de Bord Financier Journalier (AMARO.VOYAGE)
+                    </h3>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs text-slate-500 block">Rémunération Totale AMARO</span>
+                    <strong className="font-mono text-xl font-bold text-teal-800 dark:text-teal-300">
+                      {dailyFinancialReport.totalAmaroRevenue.toLocaleString('fr-FR')} FCFA
+                    </strong>
+                  </div>
+                </div>
+
+                {/* 3 KPI Summary Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/40 space-y-1">
+                    <span className="text-xs font-semibold text-amber-900 dark:text-amber-300 block">
+                      {ADMIN_CIRCUIT_A_FEE_LABEL} gagnés (Circuit A)
+                    </span>
+                    <strong className="font-mono text-2xl font-bold text-amber-950 dark:text-amber-100 block">
+                      {dailyFinancialReport.totalCircuitAFees.toLocaleString('fr-FR')} FCFA
+                    </strong>
+                    <span className="text-[11px] text-amber-800/80 dark:text-amber-400 block">
+                      Formule : 6% + 500f (plafonné à 4 000f) sur catalogue public non conventionné.
+                    </span>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-900/40 space-y-1">
+                    <span className="text-xs font-semibold text-emerald-900 dark:text-emerald-300 block">
+                      {ADMIN_CIRCUIT_B_COMMISSION_LABEL}s à recevoir (Circuit B)
+                    </span>
+                    <strong className="font-mono text-2xl font-bold text-emerald-950 dark:text-emerald-100 block">
+                      {dailyFinancialReport.totalCircuitBCommissions.toLocaleString('fr-FR')} FCFA
+                    </strong>
+                    <span className="text-[11px] text-emerald-800/80 dark:text-emerald-400 block">
+                      10% reversés par les partenaires conventionnés après le séjour (en arrière-plan).
+                    </span>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-teal-50/70 dark:bg-teal-950/20 border border-teal-200/80 dark:border-teal-900/40 space-y-1">
+                    <span className="text-xs font-semibold text-teal-900 dark:text-teal-300 block">
+                      Frais de dossier reçus
+                    </span>
+                    <strong className="font-mono text-2xl font-bold text-teal-950 dark:text-teal-100 block">
+                      {dailyFinancialReport.totalDossierFees.toLocaleString('fr-FR')} FCFA
+                    </strong>
+                    <span className="text-[11px] text-teal-800/80 dark:text-teal-400 block">
+                      20 000 FCFA déductibles par dossier de voyage validé.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Table journalière */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 font-medium">
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3 text-center">Réservations</th>
+                        <th className="py-2.5 px-3 text-center">Dossiers validés</th>
+                        <th className="py-2.5 px-3 text-right">Frais Amaro (Circuit A)</th>
+                        <th className="py-2.5 px-3 text-right">Commissions (Circuit B)</th>
+                        <th className="py-2.5 px-3 text-right">Frais de dossier</th>
+                        <th className="py-2.5 px-3 text-right font-bold text-slate-900 dark:text-slate-100">Total journalier</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono tabular-nums">
+                      {dailyFinancialReport.dailyRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-4 text-center text-slate-400 italic font-sans">
+                            Aucune transaction financière enregistrée pour le moment.
+                          </td>
+                        </tr>
+                      ) : (
+                        dailyFinancialReport.dailyRows.map(
+                          (row: {
+                            date: string;
+                            circuitAFeesEarned: number;
+                            circuitBCommissionsReceivable: number;
+                            dossierFeesReceived: number;
+                            reservationsCount: number;
+                            dossiersCount: number;
+                          }) => {
+                          const rowTotal =
+                            row.circuitAFeesEarned +
+                            row.circuitBCommissionsReceivable +
+                            row.dossierFeesReceived;
+                          return (
+                            <tr key={row.date} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                              <td className="py-2.5 px-3 font-sans font-semibold text-slate-800 dark:text-slate-200">
+                                {row.date}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-slate-600 dark:text-slate-400">
+                                {row.reservationsCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-slate-600 dark:text-slate-400">
+                                {row.dossiersCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
+                                {row.circuitAFeesEarned.toLocaleString('fr-FR')} FCFA
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-emerald-700 dark:text-emerald-400">
+                                {row.circuitBCommissionsReceivable.toLocaleString('fr-FR')} FCFA
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-teal-700 dark:text-teal-400">
+                                {row.dossierFeesReceived.toLocaleString('fr-FR')} FCFA
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-slate-900 dark:text-slate-100">
+                                {rowTotal.toLocaleString('fr-FR')} FCFA
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
               {/* Jalons d'ouverture commerciale du Propriétaire (calculés en direct) */}
               <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2767,9 +2996,20 @@ export function WorkspacesAdminView({
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="font-bold">{r.serviceTitle}</div>
-                              <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px]">
-                                {isCircuitA ? 'Circuit A · Répertoire' : 'Circuit B · Partenaire'}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px]">
+                                  {isCircuitA ? 'Circuit A · Répertoire' : 'Circuit B · Partenaire'}
+                                </span>
+                                {isCircuitA ? (
+                                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300 font-mono text-[10px] font-semibold">
+                                    Frais Amaro : {(r.amaroFee !== undefined ? r.amaroFee : calculateCircuitAFee(Number(r.providerPrice || 0))).toLocaleString('fr-FR')} FCFA
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 font-mono text-[10px] font-semibold">
+                                    Commission Amaro (10%) : {Math.round(Number(r.providerPrice || 0) * 0.1).toLocaleString('fr-FR')} FCFA
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <div className="font-mono text-slate-500 tabular-nums">
                               {r.scheduledDate}
@@ -2779,6 +3019,30 @@ export function WorkspacesAdminView({
                               {r.paymentStatus}
                               {r.coordinationStatus && <> · Coord: {r.coordinationStatus}</>}
                             </div>
+                            {(r.payNowAmount !== undefined || r.payOnSiteAmount !== undefined || r.restaurantCautionXof) && (
+                              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
+                                {r.payNowAmount !== undefined && (
+                                  <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-900 dark:bg-teal-950/50 dark:text-teal-200 border border-teal-200 dark:border-teal-900">
+                                    À payer maintenant : {r.payNowAmount.toLocaleString('fr-FR')} FCFA
+                                  </span>
+                                )}
+                                {r.payOnSiteAmount !== undefined && r.payOnSiteAmount > 0 && (
+                                  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
+                                    À payer sur place : {r.payOnSiteAmount.toLocaleString('fr-FR')} FCFA
+                                  </span>
+                                )}
+                                {Boolean(r.restaurantCautionXof) && (
+                                  <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200 border border-amber-200 dark:border-amber-900">
+                                    Caution restaurant : {r.restaurantCautionXof!.toLocaleString('fr-FR')} FCFA
+                                  </span>
+                                )}
+                                {r.refundStatus === 'automatic_refund_initiated' && (
+                                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200 font-sans font-semibold">
+                                    Délai 2h dépassé · Remboursement automatique initié
+                                  </span>
+                                )}
+                              </div>
+                            )}
                             {chosenLines.length > 0 && (
                               <div className="text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
                                 Offres demandées :{' '}
@@ -2972,6 +3236,21 @@ export function WorkspacesAdminView({
                                 >
                                   Marquer remboursé
                                 </button>
+                              )}
+                              {r.noShow ? (
+                                <span className="min-h-[34px] inline-flex items-center px-2.5 py-1 text-xs font-bold text-red-700 bg-red-100 dark:bg-red-950/60 dark:text-red-300 rounded-lg">
+                                  No-Show consigné (caution conservée)
+                                </span>
+                              ) : (
+                                !['cancelled', 'rejected', 'refunded'].includes(r.status) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleReportNoShow(r.id)}
+                                    className="min-h-[34px] px-2.5 py-1 font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200 rounded-lg"
+                                  >
+                                    Signaler No-Show
+                                  </button>
+                                )
                               )}
                               <button
                                 type="button"

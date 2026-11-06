@@ -340,6 +340,31 @@ export interface ReservationDoc {
   isPartialAcceptance?: boolean;
   requestedUnitsTotal?: number;
   acceptedUnitsTotal?: number;
+  payNowAmount?: number;
+  payOnSiteAmount?: number;
+  cancellationRule?: string;
+  restaurantBookingType?: 'table_simple' | 'menu_fixe';
+  restaurantCautionXof?: number;
+  noShow?: boolean;
+  refundStatus?: 'none' | 'automatic_refund_initiated' | 'refunded';
+}
+
+export interface CategoryPaymentSchedule {
+  category: ServiceCategory;
+  circuit: 'A' | 'B';
+  providerPrice: number;
+  amaroFee: number;
+  totalClientPrice: number;
+  payNowAmount: number;
+  payOnSiteAmount: number;
+  depositRatePercent?: number;
+  cautionAmount?: number;
+  isRestaurantFreeTable?: boolean;
+  isRestaurantFixedMenu?: boolean;
+  cancellationRuleDescription: string;
+  payOnSiteDescription: string;
+  displayBreakdownFormula: string;
+  commissionCircuitB?: number;
 }
 
 export interface ProviderProfileDoc {
@@ -758,6 +783,7 @@ export interface AccountGovernanceDoc {
   id: string; // uid
   userId: string;
   abandonmentCount: number;
+  noShowCount?: number;
   flaggedAtRisk: boolean;
   blockedForRequests: boolean;
   blockReason: string;

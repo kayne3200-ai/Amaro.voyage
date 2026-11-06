@@ -31,7 +31,11 @@ import type {
   SystemSettingDoc,
   TravelerReviewDoc,
 } from '../../types/amaro';
-import { COUNTRIES_REGISTRY, EDITORIAL_IMAGES } from '../../data/amaroRegistry';
+import {
+  COUNTRIES_REGISTRY,
+  EDITORIAL_IMAGES,
+  resolveItemEditorialImage,
+} from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { BeninExploreSection } from './BeninExploreSection';
 import {
@@ -46,6 +50,8 @@ import {
   isAmaroOwnAssistanceOffer,
 } from '../../data/amaroGovernanceDefaults';
 import {
+  CLIENT_TAXES_AND_FEES_LABEL,
+  computeCategoryPaymentSchedule,
   OFFER_PRICE_STATE_LABELS,
   resolveServiceOffers,
   validateAndPriceOfferSelection,
@@ -403,7 +409,19 @@ export function ExplorerView({
     return convertDisplayPrice(item.priceAmount, item.currency, currency, rateInfo?.rates);
   };
 
-  const heroImage = EDITORIAL_IMAGES.cotonou_coast;
+  const heroImage = useMemo(() => {
+    if (selectedCityId === 'ouidah') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+    if (selectedCityId === 'portonovo') return EDITORIAL_IMAGES.portonovo_heritage;
+    if (selectedCityId === 'abomey' || selectedCityId === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
+    if (selectedCityId === 'grandpopo') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+    if (selectedCityId === 'natitingou') return EDITORIAL_IMAGES.atacora_tata;
+    if (selectedCityId === 'parakou') return EDITORIAL_IMAGES.parakou_heritage;
+    if (selectedCityId === 'dassa') return EDITORIAL_IMAGES.dassa_hills;
+    if (selectedCategory === 'restaurant') return EDITORIAL_IMAGES.benin_gastronomie_repas;
+    if (selectedCategory === 'transport') return EDITORIAL_IMAGES.transport_tourisme_suv;
+    if (selectedCategory === 'accommodation') return EDITORIAL_IMAGES.sofitel_cotonou_luxury;
+    return EDITORIAL_IMAGES.monument_amazone_cotonou;
+  }, [selectedCityId, selectedCategory]);
 
   const modalOffers = useMemo(
     () =>
@@ -734,7 +752,7 @@ export function ExplorerView({
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 via-black/45 to-transparent text-xs text-slate-200">
-                    Cotonou · Route des Pêches · {heroImage.license}
+                    {heroImage.alt} · {heroImage.license}
                   </div>
                 </div>
               </div>
@@ -994,11 +1012,8 @@ export function ExplorerView({
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                   {filteredItems.slice(0, visibleLimit).map((item) => {
-                    const imgMeta =
-                      EDITORIAL_IMAGES[item.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
-                    const photoSrc = item.customPhotoUrl?.trim()
-                      ? item.customPhotoUrl.trim()
-                      : imgMeta.src;
+                    const imgMeta = resolveItemEditorialImage(item);
+                    const photoSrc = imgMeta.src;
                     const isPhotoVerified = Boolean(
                       item.photoVerified && item.customPhotoUrl?.trim()
                     );
@@ -1018,8 +1033,8 @@ export function ExplorerView({
                         className="rounded-2xl overflow-hidden bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col justify-between"
                       >
                         <div>
-                          {/* Visual Header with honest photo status (5.4) */}
-                          <div className="h-40 bg-slate-200 dark:bg-slate-800 relative overflow-hidden">
+                          {/* Visual Header */}
+                          <div className="h-44 bg-slate-200 dark:bg-slate-800 relative overflow-hidden group">
                             {!failedImages[item.id] ? (
                               <img
                                 src={photoSrc}
@@ -1027,16 +1042,19 @@ export function ExplorerView({
                                 onError={() =>
                                   setFailedImages((p) => ({ ...p, [item.id]: true }))
                                 }
-                                className="w-full h-full object-cover"
+                                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                               />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-slate-800 text-white text-xs px-4 text-center">
                                 {item.title}
                               </div>
                             )}
-                            {!isPhotoVerified && (
+                            {isPhotoVerified && (
                               <div className="absolute top-2.5 left-2.5">
-                                <ListingTrustBadge variant="non_contractual_photo" />
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                  <span>Photo certifiée</span>
+                                </span>
                               </div>
                             )}
                             <button
@@ -1673,33 +1691,105 @@ export function ExplorerView({
                 </div>
               )}
 
-              {modalOfferValidation && modalOfferValidation.valid && (
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs space-y-1 tabular-nums">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-400">
-                      Sous-total prestataire ({modalOfferValidation.totalSelectedUnits} unité
-                      {modalOfferValidation.totalSelectedUnits > 1 ? 's' : ''})
-                    </span>
-                    <strong className="font-mono text-slate-900 dark:text-slate-100">
-                      {modalOfferValidation.providerSubtotalInServiceCurrency > 0
-                        ? `${modalOfferValidation.providerSubtotalInServiceCurrency.toLocaleString('fr-FR')} ${selectedItemForAction.item.currency === 'XOF' ? 'FCFA' : selectedItemForAction.item.currency}`
-                        : OFFER_PRICE_STATE_LABELS.price_on_request}
-                    </strong>
+              {modalOfferValidation && modalOfferValidation.valid && (() => {
+                const isCircuitB =
+                  selectedItemForAction.item.dataOrigin === 'verified_partner' ||
+                  selectedItemForAction.item.activationLevel === 'level_b_validation' ||
+                  selectedItemForAction.item.activationLevel === 'level_c_instant';
+                const provSubtotal = modalOfferValidation.providerSubtotalInServiceCurrency || 0;
+                const sched = computeCategoryPaymentSchedule({
+                  category: selectedItemForAction.item.category,
+                  circuit: isCircuitB ? 'B' : 'A',
+                  providerPrice: provSubtotal,
+                  currency: selectedItemForAction.item.currency,
+                  restaurantBookingType: selectedItemForAction.item.category === 'restaurant' ? 'table_simple' : undefined,
+                });
+
+                return (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs space-y-2 tabular-nums">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-600 dark:text-slate-400">
+                          Sous-total prestataire ({modalOfferValidation.totalSelectedUnits} unité
+                          {modalOfferValidation.totalSelectedUnits > 1 ? 's' : ''})
+                        </span>
+                        <strong className="font-mono text-slate-900 dark:text-slate-100">
+                          {provSubtotal > 0
+                            ? `${provSubtotal.toLocaleString('fr-FR')} ${selectedItemForAction.item.currency === 'XOF' ? 'FCFA' : selectedItemForAction.item.currency}`
+                            : OFFER_PRICE_STATE_LABELS.price_on_request}
+                        </strong>
+                      </div>
+
+                      {/* Naming & Formula Rule */}
+                      {selectedItemForAction.mode === 'booking' && provSubtotal > 0 && (
+                        <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+                          {isCircuitB ? (
+                            <p className="text-emerald-700 dark:text-emerald-400 font-medium">
+                              Partenaire conventionné : Prix affiché = {provSubtotal.toLocaleString('fr-FR')} FCFA (sans aucun ajout pour le client).
+                            </p>
+                          ) : (
+                            <div className="p-2 rounded-lg bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900 text-amber-950 dark:text-amber-200 font-mono">
+                              <span>Prix prestataire : {sched.providerPrice.toLocaleString('fr-FR')} FCFA</span>
+                              {' + '}
+                              <span>{CLIENT_TAXES_AND_FEES_LABEL} : {sched.amaroFee.toLocaleString('fr-FR')} FCFA</span>
+                              {' = '}
+                              <strong className="font-bold">Total : {sched.totalClientPrice.toLocaleString('fr-FR')} FCFA</strong>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {modalOfferValidation.hasPriceToVerify && (
+                        <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                          Estimation : inclut au moins une offre « Prix à vérifier » ou « Tarif sur demande ».
+                        </p>
+                      )}
+                      {selectedItemForAction.mode === 'booking' && (
+                        <p className="text-[11px] text-slate-500">
+                          {selectedItemForAction.item.activationLevel === 'level_c_instant'
+                            ? 'Niveau C : allocation atomique immédiate si le stock confirmé couvre la date.'
+                            : 'Statut initial : « En attente de disponibilité ». Le prestataire dispose de 2h pour confirmer.'}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Dual Totals Rule: À PAYER MAINTENANT vs À PAYER SUR PLACE */}
+                    {selectedItemForAction.mode === 'booking' && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <div className="p-2.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-900 space-y-0.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 dark:text-teal-400 block">
+                            À PAYER MAINTENANT
+                          </span>
+                          <strong className="font-mono text-base font-bold text-teal-950 dark:text-teal-100 block">
+                            {sched.payNowAmount.toLocaleString('fr-FR')} FCFA
+                          </strong>
+                          <span className="text-[11px] text-teal-800 dark:text-teal-300 block">
+                            {selectedItemForAction.item.category === 'accommodation' || selectedItemForAction.item.category === 'transport'
+                              ? 'Totalité à la réservation.'
+                              : selectedItemForAction.item.category === 'site' || selectedItemForAction.item.category === 'translation'
+                              ? 'Acompte 30% (+ Taxes et frais Amaro).'
+                              : 'Caution restaurant 5 000 FCFA.'}
+                          </span>
+                        </div>
+
+                        <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-0.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
+                            À PAYER SUR PLACE
+                          </span>
+                          <strong className="font-mono text-base font-bold text-slate-900 dark:text-slate-100 block">
+                            {sched.payOnSiteAmount > 0
+                              ? `${sched.payOnSiteAmount.toLocaleString('fr-FR')} FCFA`
+                              : '0 FCFA'}
+                          </strong>
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                            {sched.payOnSiteDescription}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  {modalOfferValidation.hasPriceToVerify && (
-                    <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-                      Estimation : inclut au moins une offre « Prix à vérifier » ou « Tarif sur demande ».
-                    </p>
-                  )}
-                  {selectedItemForAction.mode === 'booking' && (
-                    <p className="text-[11px] text-slate-500">
-                      {selectedItemForAction.item.activationLevel === 'level_c_instant'
-                        ? 'Niveau C : allocation atomique immédiate si le stock confirmé couvre la date.'
-                        : 'Statut initial : « En attente de disponibilité ». Aucun débit automatique sans confirmation préalable.'}
-                    </p>
-                  )}
-                </div>
-              )}
+                );
+              })()}
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button

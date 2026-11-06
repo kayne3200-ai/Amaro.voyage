@@ -58,14 +58,18 @@ import {
 import { TRANSLATIONS } from '../../i18n/translations';
 import { authorizedFetch } from '../../lib/apiClient';
 import {
+  calculateCircuitAFee,
+  CLIENT_TAXES_AND_FEES_LABEL,
   OFFER_PRICE_STATE_LABELS,
   parseSelectedOffersJson,
+  PROVIDER_COMMISSION_LABEL,
   resolveServiceOffers,
 } from '../../lib/offerEngine';
 import {
   IDENTITY_STATUS_META,
   IdentityVerificationModal,
 } from './IdentityVerificationModal';
+import { OtpPhoneVerificationModal } from './OtpPhoneVerificationModal';
 import type { LegalDocKey } from './LegalAndCharterModal';
 
 interface ElectronicReceiptData {
@@ -356,6 +360,8 @@ export function JourneyHubView({
   const [acceptedCgvForFee, setAcceptedCgvForFee] = useState<boolean>(false);
   const [declaringFee, setDeclaringFee] = useState<boolean>(false);
   const [localFeeOverrideStatus, setLocalFeeOverrideStatus] = useState<string | null>(null);
+  const [showOtpModal, setShowOtpModal] = useState<boolean>(false);
+  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean>(false);
 
   // Optional Travel Intention State (9.2)
   const [selectedMotivations, setSelectedMotivations] = useState<string[]>([]);
@@ -615,8 +621,106 @@ export function JourneyHubView({
     displayCurrency,
     folderExpenses,
     folderItems,
+  ]);
+
+  // RÈGLE AMARO 4 : Calcul transparent des deux totaux séparés (À PAYER MAINTENANT vs À PAYER SUR PLACE)
+  const globalJourneyPaymentTotals = useMemo(() => {
+    const targetCur = activeFolder?.currency || displayCurrency;
+    const rates = rateInfo?.rates;
+    const folderRes = activeFolder
+      ? clientReservations.filter(
+          (r) =>
+            r.folderId === activeFolder.id &&
+            !['cancelled', 'rejected', 'refunded'].includes(r.status)
+        )
+      : clientReservations.filter((r) => !['cancelled', 'rejected', 'refunded'].includes(r.status));
+
+    let hotelTotalXof = 0;
+    let transportTotalXof = 0;
+    let restaurantCautionTotalXof = 0;
+    let restaurantFixedMenuTotalXof = 0;
+    let guideDepositTotalXof = 0;
+    let guideOnSiteTotalXof = 0;
+    let amaroFeesTotalXof = 0;
+    let circuitBCommissionsTotalXof = 0;
+
+    for (const r of folderRes) {
+      const isCircuitB = r.circuitType === 'circuit_b_partner';
+      const provPrice = Number(r.providerPrice || 0);
+      const fee = Number(
+        r.amaroFee !== undefined
+          ? r.amaroFee
+          : isCircuitB
+          ? 0
+          : calculateCircuitAFee(provPrice)
+      );
+
+      if (!isCircuitB) {
+        amaroFeesTotalXof += fee;
+      } else {
+        circuitBCommissionsTotalXof += Math.round(provPrice * 0.10);
+      }
+
+      if (r.category === 'accommodation') {
+        hotelTotalXof += provPrice;
+      } else if (r.category === 'transport') {
+        transportTotalXof += provPrice;
+      } else if (r.category === 'restaurant') {
+        if (r.restaurantBookingType === 'menu_fixe' || provPrice > 0) {
+          restaurantFixedMenuTotalXof += provPrice;
+        } else {
+          restaurantCautionTotalXof += r.restaurantCautionXof || 5000;
+        }
+      } else if (r.category === 'site' || r.category === 'translation') {
+        const deposit = Math.round(provPrice * 0.30);
+        const onSite = Math.round(provPrice * 0.70);
+        guideDepositTotalXof += deposit;
+        guideOnSiteTotalXof += onSite;
+      } else {
+        hotelTotalXof += provPrice;
+      }
+    }
+
+    const dossierFeeAmountXof =
+      countrySetting?.dossierFeeXof ?? countrySetting?.dossierFeeAmount ?? 20000;
+    const feeAlreadyValidated =
+      (localFeeOverrideStatus || activeFolder?.dossierFeeStatus) === 'validated';
+    const dossierFeeToPayNowXof = feeAlreadyValidated ? 0 : dossierFeeAmountXof;
+
+    const payNowXof =
+      hotelTotalXof +
+      transportTotalXof +
+      restaurantCautionTotalXof +
+      restaurantFixedMenuTotalXof +
+      guideDepositTotalXof +
+      dossierFeeToPayNowXof +
+      amaroFeesTotalXof;
+
+    const payOnSiteXof = guideOnSiteTotalXof;
+
+    return {
+      targetCur,
+      hotelTotal: convertValue(hotelTotalXof, 'XOF', targetCur, rates),
+      transportTotal: convertValue(transportTotalXof, 'XOF', targetCur, rates),
+      restaurantCautionTotal: convertValue(restaurantCautionTotalXof, 'XOF', targetCur, rates),
+      restaurantFixedMenuTotal: convertValue(restaurantFixedMenuTotalXof, 'XOF', targetCur, rates),
+      guideDepositTotal: convertValue(guideDepositTotalXof, 'XOF', targetCur, rates),
+      guideOnSiteTotal: convertValue(guideOnSiteTotalXof, 'XOF', targetCur, rates),
+      amaroFeesTotal: convertValue(amaroFeesTotalXof, 'XOF', targetCur, rates),
+      dossierFeeToPayNow: convertValue(dossierFeeToPayNowXof, 'XOF', targetCur, rates),
+      dossierFeeAlreadyValidated: feeAlreadyValidated,
+      payNowTotal: convertValue(payNowXof, 'XOF', targetCur, rates),
+      payOnSiteTotal: convertValue(payOnSiteXof, 'XOF', targetCur, rates),
+      circuitBCommissionsTotal: convertValue(circuitBCommissionsTotalXof, 'XOF', targetCur, rates),
+      hasItems: folderRes.length > 0,
+    };
+  }, [
+    activeFolder,
+    clientReservations,
+    displayCurrency,
+    rateInfo,
     localFeeOverrideStatus,
-    rateInfo?.rates,
+    countrySetting,
   ]);
 
   // 3 Real Budget Scenarios based on actual Benin catalogue items (5.3)
@@ -784,6 +888,13 @@ export function JourneyHubView({
   const handleDeclareDossierFee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeFolder || !acceptedCgvForFee || declaringFee) return;
+    if (!isPhoneVerified) {
+      setShowOtpModal(true);
+      if (onNotify) {
+        onNotify('Veuillez vérifier votre numéro de téléphone par OTP WhatsApp ou SMS avant de valider.');
+      }
+      return;
+    }
     setDeclaringFee(true);
     try {
       const resp = await authorizedFetch(
@@ -1611,14 +1722,35 @@ export function JourneyHubView({
                         placeholder="Nom du titulaire payeur *"
                         className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                       />
-                      <input
-                        type="tel"
-                        required
-                        value={feePayerPhone}
-                        onChange={(e) => setFeePayerPhone(e.target.value)}
-                        placeholder="Téléphone émetteur (+229...)"
-                        className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
-                      />
+                      <div className="space-y-1">
+                        <input
+                          type="tel"
+                          required
+                          value={feePayerPhone}
+                          onChange={(e) => {
+                            setFeePayerPhone(e.target.value);
+                            setIsPhoneVerified(false);
+                          }}
+                          placeholder="Téléphone émetteur (+229...)"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                        <div className="flex items-center justify-between text-[11px]">
+                          {isPhoneVerified ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Numéro vérifié (OTP)</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setShowOtpModal(true)}
+                              className="text-teal-700 dark:text-teal-400 font-semibold hover:underline"
+                            >
+                              Vérifier par OTP (WhatsApp / SMS)
+                            </button>
+                          )}
+                        </div>
+                      </div>
                       <input
                         type="text"
                         required
@@ -2179,6 +2311,118 @@ export function JourneyHubView({
                 </div>
               </form>
             )}
+
+            {/* RÈGLE 4 : AFFICHAGE DU PRIX GLOBAL — DEUX TOTAUX DISTINCTS */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-[#0B192C] text-white dark:bg-slate-950 border border-slate-800 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div className="space-y-0.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+                    Transparence Financière Amaro · Deux Totaux Séparés
+                  </span>
+                  <h3 className="font-display text-base sm:text-lg font-bold text-white">
+                    Structure de Règlement du Dossier de Voyage
+                  </h3>
+                </div>
+                <span className="text-xs text-slate-400 font-mono">
+                  Règle stricte : Le client voit les deux totaux avant de valider
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 1. À PAYER MAINTENANT */}
+                <div className="p-4 rounded-xl bg-slate-800/80 border border-slate-700/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      À PAYER MAINTENANT
+                    </span>
+                    <strong className="font-mono text-xl sm:text-2xl font-bold text-white">
+                      {formatMoney(globalJourneyPaymentTotals.payNowTotal, globalJourneyPaymentTotals.targetCur)}
+                    </strong>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Hôtel + Transport + Caution Restaurant + Frais de dossier (20 000 FCFA déductibles) + Taxes et frais de service Amaro.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-700/60 text-xs font-mono text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">Hôtels / Hébergements :</span>
+                      <span>{formatMoney(globalJourneyPaymentTotals.hotelTotal, globalJourneyPaymentTotals.targetCur)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">Transports :</span>
+                      <span>{formatMoney(globalJourneyPaymentTotals.transportTotal, globalJourneyPaymentTotals.targetCur)}</span>
+                    </div>
+                    {(globalJourneyPaymentTotals.restaurantCautionTotal > 0 || globalJourneyPaymentTotals.restaurantFixedMenuTotal > 0) && (
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-400">Caution / Menus Restaurant :</span>
+                        <span>
+                          {formatMoney(
+                            globalJourneyPaymentTotals.restaurantCautionTotal + globalJourneyPaymentTotals.restaurantFixedMenuTotal,
+                            globalJourneyPaymentTotals.targetCur
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    {globalJourneyPaymentTotals.guideDepositTotal > 0 && (
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-400">Acomptes Guides / Sites (30%) :</span>
+                        <span>{formatMoney(globalJourneyPaymentTotals.guideDepositTotal, globalJourneyPaymentTotals.targetCur)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">Frais de dossier déductibles :</span>
+                      <span>
+                        {globalJourneyPaymentTotals.dossierFeeAlreadyValidated
+                          ? '0 (déjà validés)'
+                          : formatMoney(globalJourneyPaymentTotals.dossierFeeToPayNow, globalJourneyPaymentTotals.targetCur)}
+                      </span>
+                    </div>
+                    {globalJourneyPaymentTotals.amaroFeesTotal > 0 && (
+                      <div className="flex justify-between text-amber-300 font-semibold">
+                        <span className="font-sans">Taxes et frais de service Amaro :</span>
+                        <span>{formatMoney(globalJourneyPaymentTotals.amaroFeesTotal, globalJourneyPaymentTotals.targetCur)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. À PAYER SUR PLACE */}
+                <div className="p-4 rounded-xl bg-slate-800/80 border border-slate-700/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      À PAYER SUR PLACE
+                    </span>
+                    <strong className="font-mono text-xl sm:text-2xl font-bold text-white">
+                      {globalJourneyPaymentTotals.payOnSiteTotal > 0
+                        ? formatMoney(globalJourneyPaymentTotals.payOnSiteTotal, globalJourneyPaymentTotals.targetCur)
+                        : 'Selon consommations'}
+                    </strong>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Repas restaurant selon choix + 70% Guide et entrées sites restant.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-700/60 text-xs font-mono text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">70% restant Guides / Sites :</span>
+                      <span>{formatMoney(globalJourneyPaymentTotals.guideOnSiteTotal, globalJourneyPaymentTotals.targetCur)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">Repas Restaurant selon choix :</span>
+                      <span className="font-sans text-[11px] text-slate-300">
+                        À la carte (caution de 5 000 FCFA déduite sur place)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-sans text-slate-400">Boissons &amp; Extras :</span>
+                      <span className="font-sans text-[11px] text-slate-300">Directement sur place</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             {budgetBreakdown.hasEstimationItems && (
               <div className="p-3.5 bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-900 rounded-xl text-xs text-amber-950 dark:text-amber-200">
@@ -4095,6 +4339,19 @@ export function JourneyHubView({
           }}
         />
       )}
+
+      <OtpPhoneVerificationModal
+        isOpen={showOtpModal}
+        initialPhone={feePayerPhone}
+        onClose={() => setShowOtpModal(false)}
+        onVerified={(verifiedPhone) => {
+          setFeePayerPhone(verifiedPhone);
+          setIsPhoneVerified(true);
+          if (onNotify) {
+            onNotify('Numéro vérifié avec succès par OTP WhatsApp/SMS. Vous pouvez valider vos démarches.');
+          }
+        }}
+      />
     </div>
   );
 }

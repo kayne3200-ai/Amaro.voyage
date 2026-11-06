@@ -218,6 +218,13 @@ export interface AtomicReservationPayload {
   pickupLocation?: string;
   dropoffLocation?: string;
   requestedUnitsTotal?: number;
+  payNowAmount?: number;
+  payOnSiteAmount?: number;
+  cancellationRule?: string;
+  restaurantBookingType?: 'table_simple' | 'menu_fixe';
+  restaurantCautionXof?: number;
+  noShow?: boolean;
+  refundStatus?: 'none' | 'automatic_refund_initiated' | 'refunded';
   referral?: AtomicReferralPayload | null;
 }
 
@@ -3384,8 +3391,9 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
             await docSnap.ref.update({
               status: isCircuitB ? 'rejected' : 'pending_provider',
               dispatchStatus: 'expired',
+              refundStatus: isCircuitB ? 'automatic_refund_initiated' : 'none',
               alternativeProposal: isCircuitB
-                ? 'Expirée sans réponse dans le délai imparti.'
+                ? 'Délai de confirmation expiré sans réponse du prestataire. Remboursement automatique initié.'
                 : 'Vérification toujours en cours auprès de l’établissement recensé.',
               updatedAt: FieldValue.serverTimestamp(),
             });
