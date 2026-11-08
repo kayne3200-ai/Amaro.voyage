@@ -12,13 +12,20 @@ import {
   Download,
   ExternalLink,
   FileCheck2,
+  Filter,
   FolderKanban,
   GitBranch,
+  Globe,
   HeartHandshake,
+  HelpCircle,
+  Info,
   Lock,
   Moon,
+  Search,
+  ShieldAlert,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Sun,
   Trash2,
   UserCheck,
@@ -37,6 +44,7 @@ import type {
   PartnerCommissionStatus,
   PartnerProfileDoc,
   PartnerReferralDoc,
+  PhotoIndicatorType,
   PilotPartnerDoc,
   PilotStockDoc,
   PlatformContentDoc,
@@ -60,6 +68,9 @@ import {
   CLIENT_TAXES_AND_FEES_LABEL,
   parseSelectedOffersJson,
   PROVIDER_COMMISSION_LABEL,
+  simulateCircuitAFees,
+  DEFAULT_CIRCUIT_A_FEE_CONFIG,
+  type CircuitAFeeConfig,
 } from '../../lib/offerEngine';
 import {
   BENIN_PUBLIC_DIRECTORY,
@@ -72,6 +83,15 @@ import {
   DEFAULT_PLATFORM_CONTENT,
   OWNER_PLACEHOLDER,
 } from '../../data/amaroGovernanceDefaults';
+import {
+  UN_COUNTRIES_REGISTRY,
+  type UNCountryMeta,
+  type UNCountryState,
+} from '../../data/unCountries';
+import {
+  CENTRAL_EMERGENCY_REGISTRY,
+  getEmergencyNumbersForCountry,
+} from '../../data/emergencyRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { AdminCensusTab } from './AdminCensusTab';
 import { AmaroPartnersView } from './AmaroPartnersView';
@@ -275,7 +295,9 @@ type SubWorkspace =
   | 'pilots'
   | 'census'
   | 'admin'
-  | 'matrix';
+  | 'matrix'
+  | 'money_flow'
+  | 'countries_photos';
 
 const CATEGORIES: ServiceCategory[] = [
   'accommodation',
@@ -377,7 +399,12 @@ export function WorkspacesAdminView({
   useEffect(() => {
     if (
       !isAdmin &&
-      (subTab === 'admin' || subTab === 'github' || subTab === 'pilots' || subTab === 'census')
+      (subTab === 'admin' ||
+        subTab === 'github' ||
+        subTab === 'pilots' ||
+        subTab === 'census' ||
+        subTab === 'money_flow' ||
+        subTab === 'countries_photos')
     ) {
       setSubTab('profile');
     }
@@ -474,6 +501,53 @@ export function WorkspacesAdminView({
     Boolean(countrySetting?.includeDemoData)
   );
   const [savingSettings, setSavingSettings] = useState<boolean>(false);
+
+  // C2: Paramètres des frais de service Circuit A & TVA
+  const [amaroFeePercent, setAmaroFeePercent] = useState<number>(
+    countrySetting?.amaroFeePercent ?? Math.round(DEFAULT_CIRCUIT_A_FEE_CONFIG.percentRate * 100)
+  );
+  const [amaroFeeFixed, setAmaroFeeFixed] = useState<number>(
+    countrySetting?.amaroFeeFixed ?? DEFAULT_CIRCUIT_A_FEE_CONFIG.fixedAmount
+  );
+  const [amaroFeeCap, setAmaroFeeCap] = useState<number>(
+    countrySetting?.amaroFeeCap ?? DEFAULT_CIRCUIT_A_FEE_CONFIG.capAmount
+  );
+  const [amaroFeeRounding, setAmaroFeeRounding] = useState<number>(
+    countrySetting?.amaroFeeRounding ?? DEFAULT_CIRCUIT_A_FEE_CONFIG.roundingStep
+  );
+  const [tvaActive, setTvaActive] = useState<boolean>(
+    Boolean(countrySetting?.tvaActive)
+  );
+  const [tvaRate, setTvaRate] = useState<number>(
+    countrySetting?.tvaRate ?? 0
+  );
+
+  // C5: Interrupteur 193 États membres de l'ONU
+  const [countryStates, setCountryStates] = useState<Record<string, UNCountryState>>({});
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>('CI');
+  const [countrySearchQuery, setCountrySearchQuery] = useState<string>('');
+  const [countryStatusFilter, setCountryStatusFilter] = useState<'all' | UNCountryState>('all');
+
+  // C1: Gestion des 11 photographies et indicateurs
+  const [photoOverrides, setPhotoOverrides] = useState<
+    Record<string, { indicator?: PhotoIndicatorType; sourceAndLicense?: string }>
+  >({});
+  const [savingCountriesPhotos, setSavingCountriesPhotos] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (countrySetting?.countryOperationalStates) {
+      setCountryStates(countrySetting.countryOperationalStates);
+    }
+    if (countrySetting?.photoRegistryOverrides) {
+      setPhotoOverrides(countrySetting.photoRegistryOverrides);
+    }
+    if (countrySetting?.amaroFeePercent !== undefined) setAmaroFeePercent(countrySetting.amaroFeePercent);
+    if (countrySetting?.amaroFeeFixed !== undefined) setAmaroFeeFixed(countrySetting.amaroFeeFixed);
+    if (countrySetting?.amaroFeeCap !== undefined) setAmaroFeeCap(countrySetting.amaroFeeCap);
+    if (countrySetting?.amaroFeeRounding !== undefined) setAmaroFeeRounding(countrySetting.amaroFeeRounding);
+    if (countrySetting?.tvaActive !== undefined) setTvaActive(countrySetting.tvaActive);
+    if (countrySetting?.tvaRate !== undefined) setTvaRate(countrySetting.tvaRate);
+  }, [countrySetting]);
 
   // Admin Catalogue Editor State
   const [admSrvId, setAdmSrvId] = useState<string>('');
@@ -1125,6 +1199,18 @@ export function WorkspacesAdminView({
               id: 'admin' as SubWorkspace,
               label: 'Administration & Catalogue',
               icon: ShieldCheck,
+              adminOnly: true,
+            },
+            {
+              id: 'money_flow' as SubWorkspace,
+              label: "Flux de l'argent",
+              icon: Building2,
+              adminOnly: true,
+            },
+            {
+              id: 'countries_photos' as SubWorkspace,
+              label: 'Pays & Photos',
+              icon: Globe,
               adminOnly: true,
             },
             {
@@ -2243,77 +2329,155 @@ export function WorkspacesAdminView({
                         retentionDuration.trim() || OWNER_PLACEHOLDER,
                       vaultKeyConfirmedByOwner: vaultKeyConfirmed,
                       includeDemoData: includeDemo,
+                      // C2: Paramètres des frais de service Circuit A & TVA
+                      amaroFeePercent: Math.max(0, Math.min(100, amaroFeePercent)),
+                      amaroFeeFixed: Math.max(0, amaroFeeFixed),
+                      amaroFeeCap: Math.max(0, amaroFeeCap),
+                      amaroFeeRounding: Math.max(1, amaroFeeRounding),
+                      tvaActive,
+                      tvaRate: Math.max(0, Math.min(100, tvaRate)),
                     });
                   } finally {
                     setSavingSettings(false);
                   }
                 }}
-                className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4"
+                className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5"
               >
-                <h3 className="font-display text-lg font-bold">
-                  Paramètres Commerciaux, Circuits A/B, Sécurité Coffre &amp; Règles d’Itinéraire (BJ)
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-                  <div>
-                    <label className="block text-[11px] mb-1">
-                      Marge Partenaire Circuit B (%)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="0.5"
-                      value={partnerMarginPct}
-                      onChange={(e) => setPartnerMarginPct(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+                <div>
+                  <h3 className="font-display text-lg font-bold">
+                    Paramètres Commerciaux, Circuits A/B, Sécurité Coffre &amp; Règles d’Itinéraire (BJ)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Configuration des rémunérations, plafonds, règles logistiques et conformité légale.
+                  </p>
+                </div>
+
+                {/* Bloc 1: Rémunération Circuit A (Frais de service) & Circuit B (Commission) */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-teal-600" />
+                      Rémunération &amp; Frais de Service (C2)
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Circuit A (Non conventionné) &amp; Circuit B (Partenaire 10%)
+                    </span>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">
-                      Frais Coordination Circuit A (%)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="0.5"
-                      value={directoryMarginPct}
-                      onChange={(e) => setDirectoryMarginPct(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Circuit A — Pourcentage (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.5"
+                        value={amaroFeePercent}
+                        onChange={(e) => setAmaroFeePercent(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 6 %</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Circuit A — Montant fixe (FCFA)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="100"
+                        value={amaroFeeFixed}
+                        onChange={(e) => setAmaroFeeFixed(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 500 FCFA</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Circuit A — Plafond max (FCFA)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="500"
+                        value={amaroFeeCap}
+                        onChange={(e) => setAmaroFeeCap(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 4 000 FCFA</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Circuit A — Arrondi sup. (FCFA)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        step="50"
+                        value={amaroFeeRounding}
+                        onChange={(e) => setAmaroFeeRounding(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Défaut : 100 FCFA supérieur</span>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Frais de dossier (XOF)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={dossierFeeXof}
-                      onChange={(e) => setDossierFeeXof(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Circuit B — Commission partenaire (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.5"
+                        value={partnerMarginPct}
+                        onChange={(e) => setPartnerMarginPct(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Reversée en arrière-plan (10%)</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        TVA réservée à l'État (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.5"
+                        value={tvaRate}
+                        onChange={(e) => setTvaRate(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Actuellement 0% (non assujetti)</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] mb-1 font-medium">
+                        Frais de dossier réservation (FCFA)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={dossierFeeXof}
+                        onChange={(e) => setDossierFeeXof(Number(e.target.value))}
+                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <span className="text-[10px] text-slate-400">Déductible du total final (20 000 FCFA)</span>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Frais fixe par ligne (XOF)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={flatFee}
-                      onChange={(e) => setFlatFee(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Taxe (%)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="0.5"
-                      value={taxPct}
-                      onChange={(e) => setTaxPct(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
+                </div>
+
+                {/* Bloc 2: Logistique & Règles de visite */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
                     <label className="block text-[11px] mb-1">Délai réponse défaut (h)</label>
                     <input
@@ -2337,6 +2501,7 @@ export function WorkspacesAdminView({
                       onChange={(e) => setMaxVisitsChange(Number(e.target.value))}
                       className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
+                    <span className="text-[10px] text-slate-400">Défaut : 1 visite</span>
                   </div>
                   <div>
                     <label className="block text-[11px] mb-1">Visites max (même ville)</label>
@@ -2348,6 +2513,7 @@ export function WorkspacesAdminView({
                       onChange={(e) => setMaxVisitsSame(Number(e.target.value))}
                       className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
+                    <span className="text-[10px] text-slate-400">Défaut : 2 visites</span>
                   </div>
                   <div>
                     <label className="block text-[11px] mb-1">
@@ -2361,15 +2527,6 @@ export function WorkspacesAdminView({
                       value={localContribPct}
                       onChange={(e) => setLocalContribPct(Number(e.target.value))}
                       className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Libellé contribution locale</label>
-                    <input
-                      type="text"
-                      value={localContribLabel}
-                      onChange={(e) => setLocalContribLabel(e.target.value)}
-                      className="w-full min-h-[40px] px-3 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
                 </div>
@@ -2404,7 +2561,7 @@ export function WorkspacesAdminView({
                   </div>
                   <div>
                     <label className="block text-[11px] mb-1">
-                      Durée conservation comptable (à faire valider juriste)
+                      Durée conservation comptable
                     </label>
                     <input
                       type="text"
@@ -2447,6 +2604,75 @@ export function WorkspacesAdminView({
                     : 'Enregistrer tous les paramètres Bénin (BJ)'}
                 </button>
               </form>
+
+              {/* C2.3: Simulateur en lecture seule des frais de service Amaro */}
+              <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 font-semibold">
+                      <Sparkles className="w-4 h-4" />
+                      <span>Simulateur Frais de Service Amaro — Circuit A (C2.3, Lecture Seule)</span>
+                    </div>
+                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                      Calcul sur 4 Prix de Référence
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    Formule : {amaroFeePercent}% + {amaroFeeFixed} FCFA (Plafond : {amaroFeeCap} FCFA, Arrondi : {amaroFeeRounding} FCFA)
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    <thead className="bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Prix prestataire</th>
+                        <th className="p-3">Frais de service Amaro</th>
+                        <th className="p-3">Montant total affiché</th>
+                        <th className="p-3">Part réelle des frais</th>
+                        <th className="p-3">Formule / Statut</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+                      {simulateCircuitAFees([20000, 50000, 100000, 300000], {
+                        percentRate: amaroFeePercent / 100,
+                        fixedAmount: amaroFeeFixed,
+                        capAmount: amaroFeeCap,
+                        roundingStep: amaroFeeRounding,
+                      }).map((row) => (
+                        <tr key={row.providerPriceXof} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-semibold text-slate-900 dark:text-slate-100">
+                            {row.providerPriceXof.toLocaleString('fr-FR')} FCFA
+                          </td>
+                          <td className="p-3 text-teal-700 dark:text-teal-400 font-bold">
+                            + {row.amaroFeeXof.toLocaleString('fr-FR')} FCFA
+                          </td>
+                          <td className="p-3 text-slate-900 dark:text-slate-100 font-bold">
+                            {row.totalPriceXof.toLocaleString('fr-FR')} FCFA
+                          </td>
+                          <td className="p-3 text-slate-600 dark:text-slate-400">
+                            {row.effectiveFeePercent.toFixed(2)} %
+                          </td>
+                          <td className="p-3 text-[11px] font-sans text-slate-500">
+                            {row.capped ? (
+                              <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-semibold">
+                                Plafonné au maximum ({amaroFeeCap.toLocaleString('fr-FR')} FCFA)
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">
+                                {amaroFeePercent}% + {amaroFeeFixed} FCFA (arrondi {amaroFeeRounding}f)
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[11px] text-slate-500 italic">
+                  Note : L'affichage au voyageur indique toujours la transparence stricte : « Prix prestataire : X + Frais de service Amaro : Y = Total : Z ». Le mot « Taxes » seul n'est jamais employé (réservé à l'État).
+                </p>
+              </section>
 
               {/* Admin Catalogue Manager (/services/{serviceId}) */}
               <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
@@ -3654,6 +3880,597 @@ export function WorkspacesAdminView({
                   </button>
                 </div>
               )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 6: FLUX DE L'ARGENT (C3)
+         ===================================================================== */}
+      {subTab === 'money_flow' && (
+        <div className="space-y-6">
+          {/* Bannière Démonstration Obligatoire (C3.2) */}
+          <div className="p-4 sm:p-5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 rounded-2xl flex items-start gap-3 text-amber-950 dark:text-amber-100">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs sm:text-sm">
+              <p className="font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                « Démonstration, aucun argent réel »
+              </p>
+              <p className="leading-relaxed text-amber-900/90 dark:text-amber-200/90">
+                AMARO.VOYAGE ne dispose pas encore de passerelle de paiement automatisée connectée.
+                Tous les flux financiers, avances, acomptes et séquestres affichés sont soit gérés
+                sous contrôle humain strict (rapprochement manuel Mobile Money / virement), soit
+                simulés dans le cadre du démonstrateur technique.
+              </p>
+            </div>
+          </div>
+
+          {/* Grille 3 Piliers */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Pilier 1: Verrouillage Pré-Paiement */}
+            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+              <div className="flex items-center gap-2 text-teal-700 dark:text-teal-400 text-xs font-semibold">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Règle Fondamentale (Test 38)</span>
+              </div>
+              <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                1. Paiement uniquement après acceptation
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Le client ne peut en aucun cas payer une prestation tant que le prestataire
+                (Circuit B) ou la coordination Amaro (Circuit A) n'a pas formellement accepté la
+                demande de réservation. Toute tentative antérieure est rejetée par le serveur
+                avec une erreur <strong>HTTP 409</strong>.
+              </p>
+            </div>
+
+            {/* Pilier 2: Qui encaisse ? */}
+            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+              <div className="flex items-center gap-2 text-teal-700 dark:text-teal-400 text-xs font-semibold">
+                <Building2 className="w-4 h-4" />
+                <span>Encaissement</span>
+              </div>
+              <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                2. Qui encaisse les fonds ?
+              </h3>
+              <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside leading-relaxed">
+                <li>
+                  <strong>Frais de dossier (20 000 FCFA) :</strong> Encaissés par AMARO dès
+                  l'envoi du dossier (déductibles de la facture finale).
+                </li>
+                <li>
+                  <strong>Circuit A (Non conventionné) :</strong> Encaissé par AMARO (prix
+                  prestataire + Frais de service Amaro), conservé sous séquestre jusqu'à exécution.
+                </li>
+                <li>
+                  <strong>Circuit B (Partenaire conventionné) :</strong> Encaissé directement par
+                  le prestataire ou via coordination sans surcoût client.
+                </li>
+              </ul>
+            </div>
+
+            {/* Pilier 3: Rémunération Amaro */}
+            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+              <div className="flex items-center gap-2 text-teal-700 dark:text-teal-400 text-xs font-semibold">
+                <Sparkles className="w-4 h-4" />
+                <span>Rémunération Amaro</span>
+              </div>
+              <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                3. Comment Amaro est rémunéré ?
+              </h3>
+              <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-2 list-disc list-inside leading-relaxed">
+                <li>
+                  <strong>Circuit A :</strong> Frais de service Amaro (6% + 500 FCFA, plafonné à
+                  4 000 FCFA, arrondi aux 100 FCFA supérieurs).
+                </li>
+                <li>
+                  <strong>Circuit B :</strong> Commission de 10% reversée par le partenaire après le
+                  séjour. Transparent pour le client.
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Règles d'Annulation & Acomptes par Catégorie */}
+          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+            <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+              Conditions de Règlement &amp; Politiques d'Annulation par Catégorie
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">
+                  Hôtels &amp; Hébergements
+                </span>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Paiement :</strong> 100 % à la réservation après confirmation.
+                </p>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Annulation :</strong> Sans frais jusqu'à 48h avant l'arrivée. Après 48h,
+                  les frais Amaro sont conservés et les conditions de l'hôtel s'appliquent.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">
+                  Transports &amp; Chauffeurs
+                </span>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Paiement :</strong> 100 % à la réservation après confirmation.
+                </p>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Annulation :</strong> Sans frais jusqu'à 24h avant la prise en charge.
+                  Après 24h, les frais Amaro sont conservés.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">
+                  Guides &amp; Sites Touristiques
+                </span>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Paiement :</strong> Acompte de 30 % à la réservation pour bloquer le
+                  créneau.
+                </p>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Solde :</strong> 70 % remis en mains propres sur place au guide ou à la
+                  billetterie du site.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">
+                  Restaurants &amp; Maquis
+                </span>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Caution :</strong> 5 000 FCFA par table pour sécuriser la réservation.
+                </p>
+                <p className="text-slate-600 dark:text-slate-400">
+                  <strong>Restitution :</strong> Déduite de l'addition du restaurant ou restituée sur
+                  présentation de la note.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* Matrice Automatique vs Manuel */}
+          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+            <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+              Répartition des Traitements : Automatique vs Manuel
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div className="p-4 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 font-bold text-emerald-900 dark:text-emerald-300 text-sm">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Traitements Automatiques (Système)</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-700 dark:text-slate-300">
+                  <li>Calcul instantané des frais de service Amaro (formule, plafond 4 000f, arrondi 100f).</li>
+                  <li>Blocage strict 409 sur toute tentative de paiement prématurée.</li>
+                  <li>Transitions d'état d'agenda et verrouillage de capacité.</li>
+                  <li>Génération du journal d'audit cryptographique et horodatage ISO.</li>
+                  <li>Génération des devis et ventilation transparente au centime près.</li>
+                </ul>
+              </div>
+
+              <div className="p-4 bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900/50 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 font-bold text-sky-900 dark:text-sky-300 text-sm">
+                  <Clock className="w-4 h-4 text-sky-600" />
+                  <span>Traitements Manuels (Équipe Amaro)</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-700 dark:text-slate-300">
+                  <li>Rapprochement des paiements Mobile Money (MTN / Moov) et virements bancaires.</li>
+                  <li>Validation humaine des preuves de transaction avant confirmation ferme.</li>
+                  <li>Ordres de virement ou décaissement Mobile Money vers les prestataires locaux.</li>
+                  <li>Régularisation et remboursement manuel des cautions restaurant et trop-perçus.</li>
+                  <li>Assistance téléphonique et gestion des litiges sur le terrain.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 7: PAYS & PHOTOS (C1 & C5)
+         ===================================================================== */}
+      {subTab === 'countries_photos' && (
+        <div className="space-y-8">
+          {/* SECTION 1: INTERRUPTEUR 193 ÉTATS MEMBRES DE L'ONU (C5) */}
+          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 font-semibold">
+                  <Globe className="w-4 h-4" />
+                  <span>Interrupteur par Pays · 193 États Membres de l'ONU (C5)</span>
+                </div>
+                <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                  Déploiement International &amp; Contrôle d'Accès
+                </h2>
+              </div>
+              <button
+                type="button"
+                disabled={savingCountriesPhotos}
+                onClick={async () => {
+                  setSavingCountriesPhotos(true);
+                  try {
+                    await onAdminSaveExtendedSettings({
+                      countryOperationalStates: countryStates,
+                      photoRegistryOverrides: photoOverrides,
+                    });
+                    onNotify('Paramètres des pays et des photos enregistrés avec succès.');
+                  } finally {
+                    setSavingCountriesPhotos(false);
+                  }
+                }}
+                className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+              >
+                {savingCountriesPhotos ? 'Enregistrement...' : 'Enregistrer les états des pays & photos'}
+              </button>
+            </div>
+
+            {/* Compteurs des 4 états */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl">
+                <span className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium">Ouverts (Public)</span>
+                <p className="font-display text-lg font-bold text-emerald-900 dark:text-emerald-200">
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'ouvert').length}
+                </p>
+              </div>
+              <div className="p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl">
+                <span className="text-[11px] text-indigo-800 dark:text-indigo-300 font-medium">Ouvert Admin Seulement</span>
+                <p className="font-display text-lg font-bold text-indigo-900 dark:text-indigo-200">
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'ouvert_admin_seulement').length} (Côte d'Ivoire)
+                </p>
+              </div>
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl">
+                <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">Bientôt Disponibles</span>
+                <p className="font-display text-lg font-bold text-amber-900 dark:text-amber-200">
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'bientot').length} (BJ, SN, TG)
+                </p>
+              </div>
+              <div className="p-3 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
+                <span className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">Cachés</span>
+                <p className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'cache').length}
+                </p>
+              </div>
+            </div>
+
+            {/* Recherche & Filtre */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher un pays par nom ou code ISO (ex: Côte d'Ivoire, CI, BJ)..."
+                  value={countrySearchQuery}
+                  onChange={(e) => setCountrySearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5 text-xs">
+                <Filter className="w-4 h-4 text-slate-400" />
+                <select
+                  value={countryStatusFilter}
+                  onChange={(e) => setCountryStatusFilter(e.target.value as any)}
+                  className="px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
+                >
+                  <option value="all">Tous les statuts</option>
+                  <option value="ouvert">Ouvert</option>
+                  <option value="ouvert_admin_seulement">Ouvert admin seulement</option>
+                  <option value="bientot">Bientôt</option>
+                  <option value="cache">Caché</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Liste filtrée des pays */}
+            <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+              {UN_COUNTRIES_REGISTRY.filter((country: UNCountryMeta) => {
+                const currentState = countryStates[country.code] || country.initialState;
+                if (countryStatusFilter !== 'all' && currentState !== countryStatusFilter) {
+                  return false;
+                }
+                if (countrySearchQuery.trim()) {
+                  const q = countrySearchQuery.toLowerCase();
+                  return (
+                    country.nameFr.toLowerCase().includes(q) ||
+                    country.code.toLowerCase().includes(q) ||
+                    country.alpha3.toLowerCase().includes(q)
+                  );
+                }
+                return true;
+              }).map((country: UNCountryMeta) => {
+                const currentState = countryStates[country.code] || country.initialState;
+                const isSelected = selectedCountryCode === country.code;
+                return (
+                  <div
+                    key={country.code}
+                    className={`p-3 flex items-center justify-between gap-3 transition-colors ${
+                      isSelected
+                        ? 'bg-amber-50/70 dark:bg-amber-950/30'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                    }`}
+                  >
+                    <div
+                      className="flex-1 cursor-pointer"
+                      onClick={() => setSelectedCountryCode(country.code)}
+                    >
+                      <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                        <span className="font-mono text-teal-700 dark:text-teal-400 font-bold">
+                          {country.code}
+                        </span>
+                        <span>{country.nameFr}</span>
+                        <span className="text-[10px] text-slate-400">({country.alpha3})</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500">Région : {country.region}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={currentState}
+                        onChange={(e) => {
+                          const nextState = e.target.value as UNCountryState;
+                          setCountryStates((prev) => ({
+                            ...prev,
+                            [country.code]: nextState,
+                          }));
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border ${
+                          currentState === 'ouvert'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-200'
+                            : currentState === 'ouvert_admin_seulement'
+                            ? 'bg-indigo-50 text-indigo-800 border-indigo-300 dark:bg-indigo-950/40 dark:text-indigo-200'
+                            : currentState === 'bientot'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400'
+                        }`}
+                      >
+                        <option value="ouvert">Ouvert</option>
+                        <option value="ouvert_admin_seulement">Ouvert admin seulement</option>
+                        <option value="bientot">Bientôt</option>
+                        <option value="cache">Caché</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCountryCode(country.code)}
+                        className="px-2 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400 underline"
+                      >
+                        Fiche
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Fiche de paramétrage du pays sélectionné (C5.4 & C5.5) */}
+            {selectedCountryCode && (
+              <div className="p-4 sm:p-5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm px-2 py-0.5 bg-slate-200 dark:bg-slate-800 rounded font-bold">
+                      {selectedCountryCode}
+                    </span>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Fiche Pays :{' '}
+                      {UN_COUNTRIES_REGISTRY.find((c: UNCountryMeta) => c.code === selectedCountryCode)?.nameFr ||
+                        selectedCountryCode}
+                    </h3>
+                  </div>
+                  <span className="text-xs text-slate-500">
+                    Statut actuel :{' '}
+                    <strong>
+                      {countryStates[selectedCountryCode] ||
+                        UN_COUNTRIES_REGISTRY.find((c: UNCountryMeta) => c.code === selectedCountryCode)?.initialState ||
+                        'cache'}
+                    </strong>
+                  </span>
+                </div>
+
+                {/* Champs vides « à renseigner » (C5.4) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                      Monnaie officielle
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      placeholder="à renseigner"
+                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                      Frais de dossier
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      placeholder="à renseigner"
+                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                      Plafond visites / jour
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      placeholder="à renseigner"
+                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                      Taux TVA applicable
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      placeholder="à renseigner"
+                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                    />
+                  </div>
+                </div>
+
+                {/* Garantie de non-contamination (C5.5) */}
+                <div className="p-3.5 bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900 rounded-xl flex items-start gap-2.5 text-xs text-teal-950 dark:text-teal-200">
+                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-bold">
+                      Garantie d'étanchéité stricte (Test de non-contamination validé)
+                    </p>
+                    <p className="text-teal-900/90 dark:text-teal-300/90 leading-relaxed">
+                      L'activation d'un nouveau pays (ex: Côte d'Ivoire) ne contamine jamais l'espace
+                      avec les données du Bénin : aucune fiche béninoise, aucun contact d'urgence béninois,
+                      ni aucun texte juridique béninois n'est affiché. Tout pays non ouvert renvoie une
+                      interdiction HTTP 403 « Pas encore disponible ».
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* SECTION 2: GESTION DES 11 PHOTOGRAPHIES (C1) */}
+          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 font-semibold">
+                <Sparkles className="w-4 h-4" />
+                <span>Photographies du Catalogue · 11 Visuels Déployés (C1)</span>
+              </div>
+              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                Statuts, Étiquettes &amp; Traçabilité des Visuels
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Indicateurs modifiables par l'administrateur : « propre à l'établissement » (sans étiquette),
+                « d'illustration » ou « à vérifier » (affiche l'étiquette discrète "Photo d'illustration").
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(EDITORIAL_IMAGES).map(([imgKey, meta]) => {
+                const currentOverride = photoOverrides[imgKey];
+                const currentIndicator: PhotoIndicatorType =
+                  currentOverride?.indicator || meta.indicator || 'illustration';
+                const currentSourceLicense =
+                  currentOverride?.sourceAndLicense !== undefined
+                    ? currentOverride.sourceAndLicense
+                    : meta.license || 'Inconnu';
+                const showBadge = currentIndicator === 'illustration' || currentIndicator === 'a_verifier';
+
+                return (
+                  <div
+                    key={imgKey}
+                    className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      {/* Image Preview */}
+                      <div className="relative w-24 h-20 rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-800 shrink-0">
+                        <img
+                          src={meta.src}
+                          alt={meta.alt}
+                          className="w-full h-full object-cover"
+                        />
+                        {showBadge && (
+                          <span className="absolute bottom-1 right-1 text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-950/75 text-white backdrop-blur-xs">
+                            Illustration
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Meta Info */}
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <code className="text-[11px] font-mono font-bold text-teal-700 dark:text-teal-400 truncate">
+                            {imgKey}
+                          </code>
+                          <span
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                              currentIndicator === 'propre_etablissement'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : currentIndicator === 'illustration'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                            }`}
+                          >
+                            {currentIndicator === 'propre_etablissement'
+                              ? 'Propre établissement'
+                              : currentIndicator === 'illustration'
+                              ? "D'illustration"
+                              : 'À vérifier'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2">
+                          {meta.alt}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Edit Form for this photo */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <div>
+                        <label className="block text-[10px] font-medium mb-1 text-slate-500">
+                          Indicateur d'origine
+                        </label>
+                        <select
+                          value={currentIndicator}
+                          onChange={(e) => {
+                            const nextIndicator = e.target.value as PhotoIndicatorType;
+                            setPhotoOverrides((prev) => ({
+                              ...prev,
+                              [imgKey]: {
+                                indicator: nextIndicator,
+                                sourceAndLicense: currentSourceLicense,
+                              },
+                            }));
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
+                        >
+                          <option value="illustration">D'illustration (affiche étiquette)</option>
+                          <option value="a_verifier">À vérifier (affiche étiquette)</option>
+                          <option value="propre_etablissement">Propre à l'établissement (sans étiquette)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-medium mb-1 text-slate-500">
+                          Source et licence
+                        </label>
+                        <input
+                          type="text"
+                          value={currentSourceLicense}
+                          onChange={(e) => {
+                            const nextSrcLic = e.target.value;
+                            setPhotoOverrides((prev) => ({
+                              ...prev,
+                              [imgKey]: {
+                                indicator: currentIndicator,
+                                sourceAndLicense: nextSrcLic,
+                              },
+                            }));
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-mono"
+                          placeholder="inconnu"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                      <span>Auteur : Inconnu (Génération IA)</span>
+                      <span>
+                        Affichage : {showBadge ? 'Étiquette active' : 'Aucune étiquette (photo propre)'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         </div>

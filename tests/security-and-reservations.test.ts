@@ -39,10 +39,26 @@ import {
 } from '../src/data/beninWebCensusSeed';
 import {
   CIRCUIT_A_HONEST_AVAILABILITY_TEXT,
+  CLIENT_TAXES_AND_FEES_LABEL,
+  DEFAULT_CIRCUIT_A_FEE_CONFIG,
   GENERIC_FALLBACK_ROOM_LABEL,
+  calculateCircuitAFee,
   classifyCensusCandidateAgainstCatalogue,
+  simulateCircuitAFees,
 } from '../src/lib/offerEngine';
-import { BENIN_PUBLIC_DIRECTORY } from '../src/data/amaroRegistry';
+import {
+  BENIN_PUBLIC_DIRECTORY,
+  EDITORIAL_IMAGES,
+  shouldShowIllustrationBadge,
+} from '../src/data/amaroRegistry';
+import {
+  UN_COUNTRIES_REGISTRY,
+} from '../src/data/unCountries';
+import {
+  CENTRAL_EMERGENCY_REGISTRY,
+  formatEmergencyNumberDisplay,
+  getEmergencyNumbersForCountry,
+} from '../src/data/emergencyRegistry';
 import type {
   AccountGovernanceDoc,
   CensusListingDoc,
@@ -4380,5 +4396,258 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       assert.equal(activeIds.has(rec.id), false);
     }
   });
+
+  it('38. C3 — Flux de l’argent : rejet strict (409) de tout paiement client avant acceptation formelle du prestataire ou de la coordination', async () => {
+    store.reset();
+
+    // 38a. Create a reservation in 'pending_provider' status
+    const testResId = 'res-c3-early-payment';
+    store.reservations.set(testResId, {
+      reservationId: testResId,
+      itemId: 'slot-c3-1',
+      notificationId: null,
+      clientId: 'traveler-c3-uid',
+      providerOwnerId: 'provider-owner-uid',
+      providerId: 'prov-cotonou-1',
+      folderId: 'fold-c3',
+      serviceId: 'srv-cotonou-hotel-1',
+      serviceTitle: 'Chambre Équilibrée Cotonou',
+      category: 'accommodation',
+      cityId: 'cotonou',
+      scheduledDate: '2026-12-01',
+      scheduledTime: '14:00',
+      computedEndTime: '11:00',
+      durationMinutes: 1260,
+      participants: 2,
+      providerPrice: 50000,
+      amaroFee: 3500,
+      taxAmount: 0,
+      totalAmount: 53500,
+      currency: 'XOF',
+      pricingSnapshot: '50000+3500',
+      status: 'pending_provider',
+      paymentStatus: 'pending',
+      updatedAtIso: new Date().toISOString(),
+    });
+
+    // 38b. Client tries to initiate payment while status is still 'pending_provider' -> MUST fail with 409
+    const earlyPayRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${testResId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-client-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'client_initiate_payment' }),
+      }
+    );
+    assert.equal(earlyPayRes.status, 409);
+    const earlyPayJson: any = await earlyPayRes.json();
+    assert.match(
+      earlyPayJson.error,
+      /Le paiement d’une prestation n’est autorisé qu’après acceptation formelle/
+    );
+
+    // 38c. Admin confirms provider acceptance -> status becomes 'accepted'
+    const acceptRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${testResId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'provider_accept' }),
+      }
+    );
+    assert.equal(acceptRes.status, 200);
+
+    // 38d. Now that status is 'accepted', client can initiate payment successfully
+    const validPayRes = await fetch(
+      `${baseUrl}/api/amaro/reservations/${testResId}/transition`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-client-traveler-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'client_initiate_payment' }),
+      }
+    );
+    assert.equal(validPayRes.status, 200);
+    const validPayJson: any = await validPayRes.json();
+    assert.equal(validPayJson.paymentStatus, 'in_verification');
+  });
+
+  it('39. C2 — Règle de nommage : le libellé client est strictement « Frais de service Amaro » et exclut le mot « Taxes » seul', async () => {
+    // 39a. Verify constant label matches exact owner decision
+    assert.equal(CLIENT_TAXES_AND_FEES_LABEL, 'Frais de service Amaro');
+    assert.equal(CLIENT_TAXES_AND_FEES_LABEL.includes('Taxes'), false);
+
+    // 39b. Default config calculation returns the exact fee
+    const fee50k = calculateCircuitAFee(50000);
+    assert.equal(fee50k, 3500);
+    assert.equal(50000 + fee50k, 53500);
+  });
+
+  it('39b. C2 — Règle de calcul Circuit A : 6% + 500f, plafond 4 000f, arrondi aux 100f supérieurs', async () => {
+    // Hotel 60.000f -> 6% = 3600 + 500 = 4100 -> capped at 4000f -> total 64.000f
+    const res60kFee = calculateCircuitAFee(60000);
+    assert.equal(res60kFee, 4000);
+    assert.equal(60000 + res60kFee, 64000);
+
+    // Transport 12.000f -> 6% = 720 + 500 = 1220 -> rounded up to 1300f (100f rounding)
+    const res12kFee = calculateCircuitAFee(12000);
+    assert.equal(res12kFee, 1300);
+    assert.equal(12000 + res12kFee, 13300);
+
+    // Guide 25.000f -> 6% = 1500 + 500 = 2000f
+    const res25kFee = calculateCircuitAFee(25000);
+    assert.equal(res25kFee, 2000);
+    assert.equal(25000 + res25kFee, 27000);
+  });
+
+  it('40. C2 — Simulateur de frais de service Amaro en lecture seule pour 20k, 50k, 100k et 300k FCFA', async () => {
+    const sim = simulateCircuitAFees(DEFAULT_CIRCUIT_A_FEE_CONFIG);
+    assert.equal(sim.length, 4);
+
+    // 20 000 FCFA -> 6% = 1200 + 500 = 1700 FCFA -> Total 21 700 FCFA (8.5%)
+    const row20k = sim[0];
+    assert.equal(row20k.providerPriceXof, 20000);
+    assert.equal(row20k.amaroFeeXof, 1700);
+    assert.equal(row20k.totalPriceXof, 21700);
+    assert.equal(row20k.effectiveFeePercent, 8.5);
+    assert.equal(row20k.capped, false);
+
+    // 50 000 FCFA -> 6% = 3000 + 500 = 3500 FCFA -> Total 53 500 FCFA (7.0%)
+    const row50k = sim[1];
+    assert.equal(row50k.providerPriceXof, 50000);
+    assert.equal(row50k.amaroFeeXof, 3500);
+    assert.equal(row50k.totalPriceXof, 53500);
+    assert.equal(row50k.effectiveFeePercent, 7.0);
+    assert.equal(row50k.capped, false);
+
+    // 100 000 FCFA -> 6% = 6000 + 500 = 6500 -> Plafonné à 4000 FCFA -> Total 104 000 FCFA (4.0%)
+    const row100k = sim[2];
+    assert.equal(row100k.providerPriceXof, 100000);
+    assert.equal(row100k.amaroFeeXof, 4000);
+    assert.equal(row100k.totalPriceXof, 104000);
+    assert.equal(row100k.effectiveFeePercent, 4.0);
+    assert.equal(row100k.capped, true);
+
+    // 300 000 FCFA -> 6% = 18000 + 500 = 18500 -> Plafonné à 4000 FCFA -> Total 304 000 FCFA (~1.33%)
+    const row300k = sim[3];
+    assert.equal(row300k.providerPriceXof, 300000);
+    assert.equal(row300k.amaroFeeXof, 4000);
+    assert.equal(row300k.totalPriceXof, 304000);
+    assert.ok(Math.abs(row300k.effectiveFeePercent - 1.33) < 0.05);
+    assert.equal(row300k.capped, true);
+  });
+
+  it('41. C1 — Photographies : les 11 visuels d’illustration affichent discrètement « Photo d’illustration », masquée sur photo certifiée propre', async () => {
+    // 41a. Should show badge for 'illustration' or 'a_verifier'
+    assert.equal(shouldShowIllustrationBadge('illustration'), true);
+    assert.equal(shouldShowIllustrationBadge('a_verifier'), true);
+
+    // 41b. Must NOT show badge for 'propre_etablissement'
+    assert.equal(shouldShowIllustrationBadge('propre_etablissement'), false);
+
+    // 41c. All 11 registered photos have trace metadata (defaulting to Inconnu when unknown)
+    const keys = Object.keys(EDITORIAL_IMAGES);
+    assert.equal(keys.length, 11);
+    for (const key of keys) {
+      const meta = EDITORIAL_IMAGES[key];
+      assert.ok(meta.key);
+      assert.ok(meta.src);
+      assert.ok(meta.alt);
+      assert.equal(meta.license, 'Inconnu');
+      assert.equal(meta.author, 'Inconnu');
+      assert.equal(shouldShowIllustrationBadge(meta.indicator), true);
+    }
+  });
+
+  it('42. C5 — Interrupteur par pays : 193 États membres de l’ONU et blocage serveur HTTP 403 « Pas encore disponible » sur pays non ouvert', async () => {
+    // 42a. Exactly 193 UN member states registered
+    assert.equal(UN_COUNTRIES_REGISTRY.length, 193);
+
+    // 42b. Verify initial states: CI is 'ouvert_admin_seulement', BJ/SN/TG are 'bientot', 189 others are 'cache'
+    const ci = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'CI');
+    assert.ok(ci);
+    assert.equal(ci.initialState, 'ouvert_admin_seulement');
+
+    const bj = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'BJ');
+    assert.ok(bj);
+    assert.equal(bj.initialState, 'bientot');
+
+    const sn = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'SN');
+    assert.ok(sn);
+    assert.equal(sn.initialState, 'bientot');
+
+    const tg = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'TG');
+    assert.ok(tg);
+    assert.equal(tg.initialState, 'bientot');
+
+    const hiddenCount = UN_COUNTRIES_REGISTRY.filter((c: any) => c.initialState === 'cache').length;
+    assert.equal(hiddenCount, 189);
+
+    // 42c. Server refuses public access with 403 on non-open countries
+    const resForbidden = await fetch(`${baseUrl}/api/amaro/countries/GH/data`);
+    assert.equal(resForbidden.status, 403);
+    const forbiddenJson: any = await resForbidden.json();
+    assert.equal(forbiddenJson.error, 'Pas encore disponible');
+
+    const resSenegal = await fetch(`${baseUrl}/api/amaro/countries/SN/data`);
+    assert.equal(resSenegal.status, 403);
+  });
+
+  it('43. C5 & C4 — Non-contamination stricte pour la Côte d’Ivoire et registre unique des numéros d’urgence', async () => {
+    // 43a. Admin requests Côte d'Ivoire data
+    const ciRes = await fetch(`${baseUrl}/api/amaro/countries/CI/data`, {
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+      },
+    });
+    assert.equal(ciRes.status, 200);
+    const ciData: any = await ciRes.json();
+
+    // Verify non-contamination: country is CI, zero Benin catalogue sheets
+    assert.equal(ciData.countryCode, 'CI');
+    assert.equal(ciData.countryName, "Côte d'Ivoire");
+    assert.deepEqual(ciData.services, []);
+
+    // 43b. Verify non-contamination of emergency numbers: no Benin numbers in CI
+    const ciNumbers = ciData.emergencyNumbers;
+    assert.ok(Array.isArray(ciNumbers));
+    for (const num of ciNumbers) {
+      assert.notEqual(num.number, '117'); // Benin Police Secours
+      assert.notEqual(num.number, '118'); // Benin Sapeurs-Pompiers
+      assert.notEqual(num.number, '166'); // Benin Ligne Verte Police
+    }
+
+    // 43c. C4 — Audit and unique registry of emergency numbers:
+    // SAMU and Protection Civile are left empty ("") with status 'a_confirmer'
+    const beninEmergencies = getEmergencyNumbersForCountry('BJ');
+    const samuBJ = beninEmergencies.find((e: any) => e.id === 'bj_samu');
+    assert.ok(samuBJ);
+    assert.equal(samuBJ.number, '');
+    assert.equal(samuBJ.status, 'a_confirmer');
+
+    const protCivBJ = beninEmergencies.find((e: any) => e.id === 'bj_pompiers_protection_civile');
+    assert.ok(protCivBJ);
+    assert.equal(protCivBJ.number, '');
+    assert.equal(protCivBJ.status, 'a_confirmer');
+
+    // Display helper displays "numéro à confirmer" when empty or unconfirmed
+    assert.equal(formatEmergencyNumberDisplay(samuBJ).displayText, 'numéro à confirmer');
+    assert.equal(formatEmergencyNumberDisplay(protCivBJ).displayText, 'numéro à confirmer');
+
+    // Confirmed numbers display their real telephone number
+    const policeBJ = beninEmergencies.find((e: any) => e.id === 'bj_police');
+    assert.ok(policeBJ);
+    assert.equal(policeBJ.number, '117');
+    assert.equal(formatEmergencyNumberDisplay(policeBJ).displayText, '117');
+  });
 });
+
 

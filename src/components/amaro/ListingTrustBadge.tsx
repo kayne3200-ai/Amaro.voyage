@@ -100,6 +100,34 @@ export function ListingTrustBadge({
           <span>Cliché certifié</span>
         </span>
       )}
+
+      {showPhotoNotice && !hasVerifiedRealPhoto && (
+        <span
+          title="Photo d'illustration ou à vérifier auprès de l’établissement."
+          className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs"
+        >
+          Photo d'illustration
+        </span>
+      )}
     </div>
+  );
+}
+
+/**
+ * Étiquette discrète pour photos d'illustration ou à vérifier (C1.3).
+ * Reste STRICTEMENT invisible pour les photos « propres à l'établissement ».
+ */
+export function PhotoIllustrationBadge({
+  indicator,
+}: {
+  indicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+}) {
+  if (indicator === 'propre_etablissement') {
+    return null;
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
+      Photo d'illustration
+    </span>
   );
 }

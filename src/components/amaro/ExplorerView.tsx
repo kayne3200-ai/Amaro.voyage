@@ -1050,11 +1050,17 @@ export function ExplorerView({
                                 {item.title}
                               </div>
                             )}
-                            {isPhotoVerified && (
+                            {isPhotoVerified ? (
                               <div className="absolute top-2.5 left-2.5">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
                                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                   <span>Photo certifiée</span>
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="absolute top-2.5 left-2.5">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
+                                  Photo d'illustration
                                 </span>
                               </div>
                             )}
@@ -1768,7 +1774,7 @@ export function ExplorerView({
                             {selectedItemForAction.item.category === 'accommodation' || selectedItemForAction.item.category === 'transport'
                               ? 'Totalité à la réservation.'
                               : selectedItemForAction.item.category === 'site' || selectedItemForAction.item.category === 'translation'
-                              ? 'Acompte 30% (+ Taxes et frais Amaro).'
+                              ? 'Acompte 30% (+ Frais de service Amaro).'
                               : 'Caution restaurant 5 000 FCFA.'}
                           </span>
                         </div>

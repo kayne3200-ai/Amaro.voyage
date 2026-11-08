@@ -108,6 +108,23 @@ export interface ServerSystemSetting {
   termsVersion?: string;
   conventionVersion?: string;
   includeDemoData?: boolean;
+  amaroFeePercent?: number;
+  amaroFeeFixed?: number;
+  amaroFeeCap?: number;
+  amaroFeeRounding?: number;
+  tvaActive?: boolean;
+  tvaRate?: number;
+  photoRegistryOverrides?: Record<
+    string,
+    {
+      indicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+      sourceAndLicense?: string;
+    }
+  >;
+  countryOperationalStates?: Record<
+    string,
+    'ouvert' | 'ouvert_admin_seulement' | 'bientot' | 'cache'
+  >;
 }
 
 export interface ScheduleSlot {

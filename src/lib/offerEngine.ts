@@ -1163,18 +1163,36 @@ export function parseSelectedOffersJson(raw?: string): SelectedOfferLine[] {
 }
 
 /**
- * RÈGLE DE NOMMAGE STRICTE :
- * - Pour le CLIENT, sur le site : "Taxes et frais de service Amaro"
+ * RÈGLE DE NOMMAGE STRICTE (C2.1) :
+ * - Pour le CLIENT, sur le site : "Frais de service Amaro" (le mot Taxes seul ou combiné est réservé à l'État)
  * - Pour le PRESTATAIRE, dans le contrat et l'admin : "Commission Amaro"
  * - Dans le tableau de bord admin : "Frais Amaro" pour Circuit A et "Commission" pour Circuit B.
  */
-export const CLIENT_TAXES_AND_FEES_LABEL = 'Taxes et frais de service Amaro';
+export const CLIENT_TAXES_AND_FEES_LABEL = 'Frais de service Amaro';
 export const PROVIDER_COMMISSION_LABEL = 'Commission Amaro';
 export const ADMIN_CIRCUIT_A_FEE_LABEL = 'Frais Amaro';
 export const ADMIN_CIRCUIT_B_COMMISSION_LABEL = 'Commission';
 
+export interface CircuitAFeeConfig {
+  percentRate: number; // default: 0.06 (6%)
+  fixedAmount: number; // default: 500 (500 FCFA)
+  capAmount: number; // default: 4000 (4 000 FCFA)
+  roundingStep: number; // default: 100 (100 FCFA)
+  tvaActive?: boolean; // default: false (ligne TVA distincte)
+  tvaRate?: number; // default: 0 (0%)
+}
+
+export const DEFAULT_CIRCUIT_A_FEE_CONFIG: CircuitAFeeConfig = {
+  percentRate: 0.06,
+  fixedAmount: 500,
+  capAmount: 4000,
+  roundingStep: 100,
+  tvaActive: false,
+  tvaRate: 0,
+};
+
 /**
- * Formule Circuit A (catalogue non conventionné) :
+ * Formule Circuit A (catalogue non conventionné) — C2.2 :
  * Frais Amaro = 6% du prix prestataire + 500f, plafonné à 4.000f maximum.
  * Arrondir au 100f supérieur.
  * Exemples vérifiés :
@@ -1182,11 +1200,72 @@ export const ADMIN_CIRCUIT_B_COMMISSION_LABEL = 'Commission';
  * - Transport 12.000f -> +1.200f = 13.200f affiché
  * - Guide 25.000f -> +2.000f = 27.000f affiché
  */
-export function calculateCircuitAFee(providerPrice: number): number {
+export function calculateCircuitAFee(
+  providerPrice: number,
+  config: Partial<CircuitAFeeConfig> = DEFAULT_CIRCUIT_A_FEE_CONFIG
+): number {
   if (!providerPrice || providerPrice <= 0) return 0;
-  const raw = providerPrice * 0.06 + 500;
-  const capped = Math.min(4000, raw);
-  return Math.min(4000, Math.round(capped / 100) * 100);
+  const cfg = { ...DEFAULT_CIRCUIT_A_FEE_CONFIG, ...config };
+  const raw = providerPrice * cfg.percentRate + cfg.fixedAmount;
+  const capped = Math.min(cfg.capAmount, raw);
+  const step = Math.max(1, cfg.roundingStep);
+  return Math.min(cfg.capAmount, Math.round(capped / step) * step);
+}
+
+export interface FeeSimulationResult {
+  basePrice: number;
+  providerPriceXof: number;
+  feeAmount: number;
+  amaroFeeXof: number;
+  totalPriceXof: number;
+  effectivePercent: number;
+  effectiveFeePercent: number;
+  isCapped: boolean;
+  capped: boolean;
+  notes: string;
+}
+
+/**
+ * Simulateur en lecture seule des frais de service Amaro (C2.3)
+ * Vérifie l'effet du plafond sur les prix de référence : 20 000, 50 000, 100 000 et 300 000 FCFA.
+ */
+export function simulateCircuitAFees(
+  pricesOrConfig?: number[] | Partial<CircuitAFeeConfig>,
+  maybeConfig?: Partial<CircuitAFeeConfig>
+): FeeSimulationResult[] {
+  let prices: number[] = [20000, 50000, 100000, 300000];
+  let config: Partial<CircuitAFeeConfig> = {};
+
+  if (Array.isArray(pricesOrConfig)) {
+    prices = pricesOrConfig;
+    if (maybeConfig) config = maybeConfig;
+  } else if (pricesOrConfig && typeof pricesOrConfig === 'object') {
+    config = pricesOrConfig;
+  }
+
+  const cfg = { ...DEFAULT_CIRCUIT_A_FEE_CONFIG, ...config };
+  return prices.map((basePrice) => {
+    const rawFee = basePrice * cfg.percentRate + cfg.fixedAmount;
+    const feeAmount = calculateCircuitAFee(basePrice, cfg);
+    const effectivePercent =
+      basePrice > 0 ? Number(((feeAmount / basePrice) * 100).toFixed(2)) : 0;
+    const isCapped = rawFee >= cfg.capAmount;
+    const notes = isCapped
+      ? `Plafond de ${cfg.capAmount.toLocaleString('fr-FR')} FCFA atteint (taux effectif ${effectivePercent} %)`
+      : `Sous plafond standard (${(cfg.percentRate * 100).toFixed(0)} % + ${cfg.fixedAmount} FCFA)`;
+    return {
+      basePrice,
+      providerPriceXof: basePrice,
+      feeAmount,
+      amaroFeeXof: feeAmount,
+      totalPriceXof: basePrice + feeAmount,
+      effectivePercent,
+      effectiveFeePercent: effectivePercent,
+      isCapped,
+      capped: isCapped,
+      notes,
+    };
+  });
 }
 
 /**
@@ -1230,10 +1309,10 @@ export function computeCategoryPaymentSchedule(params: {
       payNowAmount: totalClientPrice,
       payOnSiteAmount: 0,
       cancellationRuleDescription:
-        'Paiement total à la réservation. Annulation gratuite jusqu’à 48h avant le séjour. En cas d’annulation à moins de 48h, les taxes et frais de service Amaro sont conservés.',
+        'Paiement total à la réservation. Annulation gratuite jusqu’à 48h avant le séjour. En cas d’annulation à moins de 48h, les frais de service Amaro sont conservés.',
       payOnSiteDescription: '0 FCFA à régler sur place (hébergement intégralement réglé).',
       displayBreakdownFormula: isCircuitA
-        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
         : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (aucun frais client ajouté)`,
       commissionCircuitB,
     };
@@ -1249,10 +1328,10 @@ export function computeCategoryPaymentSchedule(params: {
       payNowAmount: totalClientPrice,
       payOnSiteAmount: 0,
       cancellationRuleDescription:
-        'Paiement total à la réservation. Annulation sans frais jusqu’à 24h avant le départ. En cas d’annulation à moins de 24h, les taxes et frais de service Amaro sont conservés.',
+        'Paiement total à la réservation. Annulation sans frais jusqu’à 24h avant le départ. En cas d’annulation à moins de 24h, les frais de service Amaro sont conservés.',
       payOnSiteDescription: '0 FCFA à régler sur place (transport intégralement réglé).',
       displayBreakdownFormula: isCircuitA
-        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
         : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (aucun frais client ajouté)`,
       commissionCircuitB,
     };
@@ -1274,10 +1353,10 @@ export function computeCategoryPaymentSchedule(params: {
       payNowAmount,
       payOnSiteAmount,
       cancellationRuleDescription:
-        'Acompte de 30% à la réservation (+ taxes et frais de service Amaro). Solde de 70% restant à régler directement sur place auprès du guide ou à l’entrée du site.',
+        'Acompte de 30% à la réservation (+ frais de service Amaro). Solde de 70% restant à régler directement sur place auprès du guide ou à l’entrée du site.',
       payOnSiteDescription: `70% restant à payer sur place (${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel}) directement auprès du prestataire.`,
       displayBreakdownFormula: isCircuitA
-        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel} (Acompte 30% : ${payNowAmount.toLocaleString('fr-FR')} ${curLabel} · Solde 70% sur place : ${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel})`
+        ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel} (Acompte 30% : ${payNowAmount.toLocaleString('fr-FR')} ${curLabel} · Solde 70% sur place : ${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel})`
         : `Prix direct prestataire conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (Acompte 30% : ${payNowAmount.toLocaleString('fr-FR')} ${curLabel} · Solde 70% sur place : ${payOnSiteAmount.toLocaleString('fr-FR')} ${curLabel})`,
       commissionCircuitB,
     };
@@ -1295,10 +1374,10 @@ export function computeCategoryPaymentSchedule(params: {
         payOnSiteAmount: 0,
         isRestaurantFixedMenu: true,
         cancellationRuleDescription:
-          'Paiement du menu fixe à la réservation (+ taxes et frais de service Amaro). Boissons et extras payés directement sur place.',
+          'Paiement du menu fixe à la réservation (+ frais de service Amaro). Boissons et extras payés directement sur place.',
         payOnSiteDescription: 'Boissons et extras payés sur place selon vos consommations.',
         displayBreakdownFormula: isCircuitA
-          ? `Prix prestataire (menu fixe) : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+          ? `Prix prestataire (menu fixe) : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
           : `Prix menu fixe conventionné : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} (boissons sur place)`,
         commissionCircuitB,
       };
@@ -1338,7 +1417,7 @@ export function computeCategoryPaymentSchedule(params: {
     cancellationRuleDescription: 'Paiement à la réservation selon conditions du prestataire.',
     payOnSiteDescription: '0 FCFA à régler sur place.',
     displayBreakdownFormula: isCircuitA
-      ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Taxes et frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
+      ? `Prix prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel} + Frais de service Amaro : ${amaroFee.toLocaleString('fr-FR')} ${curLabel} = Total : ${totalClientPrice.toLocaleString('fr-FR')} ${curLabel}`
       : `Prix direct prestataire : ${effectiveProviderPrice.toLocaleString('fr-FR')} ${curLabel}`,
     commissionCircuitB,
   };
@@ -1347,7 +1426,7 @@ export function computeCategoryPaymentSchedule(params: {
 /**
  * AFFICHAGE DU PRIX GLOBAL :
  * Calcule deux totaux distincts et transparents :
- * - "À PAYER MAINTENANT = Hôtel + Transport + Caution Restaurant + Frais de dossier 20.000f + Taxes et frais de service Amaro"
+ * - "À PAYER MAINTENANT = Hôtel + Transport + Caution Restaurant + Frais de dossier 20.000f + Frais de service Amaro"
  * - "À PAYER SUR PLACE = Repas Restaurant selon choix + 70% Guide restant"
  */
 export function calculateGlobalJourneyTotals(params: {

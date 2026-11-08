@@ -2341,7 +2341,7 @@ export function JourneyHubView({
                   </div>
 
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Hôtel + Transport + Caution Restaurant + Frais de dossier (20 000 FCFA déductibles) + Taxes et frais de service Amaro.
+                    Hôtel + Transport + Caution Restaurant + Frais de dossier (20 000 FCFA déductibles) + Frais de service Amaro.
                   </p>
 
                   <div className="space-y-1.5 pt-2 border-t border-slate-700/60 text-xs font-mono text-slate-300">
@@ -2380,7 +2380,7 @@ export function JourneyHubView({
                     </div>
                     {globalJourneyPaymentTotals.amaroFeesTotal > 0 && (
                       <div className="flex justify-between text-amber-300 font-semibold">
-                        <span className="font-sans">Taxes et frais de service Amaro :</span>
+                        <span className="font-sans">Frais de service Amaro :</span>
                         <span>{formatMoney(globalJourneyPaymentTotals.amaroFeesTotal, globalJourneyPaymentTotals.targetCur)}</span>
                       </div>
                     )}

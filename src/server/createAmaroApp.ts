@@ -28,6 +28,15 @@ import {
   CENSUS_METHODOLOGY_SUMMARY,
 } from '../data/beninWebCensusSeed';
 import {
+  UN_193_COUNTRIES,
+  getUNCountryByCode,
+  type CountryOperationalState,
+} from '../data/unCountries';
+import {
+  CENTRAL_EMERGENCY_REGISTRY,
+  getEmergencyNumbersForCountry,
+} from '../data/emergencyRegistry';
+import {
   calculateCircuitAFee,
   computeCategoryPaymentSchedule,
   classifyCensusCandidateAgainstCatalogue,
@@ -1817,15 +1826,14 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             res.status(403).json({ error: 'Seul le voyageur titulaire peut initier le règlement.' });
             return;
           }
+          // Règle C3.1 : Le client ne paie qu'après acceptation formelle du prestataire ou de la coordination
           if (
             existing.status !== 'accepted' &&
-            existing.status !== 'awaiting_payment' &&
-            existing.status !== 'alternative_proposed' &&
-            existing.status !== 'confirmed'
+            existing.status !== 'awaiting_payment'
           ) {
             res.status(409).json({
               error:
-                'La disponibilité doit d’abord être confirmée par le prestataire ou la conciergerie avant d’initier le paiement.',
+                'Le paiement d’une prestation n’est autorisé qu’après acceptation formelle du prestataire ou de la coordination.',
             });
             return;
           }
@@ -2025,6 +2033,18 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             return;
           }
           if (action === 'admin_confirm_payment') {
+            // Règle C3.1 : Le paiement d'une prestation n'est validé qu'après acceptation formelle
+            if (
+              existing.status !== 'accepted' &&
+              existing.status !== 'awaiting_payment' &&
+              existing.status !== 'confirmed'
+            ) {
+              res.status(409).json({
+                error:
+                  'Le paiement d’une prestation n’est autorisé qu’après acceptation formelle du prestataire ou de la coordination.',
+              });
+              return;
+            }
             nextStatus = 'confirmed';
             nextPaymentStatus = 'succeeded';
             notifRecipientId = existing.clientId;
@@ -3231,6 +3251,130 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
     }
   );
+
+  // ===========================================================================
+  // C5. INTERRUPTEUR PAR PAYS & BLOCAGE SERVEUR (193 ÉTATS MEMBRES DE L'ONU)
+  // ===========================================================================
+  app.get('/api/amaro/country-states', async (_req: Request, res: Response) => {
+    let overrides: Record<string, CountryOperationalState> = {};
+    try {
+      const setting = await store.getSystemSetting('BJ').catch(() => null);
+      if (setting?.countryOperationalStates) {
+        overrides = setting.countryOperationalStates;
+      }
+    } catch {}
+    const list = UN_193_COUNTRIES.map((c) => ({
+      ...c,
+      state: overrides[c.code] || c.state,
+    }));
+    res.json({ ok: true, countries: list });
+  });
+
+  app.post(
+    '/api/amaro/admin/country-state',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const countryCode = String(req.body?.countryCode || '').toUpperCase().trim();
+      const state = String(req.body?.state || '').trim() as CountryOperationalState;
+      const validStates = new Set(['ouvert', 'ouvert_admin_seulement', 'bientot', 'cache']);
+      if (!countryCode || !validStates.has(state)) {
+        res.status(400).json({ error: 'Code pays ou état d’exploitation invalide.' });
+        return;
+      }
+      try {
+        const caller = req.caller!;
+        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const currentOverrides = setting.countryOperationalStates || {};
+        const updatedOverrides = { ...currentOverrides, [countryCode]: state };
+        const anyStore = store as any;
+        if (typeof anyStore.updateSystemSetting === 'function') {
+          await anyStore.updateSystemSetting(
+            { countryCode: 'BJ', countryOperationalStates: updatedOverrides },
+            caller.rawIdToken
+          );
+        } else if (anyStore.settings && typeof anyStore.settings.get === 'function') {
+          const cur = anyStore.settings.get('BJ') || setting;
+          anyStore.settings.set('BJ', { ...cur, countryOperationalStates: updatedOverrides });
+        }
+        res.json({ ok: true, countryCode, state });
+      } catch (err) {
+        res.status(500).json({ error: redactSecrets(err) });
+      }
+    }
+  );
+
+  app.get('/api/amaro/countries/:countryCode/data', async (req: Request, res: Response) => {
+    const normCode = String(req.params.countryCode || '').toUpperCase().trim();
+    const unCountry = getUNCountryByCode(normCode);
+    if (!unCountry) {
+      res.status(404).json({ error: 'Pays non répertorié dans la liste officielle des 193 États de l’ONU.' });
+      return;
+    }
+
+    let effectiveState = unCountry.state;
+    try {
+      const setting = await store.getSystemSetting('BJ').catch(() => null);
+      if (setting?.countryOperationalStates && setting.countryOperationalStates[normCode]) {
+        effectiveState = setting.countryOperationalStates[normCode];
+      }
+    } catch {}
+
+    // Règle de blocage serveur C5.3 :
+    // Si le pays n'est pas « Ouvert », toute demande de ses données est refusée par le serveur.
+    // Répondre « Pas encore disponible ».
+    let isAdmin = false;
+    const bearer = extractBearerToken(req);
+    if (bearer) {
+      const caller = await verifyToken(bearer);
+      if (caller) {
+        isAdmin = await isVerifiedAdminCaller({
+          ...caller,
+          rawIdToken: bearer,
+        });
+      }
+    }
+
+    const isAllowed =
+      effectiveState === 'ouvert' ||
+      (effectiveState === 'ouvert_admin_seulement' && isAdmin);
+
+    if (!isAllowed) {
+      res.status(403).json({
+        error: 'Pas encore disponible',
+        countryCode: normCode,
+        state: effectiveState,
+      });
+      return;
+    }
+
+    // Règle de non-contamination C5.5 :
+    // Quand la Côte d'Ivoire est affichée, aucune fiche, aucun numéro, aucun texte légal
+    // et aucune mention du Bénin ne doit apparaître.
+    if (normCode === 'CI') {
+      res.json({
+        ok: true,
+        country: {
+          code: 'CI',
+          name: 'Côte d’Ivoire',
+          currency: 'XOF',
+          timezone: 'Africa/Abidjan (UTC+0)',
+          dossierFeeAmount: 20000,
+          languages: ['Français'],
+          priorityCities: ['Abidjan', 'Yamoussoukro', 'Grand-Bassam', 'San-Pédro', 'Bouaké'],
+          emergencyNumbers: getEmergencyNumbersForCountry('CI'),
+          services: [],
+          legalTexts: 'Conditions générales et formalités d’entrée Côte d’Ivoire (en préparation).',
+        },
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      country: unCountry,
+      emergencyNumbers: getEmergencyNumbersForCountry(normCode),
+    });
+  });
 
   // ===========================================================================
   // 3C. OFFRES DÉTAILLÉES PAR PRESTATAIRE (PARTIE B : B1–B7) & DISPONIBILITÉ HONNÊTE

@@ -31,6 +31,8 @@ export type DataOriginType =
 
 export type VerificationLevel = 'verified' | 'partially_verified' | 'to_confirm';
 
+export type PhotoIndicatorType = 'propre_etablissement' | 'illustration' | 'a_verifier';
+
 export type StandingLevel =
   | 'luxe'
   | 'haut_de_gamme'
@@ -158,6 +160,7 @@ export interface CatalogueItem {
   // Bloc 5.4, 9.5 & 10.2 Extended Honest Media, Sacred Site & Provider Availability Metadata
   customPhotoUrl?: string;
   photoVerified?: boolean;
+  photoIndicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
   photoSource?: string;
   photoUsageRights?: string;
   isSacredOrCeremonial?: boolean;
@@ -486,6 +489,26 @@ export interface SystemSettingDoc {
   exchangeRateUsdToXof?: number; // default 605
   exchangeRateSource?: string;
   exchangeRateUpdatedAt?: string;
+  // C2.2: Circuit A Frais de service Amaro configurable parameters
+  amaroFeePercent?: number; // default 0.06 (6%)
+  amaroFeeFixed?: number; // default 500 (500 FCFA)
+  amaroFeeCap?: number; // default 4000 (4 000 FCFA)
+  amaroFeeRounding?: number; // default 100 (100 FCFA)
+  tvaActive?: boolean; // default false
+  tvaRate?: number; // default 0 (0%)
+  // C1.4: Photo registry source, license & indicator overrides
+  photoRegistryOverrides?: Record<
+    string,
+    {
+      indicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+      sourceAndLicense?: string;
+    }
+  >;
+  // C5.1: Country operational states
+  countryOperationalStates?: Record<
+    string,
+    'ouvert' | 'ouvert_admin_seulement' | 'bientot' | 'cache'
+  >;
 }
 
 export type FeatureLifecycleStatus =

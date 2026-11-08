@@ -281,11 +281,17 @@ export function ServiceDetailModal({
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover"
           />
-          {isPhotoVerified && (
+          {isPhotoVerified ? (
             <div className="absolute top-3 left-3">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Cliché officiel certifié</span>
+              </span>
+            </div>
+          ) : (
+            <div className="absolute top-3 left-3">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
+                Photo d'illustration
               </span>
             </div>
           )}
@@ -772,7 +778,7 @@ export function ServiceDetailModal({
                     >
                       <strong className="block">Cas 2 : Menu fixe</strong>
                       <span className="text-[11px] block text-slate-500">
-                        Paiement du menu à l’avance (+ Taxes et frais Amaro). Boissons sur place.
+                        Paiement du menu à l’avance (+ Frais de service Amaro). Boissons sur place.
                       </span>
                     </button>
                   </div>
@@ -846,7 +852,7 @@ export function ServiceDetailModal({
                         ) : (
                           <div className="space-y-1 text-slate-600 dark:text-slate-300">
                             <p className="font-mono font-bold text-slate-900 dark:text-slate-100">
-                              Prix prestataire : {sched.providerPrice.toLocaleString('fr-FR')} FCFA + Taxes et frais de service Amaro : {sched.amaroFee.toLocaleString('fr-FR')} FCFA = Total : {sched.totalClientPrice.toLocaleString('fr-FR')} FCFA
+                              Prix prestataire : {sched.providerPrice.toLocaleString('fr-FR')} FCFA + Frais de service Amaro : {sched.amaroFee.toLocaleString('fr-FR')} FCFA = Total : {sched.totalClientPrice.toLocaleString('fr-FR')} FCFA
                             </p>
                             <p className="text-[11px] text-slate-500">
                               Formule Circuit A : 6% du prix prestataire + 500 FCFA (plafonné à 4 000 FCFA, arrondi à la centaine).
@@ -870,7 +876,7 @@ export function ServiceDetailModal({
                               : item.category === 'transport'
                               ? 'Paiement total à la réservation.'
                               : item.category === 'site' || item.category === 'translation'
-                              ? 'Acompte de 30% (+ Taxes et frais Amaro).'
+                              ? 'Acompte de 30% (+ Frais de service Amaro).'
                               : sched.isRestaurantFixedMenu
                               ? 'Menu fixe réglé à la réservation.'
                               : 'Caution de garantie de 5 000 FCFA (déduite de l’addition).'}
