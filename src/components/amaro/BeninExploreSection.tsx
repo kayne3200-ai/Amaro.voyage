@@ -33,18 +33,18 @@ export function BeninExploreSection({
   const beninCities = COUNTRIES_REGISTRY[0].cities;
 
   const galleryKeys = [
-    { key: 'cotonou_coast', cityId: 'cotonou', title: 'Cotonou & Route des Pêches' },
+    { key: 'monument_amazone_cotonou', cityId: 'cotonou', title: 'Cotonou — Monument Amazone & Marina' },
     { key: 'ganvie_stilt', cityId: 'ganvie', title: 'Cité Lacustre de Ganvié (Lac Nokoué)' },
-    { key: 'ouidah_memorial', cityId: 'ouidah', title: 'Ouidah — Route de Mémoire & Porte du Non-Retour' },
+    { key: 'porte_non_retour_ouidah', cityId: 'ouidah', title: 'Ouidah — Porte du Non-Retour & Mémorial Océan' },
     { key: 'portonovo_heritage', cityId: 'porto-novo', title: 'Porto-Novo — Capitale & Architecture Afro-Brésilienne' },
     { key: 'abomey_royal', cityId: 'abomey', title: 'Palais Royaux d’Abomey (UNESCO)' },
-    { key: 'grandpopo_coast', cityId: 'grand-popo', title: 'Grand-Popo & Embouchure de la Bouche du Roy' },
+    { key: 'casadelpapa_ouidah_beach', cityId: 'grand-popo', title: 'Grand-Popo & Éco-Resort Balnéaire' },
     { key: 'dassa_hills', cityId: 'dassa-zoume', title: 'Les 41 Collines de Dassa-Zoumè' },
     { key: 'parakou_heritage', cityId: 'parakou', title: 'Parakou & Savoir-Faire Artisanal du Borgou' },
     { key: 'atacora_tata', cityId: 'natitingou', title: 'Atacora — Cascades de Kota & Pays Tammari' },
-    { key: 'pendjari_wildlife', cityId: 'tanguieta', title: 'Parc National de la Pendjari (UNESCO)' },
+    { key: 'pendjari_safari_faune', cityId: 'tanguieta', title: 'Parc National de la Pendjari — Safari Sauvage (UNESCO)' },
     { key: 'calavi_lagoon', cityId: 'abomey-calavi', title: 'Lagune d’Abomey-Calavi & Embarcadère' },
-    { key: 'benin_dining', cityId: 'cotonou', title: 'Hospitalité & Gastronomie Béninoise' },
+    { key: 'benin_gastronomie_repas', cityId: 'cotonou', title: 'Gastronomie Béninoise & Saveurs du Terroir' },
   ];
 
   const departmentImageById: Record<string, string> = {

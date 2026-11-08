@@ -35,121 +35,148 @@ const pendjariSafariFauneImg = new URL('../assets/images/pendjari_safari_faune_1
 const guideCultureBeninImg = new URL('../assets/images/guide_culture_benin_1793965188977.jpg', import.meta.url).href;
 const pirogueLacNokoueImg = new URL('../assets/images/pirogue_lac_nokoue_1793965204380.jpg', import.meta.url).href;
 
-export const EDITORIAL_IMAGES: Record<
-  string,
-  { src: string; alt: string; license: string }
-> = {
+export interface EditorialImageMeta {
+  src: string;
+  alt: string;
+  license: string;
+  key: string;
+}
+
+export const EDITORIAL_IMAGES: Record<string, EditorialImageMeta> = {
   cotonou_coast: {
+    key: 'cotonou_coast',
     src: cotonouCoastImg,
     alt: 'Boulevard de la Marina et littoral atlantique de Cotonou',
     license: 'Destination Cotonou & Littoral · Amaro',
   },
   sofitel_cotonou_luxury: {
+    key: 'sofitel_cotonou_luxury',
     src: sofitelLuxuryImg,
     alt: 'Hôtellerie de luxe et piscine ouverte sur l’océan à Cotonou Marina',
     license: 'Catalogue Hôtellerie Haut de Gamme Bénin',
   },
   casadelpapa_ouidah_beach: {
+    key: 'casadelpapa_ouidah_beach',
     src: casadelpapaBeachImg,
     alt: 'Resort balnéaire éco-responsable entre lagune et océan à Ouidah et Grand-Popo',
     license: 'Tourisme Balnéaire & Éco-lodges du Littoral Bénin',
   },
   hotel_chambre_elegante: {
+    key: 'hotel_chambre_elegante',
     src: hotelChambreEleganteImg,
     alt: 'Chambre et suite hôtelière contemporaine avec terrasse vue mer au Bénin',
     license: 'Standards d’Hospitalité AMARO.VOYAGE',
   },
   auberge_charme_benin: {
+    key: 'auberge_charme_benin',
     src: aubergeCharmeBeninImg,
     alt: 'Auberge de charme avec patio fleuri et piscine privée au cœur du Bénin',
     license: 'Hospitalité & Maisons d’Hôtes de Charme du Bénin',
   },
   monument_amazone_cotonou: {
+    key: 'monument_amazone_cotonou',
     src: monumentAmazoneImg,
     alt: 'Statue monumentale de l’Amazone du Dahomey sur le Boulevard de la Marina à Cotonou',
     license: 'Patrimoine National & Tourisme Bénin Révélé',
   },
   porte_non_retour_ouidah: {
+    key: 'porte_non_retour_ouidah',
     src: porteNonRetourImg,
     alt: 'Monument historique de la Porte du Non-Retour sur la plage océane de Ouidah',
     license: 'Patrimoine Mémoriel de l’UNESCO · Ouidah Bénin',
   },
   benin_gastronomie_repas: {
+    key: 'benin_gastronomie_repas',
     src: beninGastronomieRepasImg,
     alt: 'Gastronomie traditionnelle béninoise : igname pilée, poisson braisé et alloco',
     license: 'Art Culinaire & Tables Gourmandes du Bénin',
   },
   transport_tourisme_suv: {
+    key: 'transport_tourisme_suv',
     src: transportSuvImg,
     alt: 'Véhicule 4x4 tout-terrain moderne climatisé pour circuits touristiques et safaris',
     license: 'Mobilité & Flotte Tourisme Bénin',
   },
   guide_culture_benin: {
+    key: 'guide_culture_benin',
     src: guideCultureBeninImg,
     alt: 'Guide touristique local certifié partageant l’histoire patrimoniale du Bénin',
     license: 'Guidage Professionnel & Médiation Culturelle',
   },
   pirogue_lac_nokoue: {
+    key: 'pirogue_lac_nokoue',
     src: pirogueLacNokoueImg,
     alt: 'Traversée en barque motorisée sécurisée sur les eaux calmes du lac Nokoué',
     license: 'Navigation Lacustre & Pirogues de Ganvié',
   },
   calavi_lagoon: {
+    key: 'calavi_lagoon',
     src: calaviLagoonImg,
     alt: 'Berge verdoyante et embarcadère du lac Nokoué à Abomey-Calavi au Bénin',
     license: 'Destination Abomey-Calavi & Basse Vallée',
   },
   ganvie_stilt: {
+    key: 'ganvie_stilt',
     src: ganvieStiltImg,
     alt: 'Habitations sur pilotis et pirogues de la cité lacustre de Ganvié sur le lac Nokoué',
     license: 'Patrimoine lacustre de Ganvié',
   },
   ouidah_memorial: {
+    key: 'ouidah_memorial',
     src: porteNonRetourImg,
     alt: 'Côte atlantique de Ouidah et perspective mémorielle de la Route des Esclaves',
     license: 'Destination historique Ouidah',
   },
   portonovo_heritage: {
+    key: 'portonovo_heritage',
     src: portonovoHeritageImg,
     alt: 'Architecture patrimoniale afro-brésilienne colorée de Porto-Novo au Bénin',
     license: 'Patrimoine de Porto-Novo',
   },
   grandpopo_coast: {
+    key: 'grandpopo_coast',
     src: casadelpapaBeachImg,
     alt: 'Embouchure lagunaire de la Bouche du Roy entre fleuve Mono, cocotiers et océan à Grand-Popo',
     license: 'Destination Grand-Popo, Mono & Lac Ahémé',
   },
   abomey_royal: {
+    key: 'abomey_royal',
     src: abomeyRoyalImg,
     alt: 'Architecture royale en terre rouge et bas-reliefs traditionnels du plateau d’Abomey',
     license: 'Destination royale Abomey & Zou',
   },
   dassa_hills: {
+    key: 'dassa_hills',
     src: dassaHillsImg,
     alt: 'Inselbergs et collines granitiques verdoyantes de Dassa-Zoumè au centre du Bénin',
     license: 'Destination Collines de Dassa & Plateau',
   },
   parakou_heritage: {
+    key: 'parakou_heritage',
     src: parakouHeritageImg,
     alt: 'Artisanat textile du coton tissé et culture du Borgou à Parakou et Nikki',
     license: 'Destination Parakou, Nikki & Borgou',
   },
   atacora_tata: {
+    key: 'atacora_tata',
     src: atacoraTataImg,
     alt: 'Paysage montagneux de l’Atacora, cascades et architecture vernaculaire Tata Somba',
     license: 'Destination Natitingou, Kota & Boukoumbé',
   },
   pendjari_wildlife: {
+    key: 'pendjari_wildlife',
     src: pendjariSafariFauneImg,
     alt: 'Éléphants et savane dorée au lever du jour dans le Parc National de la Pendjari',
     license: 'Parcs Nationaux du Nord-Bénin & Safari',
   },
   pendjari_safari: {
+    key: 'pendjari_safari',
     src: pendjariSafariFauneImg,
     alt: 'Éléphants et faune sauvage dans le Parc National de la Pendjari au Bénin',
     license: 'Parcs Nationaux du Nord-Bénin & Safari',
   },
   benin_dining: {
+    key: 'benin_dining',
     src: beninGastronomieRepasImg,
     alt: 'Gastronomie béninoise contemporaine et table d’hospitalité ouest-africaine',
     license: 'Gastronomie & Art de vivre au Bénin',
@@ -160,13 +187,12 @@ export const EDITORIAL_IMAGES: Record<
  * Résolveur d’images intelligent pour toutes les fiches d'AMARO.VOYAGE
  * Assure qu'aucun établissement ne subisse une image générique répétitive.
  */
-export function resolveItemEditorialImage(item: Partial<CatalogueItem> | null | undefined): {
-  src: string;
-  alt: string;
-  license: string;
-} {
+export function resolveItemEditorialImage(
+  item: Partial<CatalogueItem> | null | undefined
+): EditorialImageMeta {
   if (item?.customPhotoUrl && item.customPhotoUrl.trim().length > 0) {
     return {
+      key: 'custom_photo',
       src: item.customPhotoUrl.trim(),
       alt: item.title || 'Photographie certifiée',
       license: 'Cliché certifié fourni par l’établissement',
@@ -240,7 +266,7 @@ export function resolveItemEditorialImage(item: Partial<CatalogueItem> | null | 
       title.includes('royal') ||
       title.includes('azalai') ||
       title.includes('5 étoiles') ||
-      item.standing === 'luxe'
+      item?.standing === 'luxe'
     ) {
       return EDITORIAL_IMAGES.sofitel_cotonou_luxury;
     }
@@ -250,7 +276,7 @@ export function resolveItemEditorialImage(item: Partial<CatalogueItem> | null | 
       title.includes('affaires') ||
       title.includes('business') ||
       title.includes('exécutif') ||
-      item.standing === 'haut_de_gamme'
+      item?.standing === 'haut_de_gamme'
     ) {
       return EDITORIAL_IMAGES.hotel_chambre_elegante;
     }

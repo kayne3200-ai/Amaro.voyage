@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarPlus,
   Car,
+  CheckCircle2,
   Compass,
   Eye,
   Globe,

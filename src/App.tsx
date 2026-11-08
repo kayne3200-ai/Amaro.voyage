@@ -63,6 +63,7 @@ import {
   BENIN_PUBLIC_DIRECTORY,
   DEMO_REFERENCE_CATALOGUE,
   EDITORIAL_IMAGES,
+  resolveItemEditorialImage,
 } from './data/amaroRegistry';
 import {
   DEFAULT_EMERGENCY_NUMBERS_BJ,
@@ -2752,13 +2753,11 @@ function AmaroPlatform() {
     if (!authUser?.uid || !myProvider) return;
     const isVerifiedPartner = myProvider.verificationStatus === 'verified';
     const serviceId = draft.id || makeSafeId('srv');
-    const imgKey =
-      draft.category === 'transport'
-        ? 'cotonou_road'
-        : draft.category === 'site'
-        ? 'ouidah_memorial'
-        : 'cotonou_coast';
-    const imgMeta = EDITORIAL_IMAGES[imgKey] || EDITORIAL_IMAGES.cotonou_coast;
+    const imgMeta = resolveItemEditorialImage({
+      category: draft.category,
+      cityId: draft.cityId,
+      title: draft.title,
+    });
 
     try {
       const ref = doc(db, 'services', serviceId);
@@ -2789,7 +2788,7 @@ function AmaroPlatform() {
           ownerId: authUser.uid,
           countryCode: 'BJ',
           currency: 'XOF',
-          imageKey: imgKey,
+          imageKey: imgMeta.key,
           imageLicense: imgMeta.license.slice(0, 195),
           ...commonFields,
           createdAt: serverTimestamp(),
@@ -2901,8 +2900,7 @@ function AmaroPlatform() {
       return;
     }
 
-    const imgMeta =
-      EDITORIAL_IMAGES[baseItem.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+    const imgMeta = resolveItemEditorialImage(baseItem);
 
     try {
       await setDoc(
@@ -3252,8 +3250,14 @@ function AmaroPlatform() {
       : makeSafeId('srv-adm');
     const cleanProvId =
       payload.providerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'dir-admin-benin';
-    const imgMeta =
-      EDITORIAL_IMAGES[payload.imageKey] || EDITORIAL_IMAGES.cotonou_coast;
+    const imgMeta = resolveItemEditorialImage({
+      title: payload.title,
+      category: payload.category,
+      cityId: payload.cityId,
+      imageKey: payload.imageKey,
+      customPhotoUrl: payload.customPhotoUrl,
+      photoVerified: payload.photoVerified,
+    });
 
     const extraFields = {
       ...(typeof payload.customPhotoUrl === 'string'
@@ -3433,8 +3437,10 @@ function AmaroPlatform() {
       params.pilot.category === 'transport' ? 'cotonou_road' : 'cotonou_coast';
     const chosenImgKey =
       existingCatalogueMatch?.imageKey || staticDirMatch?.imageKey || fallbackImgKey;
-    const imgMeta =
-      EDITORIAL_IMAGES[chosenImgKey] || EDITORIAL_IMAGES.cotonou_coast;
+    const imgMeta = resolveItemEditorialImage({
+      ...params.pilot,
+      imageKey: chosenImgKey,
+    });
 
     const isActivatedPartner = params.activationLevel !== 'directory_only';
     const nextDataOrigin: DataOriginType = isActivatedPartner
