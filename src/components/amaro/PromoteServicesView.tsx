@@ -39,7 +39,9 @@ import {
   IdentityVerificationModal,
 } from './IdentityVerificationModal';
 
-const BENIN_CITIES = COUNTRIES_REGISTRY[0]?.cities || [];
+const BENIN_CITIES = COUNTRIES_REGISTRY.find((c) => c.code === 'BJ')?.cities || [];
+const CI_CITIES = COUNTRIES_REGISTRY.find((c) => c.code === 'CI')?.cities || [];
+const ALL_CITIES = COUNTRIES_REGISTRY.flatMap((c) => c.cities);
 const CATEGORY_LIST: ServiceCategory[] = [
   'accommodation',
   'transport',
@@ -197,6 +199,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   // Commercial & Payout Private Profile state for registered providers
   const [editBusinessName, setEditBusinessName] = useState('');
   const [editCategory, setEditCategory] = useState<ServiceCategory>('accommodation');
+  const [editCountryCode, setEditCountryCode] = useState<string>('BJ');
   const [editCityId, setEditCityId] = useState<string>('cotonou');
   const [editDescription, setEditDescription] = useState('');
   const [editContactEmail, setEditContactEmail] = useState('');
@@ -209,6 +212,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
     if (myProvider) {
       setEditBusinessName(myProvider.businessName || '');
       setEditCategory(myProvider.category || 'accommodation');
+      setEditCountryCode(myProvider.countryCode || 'BJ');
       setEditCityId(myProvider.cityId || 'cotonou');
       setEditDescription(myProvider.description || '');
     }
@@ -444,16 +448,25 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                   onChange={(e) => {
                     const nextCity = e.target.value;
                     setCityId(nextCity);
-                    const found = BENIN_CITIES.find((c) => c.id === nextCity);
+                    const found = ALL_CITIES.find((c) => c.id === nextCity);
                     if (found) setPublicZone(found.name);
                   }}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
                 >
-                  {BENIN_CITIES.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  <optgroup label="Bénin 🇧🇯">
+                    {BENIN_CITIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Côte d’Ivoire 🇨🇮">
+                    {CI_CITIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
 
@@ -1011,11 +1024,20 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                   onChange={(e) => setSrvCity(e.target.value)}
                   className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs"
                 >
-                  {BENIN_CITIES.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  <optgroup label="Bénin 🇧🇯">
+                    {BENIN_CITIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Côte d’Ivoire 🇨🇮">
+                    {CI_CITIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
                 <input
                   type="text"
@@ -1456,7 +1478,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                       {
                         businessName: editBusinessName.trim(),
                         category: editCategory,
-                        countryCode: 'BJ',
+                        countryCode: editCountryCode,
                         cityId: editCityId,
                         description: editDescription.trim(),
                       },
@@ -1473,7 +1495,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                 }}
                 className="space-y-4"
               >
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <input
                     type="text"
                     required
@@ -1496,11 +1518,24 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                     ))}
                   </select>
                   <select
+                    value={editCountryCode}
+                    onChange={(e) => {
+                      const nextCode = e.target.value;
+                      setEditCountryCode(nextCode);
+                      const defaultCity = nextCode === 'CI' ? 'abidjan' : 'cotonou';
+                      setEditCityId(defaultCity);
+                    }}
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold"
+                  >
+                    <option value="BJ">🇧🇯 Bénin</option>
+                    <option value="CI">🇨🇮 Côte d’Ivoire</option>
+                  </select>
+                  <select
                     value={editCityId}
                     onChange={(e) => setEditCityId(e.target.value)}
                     className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
                   >
-                    {BENIN_CITIES.map((c) => (
+                    {(editCountryCode === 'CI' ? CI_CITIES : BENIN_CITIES).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>

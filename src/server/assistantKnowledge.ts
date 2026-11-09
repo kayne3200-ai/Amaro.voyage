@@ -64,6 +64,17 @@ const CITY_SYNONYMS: Array<{ cityId: string; label: string; aliases: string[] }>
   { cityId: 'djougou', label: 'Djougou', aliases: ['djougou', 'donga'] },
   { cityId: 'kandi', label: 'Kandi / Parc W', aliases: ['kandi', 'parc w', 'parc du w'] },
   { cityId: 'lokossa', label: 'Lokossa / Comé', aliases: ['lokossa', 'come'] },
+  // Côte d'Ivoire
+  { cityId: 'abidjan', label: 'Abidjan', aliases: ['abidjan', 'plateau', 'cocody', 'marcory', 'treichville', 'yopougon', 'deux plateaux', 'deux-plateaux', 'riviera', 'zone 4', 'banco'] },
+  { cityId: 'grand-bassam', label: 'Grand-Bassam', aliases: ['grand bassam', 'grand-bassam', 'bassam', 'quartier france', 'musee du costume'] },
+  { cityId: 'assinie', label: 'Assinie-Mafia', aliases: ['assinie', 'assinie-mafia', 'assinie mafia', 'lagune aby', 'coucoue'] },
+  { cityId: 'yamoussoukro', label: 'Yamoussoukro', aliases: ['yamoussoukro', 'yakro', 'basilique', 'notre dame de la paix', 'caimans sacres'] },
+  { cityId: 'san-pedro', label: 'San-Pédro', aliases: ['san pedro', 'san-pedro', 'sanpedro', 'monogaga', 'balmer'] },
+  { cityId: 'grand-bereby', label: 'Grand-Béréby', aliases: ['grand bereby', 'grand-bereby', 'baie des sirenes', 'tabaoule'] },
+  { cityId: 'sassandra', label: 'Sassandra', aliases: ['sassandra', 'poli plage'] },
+  { cityId: 'man', label: 'Man (18 Montagnes)', aliases: ['man', '18 montagnes', 'dent de man', 'tonkoui', 'mont tonkoui', 'lieupleu', 'pont de liane', 'cascades de man'] },
+  { cityId: 'korhogo', label: 'Korhogo', aliases: ['korhogo', 'poro', 'fakaha', 'koni', 'toiles de fakaha', 'senoufo', 'boloye'] },
+  { cityId: 'bouake', label: 'Bouaké', aliases: ['bouake', 'bouaké', 'tanou sakassou', 'gbeke'] },
 ];
 
 const CATEGORY_PATTERNS: Array<{ category: ServiceCategory; aliases: string[] }> = [

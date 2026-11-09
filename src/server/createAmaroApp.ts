@@ -3353,6 +3353,12 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     if (normCode === 'CI') {
       res.json({
         ok: true,
+        countryCode: 'CI',
+        countryName: 'Côte d’Ivoire',
+        currency: 'XOF',
+        emergencyNumbers: getEmergencyNumbersForCountry('CI'),
+        services: [],
+        legalTexts: 'Conditions générales et formalités d’entrée Côte d’Ivoire (en préparation).',
         country: {
           code: 'CI',
           name: 'Côte d’Ivoire',

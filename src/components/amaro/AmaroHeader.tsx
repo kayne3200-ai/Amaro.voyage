@@ -28,6 +28,8 @@ interface AmaroHeaderProps {
   activeTab: MainTab;
   onSelectTab: (tab: MainTab) => void;
   locale: SupportedLocale;
+  selectedCountryCode?: string;
+  onSelectCountry?: (code: string) => void;
   isSignedIn: boolean;
   isSigningIn: boolean;
   unreadNotifications: number;
@@ -43,6 +45,8 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   activeTab,
   onSelectTab,
   locale,
+  selectedCountryCode = 'BJ',
+  onSelectCountry,
   isSignedIn,
   isSigningIn,
   unreadNotifications,
@@ -53,6 +57,7 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   onSignIn,
   onSignOut,
 }) => {
+  const isCI = selectedCountryCode === 'CI';
   const navItems: Array<{
     id: MainTab;
     labelFr: string;
@@ -64,8 +69,8 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   }> = [
     {
       id: 'explorer',
-      labelFr: 'Explorer le Bénin',
-      labelEn: 'Explore Benin',
+      labelFr: isCI ? 'Explorer la Côte d’Ivoire' : 'Explorer le Bénin',
+      labelEn: isCI ? 'Explore Ivory Coast' : 'Explore Benin',
       shortFr: 'Explorer',
       shortEn: 'Explore',
       icon: Compass,
@@ -117,26 +122,64 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
     <>
       <header className="no-print sticky top-0 z-40 bg-[#0B192C] text-white border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-          {/* Brand */}
-          <button
-            type="button"
-            onClick={() => onSelectTab('explorer')}
-            className="flex items-center gap-2.5 text-left shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-md"
-          >
-            <span className="w-8 h-8 rounded-md bg-amber-600 text-white font-bold text-sm flex items-center justify-center tracking-tight">
-              AV
-            </span>
-            <div className="leading-tight">
-              <span className="block font-bold text-sm sm:text-base tracking-wide text-white">
-                AMARO.VOYAGE
+          {/* Brand + Country Switcher */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onSelectTab('explorer')}
+              className="flex items-center gap-2.5 text-left shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-md"
+            >
+              <span className="w-8 h-8 rounded-md bg-amber-600 text-white font-bold text-sm flex items-center justify-center tracking-tight">
+                AV
               </span>
-              <span className="hidden sm:block text-[11px] text-slate-300">
-                {locale === 'fr'
-                  ? 'Organisation humaine de séjours · Bénin'
-                  : 'Human travel organization · Benin'}
-              </span>
-            </div>
-          </button>
+              <div className="leading-tight">
+                <span className="block font-bold text-sm sm:text-base tracking-wide text-white">
+                  AMARO.VOYAGE
+                </span>
+                <span className="hidden sm:block text-[11px] text-slate-300">
+                  {locale === 'fr'
+                    ? `Organisation humaine de séjours · ${isCI ? 'Côte d’Ivoire' : 'Bénin'}`
+                    : `Human travel organization · ${isCI ? 'Ivory Coast' : 'Benin'}`}
+                </span>
+              </div>
+            </button>
+
+            {/* National Country Switcher (Bénin 🇧🇯 / Côte d'Ivoire 🇨🇮) */}
+            {onSelectCountry && (
+              <div
+                role="group"
+                aria-label="Sélection du pays de voyage"
+                className="flex items-center rounded-lg bg-slate-900/90 p-0.5 border border-slate-700/80"
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelectCountry('BJ')}
+                  className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all ${
+                    !isCI
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                  title="Sélectionner le Bénin"
+                >
+                  <span className="text-sm">🇧🇯</span>
+                  <span className="hidden md:inline">Bénin</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectCountry('CI')}
+                  className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all ${
+                    isCI
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                  title="Sélectionner la Côte d’Ivoire"
+                >
+                  <span className="text-sm">🇨🇮</span>
+                  <span className="hidden md:inline">Côte d’Ivoire</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Desktop Navigation */}
           <nav

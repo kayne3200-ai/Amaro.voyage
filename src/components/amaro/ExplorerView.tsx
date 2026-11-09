@@ -81,6 +81,8 @@ interface ExplorerViewProps {
   onChangeLocale: (locale: LocaleCode) => void;
   currency: CurrencyCode;
   onChangeCurrency: (currency: CurrencyCode) => void;
+  defaultCountryCode?: string;
+  onChangeCountryCode?: (code: string) => void;
   rateInfo: RateInfo | null;
   catalogue: CatalogueItem[];
   pilotStocks?: PilotStockDoc[];
@@ -172,6 +174,8 @@ export function ExplorerView({
   onChangeLocale,
   currency,
   onChangeCurrency,
+  defaultCountryCode,
+  onChangeCountryCode,
   rateInfo,
   catalogue,
   pilotStocks = [],
@@ -196,7 +200,16 @@ export function ExplorerView({
   const allowDemoData = Boolean(countrySetting?.includeDemoData);
 
   const [space, setSpace] = useState<ExplorerSpace>('overview');
-  const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(
+    defaultCountryCode || 'BJ'
+  );
+
+  useEffect(() => {
+    if (defaultCountryCode && defaultCountryCode !== selectedCountryCode) {
+      setSelectedCountryCode(defaultCountryCode);
+      setSelectedCityId('all');
+    }
+  }, [defaultCountryCode]);
   const [selectedCityId, setSelectedCityId] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<ServiceCategory | 'all'>('all');
   const [standingFilter, setStandingFilter] = useState<StandingLevel | 'all'>('all');
@@ -802,6 +815,7 @@ export function ExplorerView({
                     onClick={() => {
                       setSelectedCountryCode(c.code);
                       setSelectedCityId('all');
+                      onChangeCountryCode?.(c.code);
                     }}
                     className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                       selectedCountryCode === c.code

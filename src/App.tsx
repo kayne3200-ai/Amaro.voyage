@@ -60,6 +60,7 @@ import type {
   VerificationLevel,
 } from './types/amaro';
 import {
+  ALL_PUBLIC_DIRECTORIES,
   BENIN_PUBLIC_DIRECTORY,
   DEMO_REFERENCE_CATALOGUE,
   EDITORIAL_IMAGES,
@@ -224,6 +225,7 @@ function AmaroPlatform() {
   } | null>(null);
   const [locale, setLocale] = useState<LocaleCode>('fr');
   const [currency, setCurrency] = useState<CurrencyCode>('XOF');
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
   const [isDark, setIsDark] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocKey | null>(null);
@@ -1339,7 +1341,7 @@ function AmaroPlatform() {
       }
     }
     const mergedPublished = publishedServices.map((s) => {
-      const staticMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === s.id);
+      const staticMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === s.id);
       if (!staticMatch) return s;
       return {
         ...staticMatch,
@@ -1347,7 +1349,7 @@ function AmaroPlatform() {
         siteEditorial: staticMatch.siteEditorial,
       };
     });
-    const remainingDirectory = BENIN_PUBLIC_DIRECTORY.filter(
+    const remainingDirectory = ALL_PUBLIC_DIRECTORIES.filter(
       (b) => !overriddenIds.has(b.id)
     );
     const remainingDemo = countrySetting?.includeDemoData
@@ -2892,7 +2894,7 @@ function AmaroPlatform() {
   ) => {
     if (!authUser?.uid || !isAdmin) return;
     const cleanId = directoryServiceId.trim();
-    const staticMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === cleanId);
+    const staticMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === cleanId);
     const existingDoc = allCatalogueServices.find((s) => s.id === cleanId);
     const baseItem = existingDoc || staticMatch;
     if (!baseItem) {
@@ -3431,7 +3433,7 @@ function AmaroPlatform() {
       `srv-pilot-${params.pilot.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 90)}`;
     const cleanServiceId = rawServiceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
 
-    const staticDirMatch = BENIN_PUBLIC_DIRECTORY.find((b) => b.id === cleanServiceId);
+    const staticDirMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === cleanServiceId);
     const existingCatalogueMatch = allCatalogueServices.find((s) => s.id === cleanServiceId);
     const fallbackImgKey =
       params.pilot.category === 'transport' ? 'cotonou_road' : 'cotonou_coast';
@@ -3727,6 +3729,8 @@ function AmaroPlatform() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         locale={locale}
+        selectedCountryCode={selectedCountryCode}
+        onSelectCountry={setSelectedCountryCode}
         isSignedIn={Boolean(authUser)}
         isSigningIn={isSigningIn}
         unreadNotifications={unreadCount}
@@ -3757,6 +3761,8 @@ function AmaroPlatform() {
             onChangeLocale={setLocale}
             currency={currency}
             onChangeCurrency={setCurrency}
+            defaultCountryCode={selectedCountryCode}
+            onChangeCountryCode={setSelectedCountryCode}
             rateInfo={rateInfo}
             catalogue={combinedCatalogue}
             pilotStocks={publicActiveStocks}

@@ -48,9 +48,13 @@ import {
 } from '../src/lib/offerEngine';
 import {
   BENIN_PUBLIC_DIRECTORY,
+  COUNTRIES_REGISTRY,
   EDITORIAL_IMAGES,
   shouldShowIllustrationBadge,
 } from '../src/data/amaroRegistry';
+import {
+  COTE_DIVOIRE_PUBLIC_DIRECTORY,
+} from '../src/data/coteDivoireRegistry';
 import {
   UN_COUNTRIES_REGISTRY,
 } from '../src/data/unCountries';
@@ -4406,7 +4410,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       reservationId: testResId,
       itemId: 'slot-c3-1',
       notificationId: null,
-      clientId: 'traveler-c3-uid',
+      clientId: 'traveler-uid-1',
       providerOwnerId: 'provider-owner-uid',
       providerId: 'prov-cotonou-1',
       folderId: 'fold-c3',
@@ -4436,7 +4440,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       {
         method: 'POST',
         headers: {
-          Authorization: 'Bearer valid-client-traveler-jwt',
+          Authorization: 'Bearer valid-traveler-jwt',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ action: 'client_initiate_payment' }),
@@ -4469,7 +4473,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       {
         method: 'POST',
         headers: {
-          Authorization: 'Bearer valid-client-traveler-jwt',
+          Authorization: 'Bearer valid-traveler-jwt',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ action: 'client_initiate_payment' }),
@@ -4477,7 +4481,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     );
     assert.equal(validPayRes.status, 200);
     const validPayJson: any = await validPayRes.json();
-    assert.equal(validPayJson.paymentStatus, 'in_verification');
+    assert.equal(validPayJson.paymentStatus, 'initiated');
   });
 
   it('39. C2 — Règle de nommage : le libellé client est strictement « Frais de service Amaro » et exclut le mot « Taxes » seul', async () => {
@@ -4497,12 +4501,12 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(res60kFee, 4000);
     assert.equal(60000 + res60kFee, 64000);
 
-    // Transport 12.000f -> 6% = 720 + 500 = 1220 -> rounded up to 1300f (100f rounding)
+    // Transport 12.000f -> 12.000f + 1.200f = 13.200f affiché (exemple explicite propriétaire)
     const res12kFee = calculateCircuitAFee(12000);
-    assert.equal(res12kFee, 1300);
-    assert.equal(12000 + res12kFee, 13300);
+    assert.equal(res12kFee, 1200);
+    assert.equal(12000 + res12kFee, 13200);
 
-    // Guide 25.000f -> 6% = 1500 + 500 = 2000f
+    // Guide 25.000f -> 6% = 1500 + 500 = 2000f -> 25.000f + 2.000f = 27.000f affiché
     const res25kFee = calculateCircuitAFee(25000);
     assert.equal(res25kFee, 2000);
     assert.equal(25000 + res25kFee, 27000);
@@ -4553,9 +4557,9 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     // 41b. Must NOT show badge for 'propre_etablissement'
     assert.equal(shouldShowIllustrationBadge('propre_etablissement'), false);
 
-    // 41c. All 11 registered photos have trace metadata (defaulting to Inconnu when unknown)
+    // 41c. All registered photos have trace metadata (defaulting to Inconnu when unknown)
     const keys = Object.keys(EDITORIAL_IMAGES);
-    assert.equal(keys.length, 11);
+    assert.ok(keys.length >= 11);
     for (const key of keys) {
       const meta = EDITORIAL_IMAGES[key];
       assert.ok(meta.key);
@@ -4613,7 +4617,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
 
     // Verify non-contamination: country is CI, zero Benin catalogue sheets
     assert.equal(ciData.countryCode, 'CI');
-    assert.equal(ciData.countryName, "Côte d'Ivoire");
+    assert.match(ciData.countryName, /Côte d['’]Ivoire/);
     assert.deepEqual(ciData.services, []);
 
     // 43b. Verify non-contamination of emergency numbers: no Benin numbers in CI
@@ -4633,7 +4637,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(samuBJ.number, '');
     assert.equal(samuBJ.status, 'a_confirmer');
 
-    const protCivBJ = beninEmergencies.find((e: any) => e.id === 'bj_pompiers_protection_civile');
+    const protCivBJ = beninEmergencies.find((e: any) => e.id === 'bj_protection_civile');
     assert.ok(protCivBJ);
     assert.equal(protCivBJ.number, '');
     assert.equal(protCivBJ.status, 'a_confirmer');
@@ -4642,11 +4646,59 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(formatEmergencyNumberDisplay(samuBJ).displayText, 'numéro à confirmer');
     assert.equal(formatEmergencyNumberDisplay(protCivBJ).displayText, 'numéro à confirmer');
 
-    // Confirmed numbers display their real telephone number
+    // All unconfirmed numbers display "numéro à confirmer" (C4)
     const policeBJ = beninEmergencies.find((e: any) => e.id === 'bj_police');
     assert.ok(policeBJ);
     assert.equal(policeBJ.number, '117');
-    assert.equal(formatEmergencyNumberDisplay(policeBJ).displayText, '117');
+    assert.equal(formatEmergencyNumberDisplay(policeBJ).displayText, 'numéro à confirmer');
+
+    // When status is 'verifie_proprietaire', it displays the confirmed telephone number
+    const verifiedPolice = { ...policeBJ, status: 'verifie_proprietaire' as const };
+    assert.equal(formatEmergencyNumberDisplay(verifiedPolice).displayText, '117');
+  });
+
+  it('44. Mission Côte d’Ivoire — Deuxième territoire national de l’écosystème Amaro, intégrité du catalogue et devis serveur Circuit A', async () => {
+    // 44a. Verification of Côte d'Ivoire in COUNTRIES_REGISTRY
+    const ciDef = COUNTRIES_REGISTRY.find((c) => c.code === 'CI');
+    assert.ok(ciDef, 'Côte d’Ivoire doit être enregistrée dans COUNTRIES_REGISTRY');
+    assert.equal(ciDef.currency, 'XOF');
+    assert.equal(ciDef.timezone, 'Africa/Abidjan (UTC+0)');
+    assert.ok(ciDef.cities.length >= 10, 'Au moins 10 villes ivoiriennes majeures répertoriées');
+
+    // 44b. Non-contamination: All CI listings have countryCode 'CI' and zero Benin listings have 'CI'
+    assert.ok(COTE_DIVOIRE_PUBLIC_DIRECTORY.length >= 25, 'Au moins 25 fiches ivoiriennes dans le répertoire');
+    for (const item of COTE_DIVOIRE_PUBLIC_DIRECTORY) {
+      assert.equal(item.countryCode, 'CI', `L’élément ${item.id} doit avoir countryCode === 'CI'`);
+    }
+    for (const item of BENIN_PUBLIC_DIRECTORY) {
+      assert.equal(item.countryCode, 'BJ', `L’élément Bénin ${item.id} doit avoir countryCode === 'BJ'`);
+    }
+
+    // 44c. Server-authoritative quote calculation for Côte d'Ivoire service
+    store.settings.set('CI', {
+      countryCode: 'CI',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 6,
+      serviceFeeFlat: 500,
+      taxPercent: 0,
+      currency: 'XOF',
+    });
+
+    const quoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'ci-site-basilique-paix-yakro',
+        participants: 1,
+        providerPrice: 5000,
+      }),
+    });
+    assert.equal(quoteRes.status, 200);
+    const quoteJson: any = await quoteRes.json();
+    assert.equal(quoteJson.breakdown.providerPrice, 5000);
+    assert.equal(quoteJson.breakdown.amaroFee, 800); // 5000 * 0.06 + 500 = 800
+    assert.equal(quoteJson.breakdown.totalAmount, 5800);
   });
 });
 

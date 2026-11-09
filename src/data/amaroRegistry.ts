@@ -8,6 +8,10 @@ import {
   BENIN_SERVICES_DIRECTORY,
   BENIN_TOURIST_SITES_DIRECTORY,
 } from './beninSitesAndServices';
+import {
+  COTE_DIVOIRE_COUNTRY_DEF,
+  COTE_DIVOIRE_PUBLIC_DIRECTORY,
+} from './coteDivoireRegistry';
 
 const cotonouCoastImg = new URL('../assets/images/benin_cotonou_coastline_1793469936805.jpg', import.meta.url).href;
 const calaviLagoonImg = new URL('../assets/images/benin_calavi_lagoon_1793469937987.jpg', import.meta.url).href;
@@ -403,13 +407,14 @@ function resolveItemEditorialImageBase(
     return EDITORIAL_IMAGES[item.imageKey];
   }
 
-  // Fallback élégant par ville
-  if (city === 'ouidah') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
-  if (city === 'portonovo') return EDITORIAL_IMAGES.portonovo_heritage;
+  // Fallback élégant par ville (Bénin & Côte d'Ivoire)
+  if (city === 'ouidah' || city === 'grand-bassam') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+  if (city === 'portonovo' || city === 'abidjan') return EDITORIAL_IMAGES.cotonou_coast;
+  if (city === 'yamoussoukro') return EDITORIAL_IMAGES.monument_amazone_cotonou;
   if (city === 'abomey' || city === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
-  if (city === 'grandpopo') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
-  if (city === 'natitingou') return EDITORIAL_IMAGES.atacora_tata;
-  if (city === 'parakou') return EDITORIAL_IMAGES.parakou_heritage;
+  if (city === 'grandpopo' || city === 'assinie' || city === 'grand-bereby' || city === 'sassandra') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+  if (city === 'natitingou' || city === 'man') return EDITORIAL_IMAGES.atacora_tata;
+  if (city === 'parakou' || city === 'korhogo' || city === 'bouake') return EDITORIAL_IMAGES.parakou_heritage;
 
   return EDITORIAL_IMAGES.monument_amazone_cotonou;
 }
@@ -498,39 +503,19 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
         name: 'Porto-Novo & Vallée de l’Ouémé',
         region: 'Ouémé',
         summaryFr:
-          'Capitale constitutionnelle au charme afro-brésilien : Palais Honmè du Roi Toffa, Grande Mosquée baroque, Musée da Silva et villages des Aguégués.',
+          'Capitale des arts et de l’histoire : Grande Mosquée afro-brésilienne, Musée Honmè des rois de Hogbonou et Musée Da Silva.',
         summaryEn:
-          'Constitutional capital famed for Afro-Brazilian architecture: King Toffa’s Honmè Palace, Great Mosque, da Silva Museum, and Ouémé Valley.',
+          'Capital of arts and heritage: Afro-Brazilian Great Mosque, Honmè Palace Museum, and Da Silva Museum.',
         imageKey: 'portonovo_heritage',
-      },
-      {
-        id: 'grand-popo',
-        name: 'Grand-Popo',
-        region: 'Mono',
-        summaryFr:
-          'Station balnéaire paisible sous les cocotiers et réserve naturelle de la Bouche du Roy où le fleuve Mono rejoint l’océan Atlantique.',
-        summaryEn:
-          'Serene palm-lined coastal town and gateway to the Bouche du Roy biosphere reserve where the Mono River meets the Atlantic.',
-        imageKey: 'grandpopo_coast',
-      },
-      {
-        id: 'possotome',
-        name: 'Possotomè (Lac Ahémé)',
-        region: 'Mono (Bopa)',
-        summaryFr:
-          'Rives paisibles du lac Ahémé réputées pour leurs sources thermales chaudes naturelles, l’écotourisme communautaire et le Dakouin.',
-        summaryEn:
-          'Peaceful shores of Lake Ahémé renowned for natural hot thermal springs, community ecotourism, and Dakouin fish cuisine.',
-        imageKey: 'grandpopo_coast',
       },
       {
         id: 'abomey-calavi',
         name: 'Abomey-Calavi',
         region: 'Atlantique',
         summaryFr:
-          'Grande cité universitaire verdoyante, pôle artistique de Lobozounkpa (Petit Musée de la Récade) et embarcadère officiel vers Ganvié.',
+          'Porte d’accès lagunaire lac Nokoué et embarcadère principal des pirogues vers Ganvié.',
         summaryEn:
-          'Green university hub, home to Le Centre contemporary art space and the official boat pier to Ganvié.',
+          'Lagoon gateway to Lake Nokoué and main boat launch to Ganvié stilt village.',
         imageKey: 'calavi_lagoon',
       },
       {
@@ -538,64 +523,74 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
         name: 'Abomey',
         region: 'Zou',
         summaryFr:
-          'Capitale historique du royaume du Danxomè : Palais Royaux classés au Patrimoine Mondial de l’UNESCO, bas-reliefs et toiles appliquées.',
+          'Capitale historique du Royaume du Danxomè classée au patrimoine mondial de l’UNESCO : Palais royaux de Guézo et Glèlè.',
         summaryEn:
-          'Historic capital of the Kingdom of Dahomey: UNESCO World Heritage Royal Palaces, bas-reliefs, and appliqué tapestries.',
+          'UNESCO World Heritage royal capital of Danxomè: King Guézo and King Glèlè royal earthen palaces.',
         imageKey: 'abomey_royal',
       },
       {
         id: 'bohicon',
-        name: 'Bohicon',
+        name: 'Bohicon & Agongointo',
         region: 'Zou',
         summaryFr:
-          'Carrefour commercial du plateau d’Abomey abritant le parc archéologique du village souterrain d’Agongointo.',
+          'Carrefour ferroviaire et routier du Sud-Bénin, réputé pour le Village Souterrain historique d’Agongointo-Zoungoudo.',
         summaryEn:
-          'Central crossroads neighboring Abomey and home to the Agongointo underground archaeological park.',
+          'Southern trade hub known for the historic underground archaeological village of Agongointo-Zoungoudo.',
         imageKey: 'abomey_royal',
       },
       {
-        id: 'dassa-zoume',
-        name: 'Dassa-Zoumè & Savalou',
-        region: 'Collines',
-        summaryFr:
-          'Cirque spectaculaire de 41 collines granitiques sacrées, Grotte mariale d’Arigbo et terroir gastronomique de l’igname pilée à Savalou.',
-        summaryEn:
-          'Dramatic ring of 41 granite hills, Marian Grotto of Arigbo, and Savalou’s celebrated yam harvest heritage.',
-        imageKey: 'dassa_hills',
-      },
-      {
-        id: 'ketou',
-        name: 'Kétou & Pobè',
-        region: 'Plateau',
-        summaryFr:
-          'Ancienne cité royale yoruba célèbre pour la porte fortifiée d’Akaba Idena et les traditions des masques Gèlèdè inscrits à l’UNESCO.',
-        summaryEn:
-          'Ancient Yoruba royal city famed for the fortified Akaba Idena gate and UNESCO-listed Gèlèdè mask heritage.',
-        imageKey: 'dassa_hills',
-      },
-      {
-        id: 'lokossa',
-        name: 'Lokossa, Comé & Sè',
+        id: 'grand-popo',
+        name: 'Grand-Popo & Fleuve Mono',
         region: 'Mono',
         summaryFr:
-          'Chef-lieu du Mono entouré de lacs et des célèbres ateliers féminins de poterie traditionnelle de Sè.',
+          'Station balnéaire écotouristique paisible : Bouche du Roy où le fleuve Mono rencontre l’océan, mangroves et sanctuaires de tortues.',
         summaryEn:
-          'Administrative heart of Mono near traditional women potters’ workshops in Sè.',
+          'Tranquil coastal haven: River Mono meeting the Atlantic at Bouche du Roy, mangroves, and sea turtle sanctuaries.',
         imageKey: 'grandpopo_coast',
+      },
+      {
+        id: 'possotome',
+        name: 'Possotomè & Lac Ahémé',
+        region: 'Mono',
+        summaryFr:
+          'Écotourisme communautaire au bord du lac Ahémé : traditions des pêcheurs Pedah, sources thermales et artisanat.',
+        summaryEn:
+          'Community-based ecotourism along Lake Ahémé: Pedah fishing heritage, natural hot springs, and artisanal pottery.',
+        imageKey: 'grandpopo_coast',
+      },
+      {
+        id: 'dassa-zoume',
+        name: 'Dassa-Zoumè',
+        region: 'Collines',
+        summaryFr:
+          'Terre mythique des 41 collines granitiques sacrées et sanctuaire marial d’Arigbo, carrefour central entre le Nord et le Sud.',
+        summaryEn:
+          'Sacred heartland of the 41 granite inselbergs and Arigbo Marian shrine, connecting North and South.',
+        imageKey: 'dassa_hills',
+      },
+      {
+        id: 'savalou',
+        name: 'Savalou',
+        region: 'Collines',
+        summaryFr:
+          'Cité royale du pays Mahi, haut lieu de la fête traditionnelle de l’Igname (15 août) et du sanctuaire Vodun.',
+        summaryEn:
+          'Mahi royal kingdom renowned for the annual New Yam Festival on August 15 and ancient Vodun shrines.',
+        imageKey: 'dassa_hills',
       },
       {
         id: 'allada',
         name: 'Allada',
         region: 'Atlantique',
         summaryFr:
-          'Berceau originel des royaumes Aja-Fon du Sud-Bénin et terre ancestrale de Toussaint Louverture.',
+          'Berceau historique de la dynastie d’Adjahuto et terre ancestrale du général Toussaint Louverture.',
         summaryEn:
-          'Ancestral cradle of southern Benin’s royal lineages and heritage site of Toussaint Louverture.',
+          'Historic cradle of the Adjahuto royal dynasty and ancestral land of General Toussaint Louverture.',
         imageKey: 'abomey_royal',
       },
       {
-        id: 'seme-podji',
-        name: 'Sèmè-Podji',
+        id: 'seme-krake',
+        name: 'Sèmè-Podji & Cordon Littoral Est',
         region: 'Ouémé',
         summaryFr:
           'Cordon littoral oriental bordé de cocoteraies et d’hôtels balnéaires entre Cotonou et Porto-Novo.',
@@ -685,6 +680,7 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
       },
     ],
   },
+  COTE_DIVOIRE_COUNTRY_DEF,
   {
     code: 'SN',
     nameFr: 'Sénégal (Architecture prête — Prochaine phase)',
@@ -732,6 +728,13 @@ export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
   ...BENIN_ACCOMMODATIONS_DIRECTORY,
   ...BENIN_TOURIST_SITES_DIRECTORY,
   ...BENIN_SERVICES_DIRECTORY,
+];
+
+export { COTE_DIVOIRE_PUBLIC_DIRECTORY } from './coteDivoireRegistry';
+
+export const ALL_PUBLIC_DIRECTORIES: CatalogueItem[] = [
+  ...BENIN_PUBLIC_DIRECTORY,
+  ...COTE_DIVOIRE_PUBLIC_DIRECTORY,
 ];
 
 // Clearly marked Demonstration / Test entries (kept separate and never presented as real partners)

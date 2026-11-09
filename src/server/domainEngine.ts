@@ -10,6 +10,7 @@ import {
   BENIN_SERVICES_DIRECTORY,
   BENIN_TOURIST_SITES_DIRECTORY,
 } from '../data/beninSitesAndServices';
+import { COTE_DIVOIRE_PUBLIC_DIRECTORY } from '../data/coteDivoireRegistry';
 
 export const BCEAO_EUR_TO_XOF = 655.957;
 
@@ -261,6 +262,7 @@ const SERVER_BENIN_PUBLIC_DIRECTORY = [
   ...BENIN_ACCOMMODATIONS_DIRECTORY,
   ...BENIN_TOURIST_SITES_DIRECTORY,
   ...BENIN_SERVICES_DIRECTORY,
+  ...COTE_DIVOIRE_PUBLIC_DIRECTORY,
 ];
 
 const builtDirectoryServices: Record<string, ServerServiceRecord> = {
