@@ -1390,14 +1390,14 @@ export function JourneyHubView({
             <button
               type="button"
               onClick={() => setSubTab('agenda')}
-              className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
+              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap shadow-sm transition-all ${
                 subTab === 'agenda'
-                  ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 font-bold'
+                  : 'bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-amber-400'
               }`}
             >
-              <Calendar className="w-4 h-4" />
-              <span>1. Itinéraire &amp; Budget ({folderItems.length} étapes)</span>
+              <Calendar className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <span>1. Agenda Électronique Automatique &amp; Budget ({folderItems.length} étapes)</span>
             </button>
 
             <button
@@ -2540,13 +2540,23 @@ export function JourneyHubView({
           </section>
 
           <section className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-gradient-to-r from-amber-50 to-amber-100/60 dark:from-amber-950/40 dark:to-slate-900 border border-amber-200 dark:border-amber-800/80 rounded-2xl shadow-sm">
               <div className="space-y-1">
-                <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                  Agenda Chronologique Intelligent (Amaro Journey Brain)
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Règles harmonisées (5.1 &amp; 9.3) : max {countrySetting?.maxVisitsCityChangeDay ?? 1} visite un jour de changement de ville · max {countrySetting?.maxVisitsSameCityDay ?? 2} visites/jour sans changement de ville · 1 temps libre de respiration conseillé chaque jour · 1 transporteur principal + courses ponctuelles séparées.
+                <div className="flex items-center gap-2">
+                  <span className="w-8 h-8 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-bold">
+                    <Calendar className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                      Agenda Électronique Automatique (Amaro Journey Brain)
+                    </h2>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                      Synchronisation automatique de vos étapes par jour, horaires et ville d'hébergement.
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-10">
+                  Règles harmonisées : max {countrySetting?.maxVisitsCityChangeDay ?? 1} visite un jour de changement de ville · max {countrySetting?.maxVisitsSameCityDay ?? 2} visites/jour sans changement de ville · temps libre préservé chaque jour.
                 </p>
               </div>
               {activeTransportProvider && (

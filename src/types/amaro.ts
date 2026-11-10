@@ -91,7 +91,7 @@ export interface CountryDefinition {
   code: string;
   nameFr: string;
   nameEn: string;
-  currency: CurrencyCode;
+  currency: CurrencyCode | string;
   timezone: string;
   languages: string[];
   operationalStatus: 'operational' | 'architecture_ready';
@@ -163,6 +163,8 @@ export interface CatalogueItem {
   photoIndicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
   photoSource?: string;
   photoUsageRights?: string;
+  imageSourceNote?: string;
+  imageAuthor?: string;
   isSacredOrCeremonial?: boolean;
   sacredNotice?: string;
   linkedDirectoryServiceId?: string;

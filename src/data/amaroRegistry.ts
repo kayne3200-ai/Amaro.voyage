@@ -12,6 +12,38 @@ import {
   COTE_DIVOIRE_COUNTRY_DEF,
   COTE_DIVOIRE_PUBLIC_DIRECTORY,
 } from './coteDivoireRegistry';
+import {
+  EXTENDED_COUNTRIES_DEFS,
+  EXTENDED_PUBLIC_DIRECTORY,
+} from './extendedCountriesRegistry';
+import {
+  TOP_AFRICA_COUNTRIES_DEFS,
+  TOP_AFRICA_PUBLIC_DIRECTORY,
+} from './africaTopCountries';
+import {
+  TOP_EUROPE_COUNTRIES_DEFS,
+  TOP_EUROPE_PUBLIC_DIRECTORY,
+} from './europeTopCountries';
+import {
+  TOP_EUROPE_PART2_COUNTRIES_DEFS,
+  TOP_EUROPE_PART2_PUBLIC_DIRECTORY,
+} from './europeTopCountriesPart2';
+import {
+  TOP_ASIA_COUNTRIES_DEFS,
+  TOP_ASIA_PUBLIC_DIRECTORY,
+} from './asiaTopCountries';
+import {
+  TOP_ASIA_PART2_COUNTRIES_DEFS,
+  TOP_ASIA_PART2_PUBLIC_DIRECTORY,
+} from './asiaTopCountriesPart2';
+import {
+  TOP_AMERICAS_COUNTRIES_DEFS,
+  TOP_AMERICAS_PUBLIC_DIRECTORY,
+} from './americasTopCountries';
+import {
+  TOP_AMERICAS_PART2_COUNTRIES_DEFS,
+  TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
+} from './americasTopCountriesPart2';
 
 const cotonouCoastImg = new URL('../assets/images/benin_cotonou_coastline_1793469936805.jpg', import.meta.url).href;
 const calaviLagoonImg = new URL('../assets/images/benin_calavi_lagoon_1793469937987.jpg', import.meta.url).href;
@@ -407,14 +439,15 @@ function resolveItemEditorialImageBase(
     return EDITORIAL_IMAGES[item.imageKey];
   }
 
-  // Fallback élégant par ville (Bénin & Côte d'Ivoire)
-  if (city === 'ouidah' || city === 'grand-bassam') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
-  if (city === 'portonovo' || city === 'abidjan') return EDITORIAL_IMAGES.cotonou_coast;
-  if (city === 'yamoussoukro') return EDITORIAL_IMAGES.monument_amazone_cotonou;
+  // Fallback élégant par ville (Bénin, Côte d'Ivoire, Sénégal, Togo, Ghana, etc.)
+  if (city === 'ouidah' || city === 'grand-bassam' || city === 'goree' || city === 'cape-coast') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+  if (city === 'portonovo' || city === 'abidjan' || city === 'dakar' || city === 'lome' || city === 'accra' || city === 'douala' || city === 'casablanca' || city === 'nice') return EDITORIAL_IMAGES.cotonou_coast;
+  if (city === 'yamoussoukro' || city === 'le-caire' || city === 'paris') return EDITORIAL_IMAGES.monument_amazone_cotonou;
   if (city === 'abomey' || city === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
-  if (city === 'grandpopo' || city === 'assinie' || city === 'grand-bereby' || city === 'sassandra') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
-  if (city === 'natitingou' || city === 'man') return EDITORIAL_IMAGES.atacora_tata;
-  if (city === 'parakou' || city === 'korhogo' || city === 'bouake') return EDITORIAL_IMAGES.parakou_heritage;
+  if (city === 'grandpopo' || city === 'assinie' || city === 'grand-bereby' || city === 'sassandra' || city === 'saly' || city === 'cap-skirring' || city === 'kribi' || city === 'djerba' || city === 'pointe-noire') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+  if (city === 'natitingou' || city === 'man' || city === 'kpalime' || city === 'kara' || city === 'agadez' || city === 'djenne' || city === 'fes') return EDITORIAL_IMAGES.atacora_tata;
+  if (city === 'parakou' || city === 'korhogo' || city === 'bouake' || city === 'kumasi' || city === 'ouagadougou' || city === 'bobo-dioulasso') return EDITORIAL_IMAGES.parakou_heritage;
+  if (city === 'niamey' || city === 'bamako' || city === 'brazzaville' || city === 'kinshasa') return EDITORIAL_IMAGES.calavi_lagoon;
 
   return EDITORIAL_IMAGES.monument_amazone_cotonou;
 }
@@ -681,46 +714,14 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
     ],
   },
   COTE_DIVOIRE_COUNTRY_DEF,
-  {
-    code: 'SN',
-    nameFr: 'Sénégal (Architecture prête — Prochaine phase)',
-    nameEn: 'Senegal (Architecture Ready — Future Expansion)',
-    currency: 'XOF',
-    timezone: 'Africa/Dakar (UTC+0)',
-    languages: ['Français', 'Wolof'],
-    operationalStatus: 'architecture_ready',
-    paymentMethods: ['Wave', 'Orange Money', 'Carte bancaire'],
-    localRulesFr: [
-      'Pays pré-configuré dans l’architecture internationale Amaro ; catalogue commercial non encore ouvert.',
-    ],
-    localRulesEn: [
-      'Country pre-configured in Amaro international architecture; commercial catalogue not yet opened.',
-    ],
-    emergencyNumbers: [
-      {
-        serviceFr: 'Police Secours Sénégal',
-        serviceEn: 'Senegal Police Emergency',
-        number: '17',
-        sourceNote: 'Numéro officiel national Sénégal',
-      },
-      {
-        serviceFr: 'Sapeurs-Pompiers Sénégal',
-        serviceEn: 'Senegal Fire Brigade',
-        number: '18',
-        sourceNote: 'Numéro officiel national Sénégal',
-      },
-    ],
-    cities: [
-      {
-        id: 'dakar',
-        name: 'Dakar',
-        region: 'Cap-Vert',
-        summaryFr: 'Architecture multi-pays prête pour ouverture progressive après validation au Bénin.',
-        summaryEn: 'Multi-country architecture ready for phased rollout after Benin validation.',
-        imageKey: 'cotonou_coast',
-      },
-    ],
-  },
+  ...EXTENDED_COUNTRIES_DEFS,
+  ...TOP_AFRICA_COUNTRIES_DEFS,
+  ...TOP_EUROPE_COUNTRIES_DEFS,
+  ...TOP_EUROPE_PART2_COUNTRIES_DEFS,
+  ...TOP_ASIA_COUNTRIES_DEFS,
+  ...TOP_ASIA_PART2_COUNTRIES_DEFS,
+  ...TOP_AMERICAS_COUNTRIES_DEFS,
+  ...TOP_AMERICAS_PART2_COUNTRIES_DEFS,
 ];
 
 // Unified Real Public Directory of Benin (175 real documented entries: 110 Accommodations + 21 Heritage/Natural Sites + 44 Transports/Linguistic/Complementary Services [172 third-party establishments + 3 AMARO human assistance offers])
@@ -731,10 +732,26 @@ export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
 ];
 
 export { COTE_DIVOIRE_PUBLIC_DIRECTORY } from './coteDivoireRegistry';
+export { EXTENDED_PUBLIC_DIRECTORY } from './extendedCountriesRegistry';
+export { TOP_AFRICA_PUBLIC_DIRECTORY } from './africaTopCountries';
+export { TOP_EUROPE_PUBLIC_DIRECTORY } from './europeTopCountries';
+export { TOP_EUROPE_PART2_PUBLIC_DIRECTORY } from './europeTopCountriesPart2';
+export { TOP_ASIA_PUBLIC_DIRECTORY } from './asiaTopCountries';
+export { TOP_ASIA_PART2_PUBLIC_DIRECTORY } from './asiaTopCountriesPart2';
+export { TOP_AMERICAS_PUBLIC_DIRECTORY } from './americasTopCountries';
+export { TOP_AMERICAS_PART2_PUBLIC_DIRECTORY } from './americasTopCountriesPart2';
 
 export const ALL_PUBLIC_DIRECTORIES: CatalogueItem[] = [
   ...BENIN_PUBLIC_DIRECTORY,
   ...COTE_DIVOIRE_PUBLIC_DIRECTORY,
+  ...EXTENDED_PUBLIC_DIRECTORY,
+  ...TOP_AFRICA_PUBLIC_DIRECTORY,
+  ...TOP_EUROPE_PUBLIC_DIRECTORY,
+  ...TOP_EUROPE_PART2_PUBLIC_DIRECTORY,
+  ...TOP_ASIA_PUBLIC_DIRECTORY,
+  ...TOP_ASIA_PART2_PUBLIC_DIRECTORY,
+  ...TOP_AMERICAS_PUBLIC_DIRECTORY,
+  ...TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
 ];
 
 // Clearly marked Demonstration / Test entries (kept separate and never presented as real partners)

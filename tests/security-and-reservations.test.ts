@@ -47,6 +47,7 @@ import {
   simulateCircuitAFees,
 } from '../src/lib/offerEngine';
 import {
+  ALL_PUBLIC_DIRECTORIES,
   BENIN_PUBLIC_DIRECTORY,
   COUNTRIES_REGISTRY,
   EDITORIAL_IMAGES,
@@ -55,6 +56,10 @@ import {
 import {
   COTE_DIVOIRE_PUBLIC_DIRECTORY,
 } from '../src/data/coteDivoireRegistry';
+import {
+  EXTENDED_COUNTRIES_DEFS,
+  EXTENDED_PUBLIC_DIRECTORY,
+} from '../src/data/extendedCountriesRegistry';
 import {
   UN_COUNTRIES_REGISTRY,
 } from '../src/data/unCountries';
@@ -4699,6 +4704,160 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(quoteJson.breakdown.providerPrice, 5000);
     assert.equal(quoteJson.breakdown.amaroFee, 800); // 5000 * 0.06 + 500 = 800
     assert.equal(quoteJson.breakdown.totalAmount, 5800);
+  });
+
+  it('45. Extension Internationale — 13 nouveaux pays intégrés (SN, TG, GH, NE, ML, BF, CM, CG, CD, MA, TN, EG, FR) avec intégrité et zéro contamination', async () => {
+    // 45a. Check all 15 countries exist in COUNTRIES_REGISTRY
+    const expectedCodes = ['BJ', 'CI', 'SN', 'TG', 'GH', 'NE', 'ML', 'BF', 'CM', 'CG', 'CD', 'MA', 'TN', 'EG', 'FR'];
+    for (const code of expectedCodes) {
+      const def = COUNTRIES_REGISTRY.find((c) => c.code === code);
+      assert.ok(def, `Le pays ${code} doit être présent dans COUNTRIES_REGISTRY`);
+      assert.ok(def.cities.length >= 2, `Le pays ${code} doit posséder au moins 2 villes principales`);
+      assert.ok(def.emergencyNumbers.length >= 1, `Le pays ${code} doit posséder des numéros d’urgence officiels`);
+    }
+
+    // 45b. Check extended directory has at least 15 real listings and no contamination with Benin (BJ)
+    assert.ok(EXTENDED_PUBLIC_DIRECTORY.length >= 15, 'Au moins 15 fiches réelles réparties sur les 13 pays étendus');
+    for (const item of EXTENDED_PUBLIC_DIRECTORY) {
+      assert.notEqual(item.countryCode, 'BJ', `L’élément ${item.id} ne doit pas être affecté au Bénin`);
+      assert.ok(expectedCodes.includes(item.countryCode), `Le pays ${item.countryCode} doit faire partie des pays supportés`);
+    }
+
+    // 45c. Server-authoritative quote calculation for an extended country (e.g. Sénégal Terrou-Bi or Gorée)
+    store.settings.set('SN', {
+      countryCode: 'SN',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 6,
+      serviceFeeFlat: 500,
+      taxPercent: 0,
+      currency: 'XOF',
+    });
+
+    const snQuoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'sn-site-maison-esclaves-goree',
+        participants: 1,
+        providerPrice: 3000,
+      }),
+    });
+    assert.equal(snQuoteRes.status, 200);
+    const snQuoteJson: any = await snQuoteRes.json();
+    assert.equal(snQuoteJson.breakdown.providerPrice, 3000);
+    assert.equal(snQuoteJson.breakdown.amaroFee, 680); // 3000 * 0.06 + 500 = 680
+    assert.equal(snQuoteJson.breakdown.totalAmount, 3680);
+  });
+
+  it('46. Recensement Mondial Amaro — 30 pays d’Afrique, 30 pays d’Europe, 30 pays d’Asie, 30 pays d’Amérique avec structure complète et intégrité stricte', async () => {
+    // 46a. Verification of 30 countries per continent
+    const africaExpected = [
+      'BJ', 'CI', 'SN', 'TG', 'GH', 'NE', 'ML', 'BF', 'CM', 'CG',
+      'CD', 'MA', 'TN', 'EG', 'ZA', 'KE', 'TZ', 'MG', 'MU', 'SC',
+      'RW', 'DZ', 'CV', 'ET', 'BW', 'NA', 'ZW', 'ZM', 'UG', 'GA',
+      'AO',
+    ];
+    const europeExpected = [
+      'FR', 'ES', 'IT', 'DE', 'GB', 'GR', 'PT', 'NL', 'TR', 'AT',
+      'CH', 'BE', 'HR', 'PL', 'SE', 'NO', 'DK', 'IE', 'CZ', 'HU',
+      'RO', 'BG', 'FI', 'IS', 'CY', 'MT', 'LU', 'SK', 'SI', 'AL',
+    ];
+    const asiaExpected = [
+      'JP', 'TH', 'CN', 'AE', 'IN', 'ID', 'VN', 'SG', 'KR', 'MY',
+      'SA', 'QA', 'OM', 'JO', 'LK', 'PH', 'KH', 'LA', 'MV', 'NP',
+      'TW', 'HK', 'UZ', 'GE', 'AM', 'AZ', 'KZ', 'MN', 'BH', 'KW',
+    ];
+    const americasExpected = [
+      'US', 'MX', 'CA', 'BR', 'AR', 'CO', 'PE', 'CL', 'CR', 'DO',
+      'CU', 'JM', 'PA', 'BS', 'EC', 'UY', 'GT', 'BO', 'PY', 'PR',
+      'BB', 'TT', 'LC', 'HN', 'NI', 'SV', 'BZ', 'GY', 'SR', 'MQ',
+    ];
+
+    assert.ok(africaExpected.length >= 30, 'Au moins 30 pays d’Afrique');
+    assert.ok(europeExpected.length >= 30, 'Au moins 30 pays d’Europe');
+    assert.ok(asiaExpected.length >= 30, 'Au moins 30 pays d’Asie');
+    assert.ok(americasExpected.length >= 30, 'Au moins 30 pays d’Amérique');
+
+    const allCheckedCodes = [
+      ...africaExpected,
+      ...europeExpected,
+      ...asiaExpected,
+      ...americasExpected,
+    ];
+
+    for (const code of allCheckedCodes) {
+      const def = COUNTRIES_REGISTRY.find((c) => c.code === code);
+      assert.ok(def, `Le pays ${code} doit être configuré dans COUNTRIES_REGISTRY`);
+      assert.ok(def.nameFr.length > 0, `Le pays ${code} doit avoir un nom en français`);
+      assert.ok(def.currency.length > 0, `Le pays ${code} doit avoir une devise officielle`);
+      assert.ok(def.cities.length >= 2, `Le pays ${code} doit avoir au moins 2 villes répertoriées`);
+      assert.ok(def.emergencyNumbers.length >= 1, `Le pays ${code} doit avoir au moins un numéro d’urgence officiel`);
+    }
+
+    // 46b. Verification of total catalogued listings and strict country isolation
+    assert.ok(ALL_PUBLIC_DIRECTORIES.length > 250, 'Le catalogue public global doit compter plus de 250 fiches réelles');
+
+    for (const item of ALL_PUBLIC_DIRECTORIES) {
+      assert.ok(item.countryCode, `L’item ${item.id} doit avoir un countryCode défini`);
+      if (item.category === 'accommodation') {
+        assert.ok(item.standing, `L’hébergement ${item.id} doit avoir un standing défini`);
+      }
+      assert.equal(item.status, 'published', `L’item ${item.id} doit être au statut published`);
+    }
+
+    // 46c. Server-authoritative quote calculation for an Asian destination (Japan)
+    store.settings.set('JP', {
+      countryCode: 'JP',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 6,
+      serviceFeeFlat: 500,
+      taxPercent: 0,
+      currency: 'XOF',
+    });
+
+    const jpQuoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'jp-acc-aman-tokyo',
+        participants: 1,
+      }),
+    });
+    const jpQuoteJson: any = await jpQuoteRes.json();
+    if (jpQuoteRes.status !== 200) {
+      console.log('jpQuoteRes Error:', jpQuoteJson);
+    }
+    assert.equal(jpQuoteRes.status, 200);
+    assert.equal(jpQuoteJson.breakdown.providerPrice, 850000);
+    assert.equal(jpQuoteJson.breakdown.amaroFee, 51500); // 850000 * 0.06 + 500 = 51500
+    assert.equal(jpQuoteJson.breakdown.totalAmount, 901500);
+
+    // 46d. Server-authoritative quote calculation for an American destination (USA Central Park)
+    store.settings.set('US', {
+      countryCode: 'US',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 6,
+      serviceFeeFlat: 500,
+      taxPercent: 0,
+      currency: 'XOF',
+    });
+
+    const usQuoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'us-site-central-park-guided',
+        participants: 1,
+      }),
+    });
+    assert.equal(usQuoteRes.status, 200);
+    const usQuoteJson: any = await usQuoteRes.json();
+    assert.equal(usQuoteJson.breakdown.providerPrice, 38000);
+    assert.equal(usQuoteJson.breakdown.amaroFee, 2780); // 38000 * 0.06 + 500 = 2780
+    assert.equal(usQuoteJson.breakdown.totalAmount, 40780);
   });
 });
 

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Compass,
   FolderKanban,
+  Calendar,
   Sparkles,
   LifeBuoy,
   UserCheck,
@@ -13,6 +14,7 @@ import {
   Building2,
 } from 'lucide-react';
 import type { SupportedLocale } from '../../types/amaro';
+import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 
 export type MainTab =
   | 'explorer'
@@ -57,7 +59,11 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   onSignIn,
   onSignOut,
 }) => {
-  const isCI = selectedCountryCode === 'CI';
+  const currentCountry =
+    COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+    COUNTRIES_REGISTRY[0];
+  const countryName = locale === 'fr' ? currentCountry.nameFr : currentCountry.nameEn;
+
   const navItems: Array<{
     id: MainTab;
     labelFr: string;
@@ -69,19 +75,19 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   }> = [
     {
       id: 'explorer',
-      labelFr: isCI ? 'Explorer la Côte d’Ivoire' : 'Explorer le Bénin',
-      labelEn: isCI ? 'Explore Ivory Coast' : 'Explore Benin',
+      labelFr: `Explorer ${countryName}`,
+      labelEn: `Explore ${countryName}`,
       shortFr: 'Explorer',
       shortEn: 'Explore',
       icon: Compass,
     },
     {
       id: 'journey',
-      labelFr: 'Mon Voyage & Agenda',
-      labelEn: 'My Trip & Agenda',
-      shortFr: 'Voyage',
-      shortEn: 'Trip',
-      icon: FolderKanban,
+      labelFr: 'Agenda & Mon Voyage',
+      labelEn: 'Schedule & My Trip',
+      shortFr: 'Agenda',
+      shortEn: 'Schedule',
+      icon: Calendar,
       badge: unreadNotifications > 0 ? unreadNotifications : undefined,
     },
     {
@@ -138,45 +144,60 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
                 </span>
                 <span className="hidden sm:block text-[11px] text-slate-300">
                   {locale === 'fr'
-                    ? `Organisation humaine de séjours · ${isCI ? 'Côte d’Ivoire' : 'Bénin'}`
-                    : `Human travel organization · ${isCI ? 'Ivory Coast' : 'Benin'}`}
+                    ? `Organisation humaine de séjours · ${countryName}`
+                    : `Human travel organization · ${countryName}`}
                 </span>
               </div>
             </button>
 
-            {/* National Country Switcher (Bénin 🇧🇯 / Côte d'Ivoire 🇨🇮) */}
+            {/* National Multi-Country Switcher (15 Pays Intégrés) */}
             {onSelectCountry && (
               <div
                 role="group"
                 aria-label="Sélection du pays de voyage"
                 className="flex items-center rounded-lg bg-slate-900/90 p-0.5 border border-slate-700/80"
               >
+                {/* Direct quick buttons for primary hubs */}
                 <button
                   type="button"
                   onClick={() => onSelectCountry('BJ')}
-                  className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all ${
-                    !isCI
+                  className={`min-h-[30px] px-2 py-1 text-xs font-semibold rounded-md flex items-center gap-1 transition-all ${
+                    selectedCountryCode === 'BJ'
                       ? 'bg-amber-600 text-white shadow-sm'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
                   }`}
-                  title="Sélectionner le Bénin"
+                  title="Bénin"
                 >
-                  <span className="text-sm">🇧🇯</span>
-                  <span className="hidden md:inline">Bénin</span>
+                  <span>🇧🇯</span>
+                  <span className="hidden xl:inline">Bénin</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => onSelectCountry('CI')}
-                  className={`min-h-[30px] px-2.5 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all ${
-                    isCI
+                  className={`min-h-[30px] px-2 py-1 text-xs font-semibold rounded-md flex items-center gap-1 transition-all ${
+                    selectedCountryCode === 'CI'
                       ? 'bg-amber-600 text-white shadow-sm'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
                   }`}
-                  title="Sélectionner la Côte d’Ivoire"
+                  title="Côte d’Ivoire"
                 >
-                  <span className="text-sm">🇨🇮</span>
-                  <span className="hidden md:inline">Côte d’Ivoire</span>
+                  <span>🇨🇮</span>
+                  <span className="hidden xl:inline">CI</span>
                 </button>
+
+                {/* Dynamic dropdown for all registered countries */}
+                <select
+                  value={selectedCountryCode}
+                  onChange={(e) => onSelectCountry(e.target.value)}
+                  aria-label="Changer de pays de destination"
+                  className="min-h-[30px] text-xs font-semibold bg-transparent text-amber-300 border-0 rounded px-1.5 py-0.5 focus:ring-0 focus:outline-none cursor-pointer max-w-[140px] sm:max-w-[200px]"
+                >
+                  {COUNTRIES_REGISTRY.map((c) => (
+                    <option key={c.code} value={c.code} className="bg-slate-900 text-white">
+                      {c.nameFr} ({c.code})
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
           </div>

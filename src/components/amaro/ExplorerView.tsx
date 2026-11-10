@@ -647,8 +647,8 @@ export function ExplorerView({
               id: 'overview' as ExplorerSpace,
               label:
                 locale === 'fr'
-                  ? `Établissements & Sites (${realCount}) + ${amaroAccompanimentCount} offres AMARO`
-                  : `Directory (${realCount}) + ${amaroAccompanimentCount} AMARO offers`,
+                  ? `Tous les établissements (${realCount})`
+                  : `All listings (${realCount})`,
               icon: Compass,
             },
             { id: 'benin_guide' as ExplorerSpace, label: t.nav.discoverBenin, icon: BookOpen },
@@ -807,25 +807,43 @@ export function ExplorerView({
                 </h2>
               </div>
 
-              <div className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
-                {COUNTRIES_REGISTRY.map((c) => (
-                  <button
-                    key={c.code}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCountryCode(c.code);
-                      setSelectedCityId('all');
-                      onChangeCountryCode?.(c.code);
-                    }}
-                    className={`min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                      selectedCountryCode === c.code
-                        ? 'bg-[#0B192C] text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    {locale === 'fr' ? c.nameFr : c.nameEn}
-                  </button>
-                ))}
+              <div className="flex items-center gap-1.5 p-1 bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto max-w-full">
+                <select
+                  value={selectedCountryCode}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setSelectedCountryCode(next);
+                    setSelectedCityId('all');
+                    onChangeCountryCode?.(next);
+                  }}
+                  className="min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                >
+                  {COUNTRIES_REGISTRY.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {locale === 'fr' ? c.nameFr : c.nameEn} ({c.code})
+                    </option>
+                  ))}
+                </select>
+                <div className="hidden sm:flex items-center gap-1">
+                  {COUNTRIES_REGISTRY.slice(0, 8).map((c) => (
+                    <button
+                      key={c.code}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCountryCode(c.code);
+                        setSelectedCityId('all');
+                        onChangeCountryCode?.(c.code);
+                      }}
+                      className={`min-h-[34px] px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                        selectedCountryCode === c.code
+                          ? 'bg-[#0B192C] text-white'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      {locale === 'fr' ? c.nameFr : c.nameEn}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

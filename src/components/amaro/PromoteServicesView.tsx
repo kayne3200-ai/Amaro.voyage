@@ -1522,20 +1522,24 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                     onChange={(e) => {
                       const nextCode = e.target.value;
                       setEditCountryCode(nextCode);
-                      const defaultCity = nextCode === 'CI' ? 'abidjan' : 'cotonou';
+                      const targetC = COUNTRIES_REGISTRY.find((c) => c.code === nextCode);
+                      const defaultCity = targetC?.cities[0]?.id || 'cotonou';
                       setEditCityId(defaultCity);
                     }}
                     className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold"
                   >
-                    <option value="BJ">🇧🇯 Bénin</option>
-                    <option value="CI">🇨🇮 Côte d’Ivoire</option>
+                    {COUNTRIES_REGISTRY.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.nameFr} ({c.code})
+                      </option>
+                    ))}
                   </select>
                   <select
                     value={editCityId}
                     onChange={(e) => setEditCityId(e.target.value)}
                     className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
                   >
-                    {(editCountryCode === 'CI' ? CI_CITIES : BENIN_CITIES).map((c) => (
+                    {(COUNTRIES_REGISTRY.find((c) => c.code === editCountryCode)?.cities || BENIN_CITIES).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
