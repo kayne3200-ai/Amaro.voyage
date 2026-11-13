@@ -62,6 +62,7 @@ import type {
 import {
   ALL_PUBLIC_DIRECTORIES,
   BENIN_PUBLIC_DIRECTORY,
+  COUNTRIES_REGISTRY,
   DEMO_REFERENCE_CATALOGUE,
   EDITORIAL_IMAGES,
   resolveItemEditorialImage,
@@ -226,6 +227,13 @@ function AmaroPlatform() {
   const [locale, setLocale] = useState<LocaleCode>('fr');
   const [currency, setCurrency] = useState<CurrencyCode>('XOF');
   const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
+  const handleSelectCountry = useCallback((nextCode: string) => {
+    setSelectedCountryCode(nextCode);
+    const targetCountry = COUNTRIES_REGISTRY.find((c) => c.code === nextCode);
+    if (targetCountry?.currency) {
+      setCurrency(targetCountry.currency);
+    }
+  }, []);
   const [isDark, setIsDark] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocKey | null>(null);
@@ -1510,7 +1518,14 @@ function AmaroPlatform() {
       }
 
       const folderId = makeSafeId('folder');
-      const primaryCityId = draft.preferredCities?.[0] || draft.cities?.[0] || 'cotonou';
+      const activeCountryDef =
+        COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+        COUNTRIES_REGISTRY[0];
+      const primaryCityId =
+        draft.preferredCities?.[0] ||
+        draft.cities?.[0] ||
+        activeCountryDef.cities[0]?.id ||
+        'capitale';
       const startDate =
         draft.startDate || new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
       const endDate = draft.endDate || startDate;
@@ -1529,14 +1544,14 @@ function AmaroPlatform() {
         await setDoc(doc(db, 'journey_folders', folderId), {
           ownerId: authUser.uid,
           title: draft.title.slice(0, 135),
-          countryCode: 'BJ',
+          countryCode: activeCountryDef.code,
           primaryCityId,
           startDate,
           endDate,
           travelersCount: Math.max(1, Math.min(50, Math.round(draft.travelersCount || 2))),
-          totalBudget: estimatedTotal > 0 ? estimatedTotal : 250_000,
-          dailyBudget: dailyBudget > 0 ? dailyBudget : 45_000,
-          currency: 'XOF',
+          totalBudget: estimatedTotal > 0 ? estimatedTotal : activeCountryDef.currency === 'XOF' || activeCountryDef.currency === 'XAF' ? 250_000 : 800,
+          dailyBudget: dailyBudget > 0 ? dailyBudget : activeCountryDef.currency === 'XOF' || activeCountryDef.currency === 'XAF' ? 45_000 : 120,
+          currency: activeCountryDef.currency || 'XOF',
           preferencesNotes: `Généré via l’Assistant AMARO (${draft.summary || draft.intentionSummary || 'Découverte'})`.slice(
             0,
             950
@@ -1575,7 +1590,7 @@ function AmaroPlatform() {
             endTime,
             durationMinutes: Math.max(15, Math.round(step.durationMinutes || 90)),
             estimatedCost: cost,
-            currency: 'XOF',
+            currency: activeCountryDef.currency || 'XOF',
             stage: 'envisaged',
             notes: (step.notes || '').slice(0, 580),
             hasPriceToVerify: Boolean(step.hasPriceToVerify),
@@ -1599,7 +1614,7 @@ function AmaroPlatform() {
         handleFirestoreError(err, OperationType.CREATE, `journey_folders/${folderId}`);
       }
     },
-    [authUser?.uid, hasFirestoreSession, setSelectedFolderId, showToast]
+    [authUser?.uid, hasFirestoreSession, selectedCountryCode, setSelectedFolderId, showToast]
   );
 
   // Automatically restore pending draft saved before sign-in so work is never lost
@@ -1644,18 +1659,21 @@ function AmaroPlatform() {
     if (!authUser?.uid) throw new Error('Non authentifié');
 
     const newFolderId = makeSafeId('folder');
+    const activeCountryDef =
+      COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY[0];
     try {
       await setDoc(doc(db, 'journey_folders', newFolderId), {
         ownerId: authUser.uid,
-        title: 'Mon Séjour au Bénin',
-        countryCode: 'BJ',
-        primaryCityId: 'cotonou',
+        title: `Mon Séjour — ${activeCountryDef.nameFr}`,
+        countryCode: activeCountryDef.code,
+        primaryCityId: activeCountryDef.cities[0]?.id || 'capitale',
         startDate: '2026-11-15',
         endDate: '2026-11-21',
         travelersCount: 2,
         totalBudget: userSavedPrefs?.preferredStanding === 'haut_de_gamme' ? 600_000 : 300_000,
         dailyBudget: userSavedPrefs?.preferredStanding === 'haut_de_gamme' ? 85_000 : 45_000,
-        currency: 'XOF',
+        currency: activeCountryDef.currency || 'XOF',
         preferencesNotes: userSavedPrefs?.dietaryNotes
           ? `Préférences enregistrées : ${userSavedPrefs.dietaryNotes}`.slice(0, 950)
           : 'Dossier initialisé automatiquement',
@@ -3436,7 +3454,11 @@ function AmaroPlatform() {
     const staticDirMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === cleanServiceId);
     const existingCatalogueMatch = allCatalogueServices.find((s) => s.id === cleanServiceId);
     const fallbackImgKey =
-      params.pilot.category === 'transport' ? 'cotonou_road' : 'cotonou_coast';
+      params.pilot.countryCode && params.pilot.countryCode !== 'BJ'
+        ? undefined
+        : params.pilot.category === 'transport'
+        ? 'cotonou_road'
+        : 'cotonou_coast';
     const chosenImgKey =
       existingCatalogueMatch?.imageKey || staticDirMatch?.imageKey || fallbackImgKey;
     const imgMeta = resolveItemEditorialImage({
@@ -3730,7 +3752,7 @@ function AmaroPlatform() {
         onSelectTab={setActiveTab}
         locale={locale}
         selectedCountryCode={selectedCountryCode}
-        onSelectCountry={setSelectedCountryCode}
+        onSelectCountry={handleSelectCountry}
         isSignedIn={Boolean(authUser)}
         isSigningIn={isSigningIn}
         unreadNotifications={unreadCount}
@@ -3762,7 +3784,7 @@ function AmaroPlatform() {
             currency={currency}
             onChangeCurrency={setCurrency}
             defaultCountryCode={selectedCountryCode}
-            onChangeCountryCode={setSelectedCountryCode}
+            onChangeCountryCode={handleSelectCountry}
             rateInfo={rateInfo}
             catalogue={combinedCatalogue}
             pilotStocks={publicActiveStocks}
@@ -3790,6 +3812,7 @@ function AmaroPlatform() {
             locale={locale}
             displayCurrency={currency}
             rateInfo={rateInfo}
+            selectedCountryCode={selectedCountryCode}
             isSignedIn={Boolean(authUser)}
             onRequireSignIn={handleSignIn}
             catalogue={combinedCatalogue}
@@ -3861,6 +3884,7 @@ function AmaroPlatform() {
             onOpenJourney={() => setActiveTab('journey')}
             onRequireSignIn={handleSignIn}
             onApplyAssistantDraft={handleApplyAssistantDraft}
+            selectedCountryCode={selectedCountryCode}
           />
         )}
 
@@ -3880,6 +3904,7 @@ function AmaroPlatform() {
             providerIdentityByRes={providerIdentityByRes}
             vaultKeyConfirmedByOwner={Boolean(countrySetting?.vaultKeyConfirmedByOwner)}
             platformContentMap={platformContentMap}
+            selectedCountryCode={selectedCountryCode}
             onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
             onNotify={showToast}
             onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
@@ -3983,10 +4008,10 @@ function AmaroPlatform() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <p className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-                AMARO.VOYAGE — Préparation & Conciergerie de séjour au Bénin
+                AMARO.VOYAGE — Préparation &amp; Conciergerie de Séjours Multi-Pays
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Exploration gratuite · Accompagnement et réservations vérifiées sur dossier · Devises XOF / EUR / USD
+                Exploration gratuite · Accompagnement et réservations vérifiées sur dossier · Devises locales &amp; conversions indicatives
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">

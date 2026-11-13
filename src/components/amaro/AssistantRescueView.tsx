@@ -46,6 +46,7 @@ interface AssistantRescueViewProps {
   onOpenJourney?: () => void;
   onRequireSignIn?: () => void;
   onApplyAssistantDraft?: (draft: AssistantDraftItinerary) => Promise<void>;
+  selectedCountryCode?: string;
 }
 
 interface ChatTurn {
@@ -62,14 +63,19 @@ interface ChatTurn {
 const SESSION_CHAT_KEY = 'amaro_assistant_chat_v2';
 export const PENDING_ASSISTANT_DRAFT_KEY = 'amaro_pending_assistant_draft_v1';
 
-function makeInitialWelcome(locale: LocaleCode): ChatTurn {
+function makeInitialWelcome(
+  locale: LocaleCode,
+  countryName = 'Bénin',
+  city1 = 'Ouidah',
+  city2 = 'Cotonou'
+): ChatTurn {
   return {
     id: 'welcome',
     role: 'assistant',
     content:
       locale === 'en'
-        ? 'Hello and welcome to AMARO! Tell me your destination, duration, travelers count, or budget—even a single word like "Ouidah" or "5 days in Benin" is enough.'
-        : 'Bonjour et bienvenue sur AMARO ! Écrivez-moi librement, comme à un conseiller humain : par exemple « 5 jours à Ouidah et Cotonou pour 2 personnes », « Un hôtel calme » ou « Je ne connais pas encore le Bénin ».',
+        ? `Hello and welcome to AMARO! Tell me your destination, duration, travelers count, or budget—for example "5 days in ${city1} and ${city2} for 2 people", "A calm boutique hotel" or "I am new to ${countryName}".`
+        : `Bonjour et bienvenue sur AMARO ! Écrivez-moi librement, comme à un conseiller humain : par exemple « 5 jours à ${city1} et ${city2} pour 2 personnes », « Un hôtel calme » ou « Je ne connais pas encore ${countryName} ».`,
     timestamp: new Date().toLocaleTimeString('fr-FR', {
       hour: '2-digit',
       minute: '2-digit',
@@ -92,7 +98,15 @@ export function AssistantRescueView({
   onOpenJourney,
   onRequireSignIn,
   onApplyAssistantDraft,
+  selectedCountryCode = 'BJ',
 }: AssistantRescueViewProps) {
+  const activeCountry = React.useMemo(() => {
+    return (
+      COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY[0]
+    );
+  }, [selectedCountryCode]);
+
   const [shareFolderWithAi, setShareFolderWithAi] = useState<boolean>(true);
   const [inputPrompt, setInputPrompt] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
@@ -111,14 +125,16 @@ export function AssistantRescueView({
     } catch {
       // ignore storage issues
     }
-    return [makeInitialWelcome(locale)];
+    const c1 = activeCountry.cities[0]?.name || 'la capitale';
+    const c2 = activeCountry.cities[1]?.name || activeCountry.cities[0]?.name || 'les côtes';
+    return [makeInitialWelcome(locale, activeCountry.nameFr, c1, c2)];
   });
 
   // Dynamic Rescue incident form state
   const [incidentType, setIncidentType] = useState<string>('retard_vol_transport');
   const [incidentStepId, setIncidentStepId] = useState<string>('');
   const [incidentCity, setIncidentCity] = useState<string>(
-    activeFolder?.primaryCityId || 'cotonou'
+    () => activeFolder?.primaryCityId || activeCountry.cities[0]?.id || 'capitale'
   );
   const [incidentCategory, setIncidentCategory] = useState<ServiceCategory>('accommodation');
   const [incidentNotes, setIncidentNotes] = useState<string>('');
@@ -131,6 +147,7 @@ export function AssistantRescueView({
       cityId: string;
       category: ServiceCategory;
       priceAmount: number;
+      currency?: string;
       priceKnown: boolean;
       isPartnerVerified: boolean;
     }>;
@@ -145,6 +162,14 @@ export function AssistantRescueView({
   }, [sessionDraft]);
 
   useEffect(() => {
+    const validCityIds = new Set(activeCountry.cities.map((c) => c.id));
+    if (!validCityIds.has(incidentCity) && activeCountry.cities.length > 0) {
+      setIncidentCity(activeCountry.cities[0].id);
+    }
+    setIncidentResult(null);
+  }, [activeCountry.code, activeCountry.cities, incidentCity]);
+
+  useEffect(() => {
     try {
       sessionStorage.setItem(SESSION_CHAT_KEY, JSON.stringify(messages.slice(-24)));
     } catch {
@@ -153,7 +178,24 @@ export function AssistantRescueView({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages]);
 
-  const rescueCountry = COUNTRIES_REGISTRY[0];
+  const rescueCountry = activeCountry;
+
+  const displayedEmergencyNumbers: EmergencyNumberEntry[] = React.useMemo(() => {
+    if (rescueCountry.code === 'BJ') {
+      return emergencyNumbers;
+    }
+    return rescueCountry.emergencyNumbers.map((em, idx) => ({
+      id: `${rescueCountry.code}-em-${idx}`,
+      labelFr: em.serviceFr,
+      zoneFr: rescueCountry.nameFr,
+      serviceFr: em.serviceFr,
+      serviceEn: em.serviceEn,
+      number: em.number,
+      source: em.sourceNote,
+      verifiedDate: '2026',
+      verifiedByOwner: true,
+    }));
+  }, [rescueCountry, emergencyNumbers]);
 
   const cleanWhatsappDigits = (supportWhatsappNumber || '')
     .replace(/[^0-9]/g, '')
@@ -171,7 +213,9 @@ export function AssistantRescueView({
     : '';
 
   const handleResetConversation = () => {
-    const fresh = [makeInitialWelcome(locale)];
+    const c1 = activeCountry.cities[0]?.name || 'la capitale';
+    const c2 = activeCountry.cities[1]?.name || activeCountry.cities[0]?.name || 'les côtes';
+    const fresh = [makeInitialWelcome(locale, activeCountry.nameFr, c1, c2)];
     setMessages(fresh);
     setActiveDraftState(null);
     onUpdateSessionDraft?.(null);
@@ -188,11 +232,13 @@ export function AssistantRescueView({
     try {
       let draft = existingDraft || activeDraftState;
       if (!draft) {
+        const defaultCities = activeCountry.cities.slice(0, 2).map((c) => c.id);
         const res = await authorizedFetch('/api/amaro/assistant/generate-draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            preferredCities: activeFolder?.primaryCityId ? [activeFolder.primaryCityId] : ['cotonou', 'ouidah'],
+            countryCode: activeCountry.code,
+            preferredCities: activeFolder?.primaryCityId ? [activeFolder.primaryCityId] : defaultCities,
             daysCount: 3,
             travelersCount: activeFolder?.travelersCount || 2,
           }),
@@ -295,6 +341,7 @@ export function AssistantRescueView({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          countryCode: activeCountry.code,
           message: trimmed,
           history: priorHistory,
           locale,
@@ -482,6 +529,7 @@ export function AssistantRescueView({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          countryCode: rescueCountry.code,
           incidentType,
           cityId: incidentCity,
           category: incidentCategory,
@@ -519,7 +567,7 @@ export function AssistantRescueView({
 
         {/* Unified Single Emergency Numbers List (5.5) */}
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {emergencyNumbers.map((num) => {
+          {displayedEmergencyNumbers.map((num) => {
             const isPlaceholder = num.number === OWNER_PLACEHOLDER;
             return (
               <div
@@ -694,7 +742,9 @@ export function AssistantRescueView({
                         {alt.title}
                       </strong>
                       <span className="text-[11px] font-mono text-slate-500">
-                        {alt.priceKnown ? `${alt.priceAmount.toLocaleString('fr-FR')} FCFA` : 'Tarif sur demande'}
+                        {alt.priceKnown
+                          ? `${alt.priceAmount.toLocaleString('fr-FR')} ${alt.currency || rescueCountry.currency}`
+                          : 'Tarif sur demande'}
                       </span>
                     </button>
                   ))}
@@ -708,14 +758,14 @@ export function AssistantRescueView({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <section className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5">
             <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-              Procédure en cas de perte de passeport ou documents
+              Procédure en cas de perte de passeport ou documents ({rescueCountry.nameFr})
             </h3>
             <ol className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 space-y-2 list-decimal list-inside">
               <li>
-                Rendez-vous au commissariat de la <strong>Police Républicaine</strong> le plus proche pour établir une déclaration officielle de perte.
+                Rendez-vous au commissariat de <strong>police locale</strong> le plus proche pour établir une déclaration officielle de perte.
               </li>
               <li>
-                Présentez cette déclaration auprès de votre <strong>ambassade ou consulat</strong> à Cotonou pour obtenir un laissez-passer.
+                Présentez cette déclaration auprès de votre <strong>ambassade ou consulat</strong> en {rescueCountry.nameFr} pour obtenir un laissez-passer.
               </li>
               <li>
                 Retrouvez vos références de séjour dans votre <strong>Dossier de Voyage AMARO</strong>.
@@ -784,11 +834,11 @@ export function AssistantRescueView({
       {/* Natural Quick Starters */}
       <div className="flex items-center gap-2 overflow-x-auto py-3">
         {[
-          'Séjour 4 jours à Ouidah et Cotonou pour 2 personnes',
-          'Je ne connais rien du Bénin',
-          'Un hôtel calme à Grand-Popo',
-          'Transport avec chauffeur',
-          'Y a-t-il des restaurants référencés à Abomey ?',
+          `Séjour 4 jours à ${activeCountry.cities[0]?.name || 'la capitale'} et ${activeCountry.cities[1]?.name || 'les côtes'} pour 2 personnes`,
+          `Je ne connais pas encore ${activeCountry.nameFr}`,
+          `Un hôtel calme à ${activeCountry.cities[0]?.name || activeCountry.nameFr}`,
+          'Transport avec chauffeur vérifié',
+          `Quelles sont les formalités et visites clés à ${activeCountry.cities[0]?.name || activeCountry.nameFr} ?`,
         ].map((q) => (
           <button
             key={q}
@@ -961,7 +1011,7 @@ export function AssistantRescueView({
           type="text"
           value={inputPrompt}
           onChange={(e) => setInputPrompt(e.target.value)}
-          placeholder="Ex. : 5 jours à Ouidah et Grand-Popo pour 2 adultes..."
+          placeholder={`Ex. : 5 jours à ${activeCountry.cities[0]?.name || activeCountry.nameFr} pour 2 adultes...`}
           className="flex-1 min-h-[48px] px-4 py-2.5 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:border-[#0B192C]"
         />
         <button

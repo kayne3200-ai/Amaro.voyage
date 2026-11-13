@@ -13,6 +13,7 @@ import {
   Minus,
   Plus,
   AlertTriangle,
+  Camera,
 } from 'lucide-react';
 import type {
   CatalogueItem,
@@ -275,17 +276,36 @@ export function ServiceDetailModal({
       <div className="w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl shadow-2xl">
         {/* Top Photo Banner */}
         <div className="relative h-56 sm:h-64 bg-slate-900 overflow-hidden">
-          <img
-            src={photoSrc}
-            alt={item.title}
-            referrerPolicy="no-referrer"
-            className="w-full h-full object-cover"
-          />
+          {photoSrc ? (
+            <img
+              src={photoSrc}
+              alt={item.title}
+              referrerPolicy="no-referrer"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-[#0B192C] to-slate-800 text-slate-300 p-6 text-center space-y-2">
+              <Camera className="w-8 h-8 text-amber-400" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                Photo à ajouter
+              </span>
+              <span className="text-xs text-slate-400 max-w-md">
+                {imgMeta.sourceNote}
+              </span>
+            </div>
+          )}
           {isPhotoVerified ? (
             <div className="absolute top-3 left-3">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Cliché officiel certifié</span>
+              </span>
+            </div>
+          ) : imgMeta.indicator === 'photo_a_ajouter' || !photoSrc ? (
+            <div className="absolute top-3 left-3">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-900/80 text-amber-300 border border-amber-500/30 backdrop-blur-xs">
+                <Camera className="w-3.5 h-3.5 text-amber-400" />
+                <span>Photo à ajouter</span>
               </span>
             </div>
           ) : (

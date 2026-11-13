@@ -19,6 +19,10 @@ import {
   BENIN_THEMATIC_CIRCUITS,
 } from '../data/beninEncyclopedia';
 import {
+  ALL_PUBLIC_DIRECTORIES,
+  COUNTRIES_REGISTRY,
+} from '../data/amaroRegistry';
+import {
   computeDynamicCatalogueCounts,
   DEFAULT_EMERGENCY_NUMBERS_BJ,
   isAmaroOwnAssistanceOffer,
@@ -29,6 +33,16 @@ const ALL_REAL_BENIN_ITEMS: CatalogueItem[] = [
   ...BENIN_TOURIST_SITES_DIRECTORY,
   ...BENIN_SERVICES_DIRECTORY,
 ];
+
+function getCountryItemsPool(countryCode: string, extraPublishedItems?: CatalogueItem[]): CatalogueItem[] {
+  const code = (countryCode || 'BJ').toUpperCase();
+  const baseItems =
+    code === 'BJ'
+      ? ALL_REAL_BENIN_ITEMS
+      : ALL_PUBLIC_DIRECTORIES.filter((it) => it.countryCode === code);
+  const extras = (extraPublishedItems || []).filter((it) => !it.countryCode || it.countryCode === code);
+  return [...extras, ...baseItems];
+}
 
 export function normalizeText(raw: string): string {
   return raw
@@ -102,12 +116,42 @@ const CITY_SYNONYMS: Array<{ cityId: string; label: string; aliases: string[] }>
   { cityId: 'marrakech', label: 'Marrakech', aliases: ['marrakech', 'jemaa el fna', 'mamounia', 'gueliz'] },
   { cityId: 'casablanca', label: 'Casablanca', aliases: ['casablanca', 'casa', 'hassan 2', 'corniche'] },
   { cityId: 'fes', label: 'Fès', aliases: ['fes', 'fès', 'medina fes', 'chouara'] },
-  { cityId: 'tunis', label: 'Tunis', aliases: ['tunis', 'carthage', 'sidi bou said', 'la marsa'] },
-  { cityId: 'djerba', label: 'Djerba', aliases: ['djerba', 'guellala', 'ghriba'] },
+  { cityId: 'tunis', label: 'Tunis', aliases: ['tunis', 'carthage', 'sidi bou said', 'la marsa', 'bardo'] },
+  { cityId: 'djerba', label: 'Djerba', aliases: ['djerba', 'guellala', 'ghriba', 'houmt souk'] },
+  { cityId: 'hammamet', label: 'Hammamet', aliases: ['hammamet', 'yasmine hammamet', 'nabeul'] },
+  { cityId: 'tozeur', label: 'Tozeur', aliases: ['tozeur', 'chott el djerid', 'nefta'] },
+  { cityId: 'nairobi', label: 'Nairobi', aliases: ['nairobi', 'westlands', 'karen', 'jkia'] },
+  { cityId: 'mombasa', label: 'Mombasa', aliases: ['mombasa', 'diani', 'fort jesus', 'nyali'] },
+  { cityId: 'maasai-mara', label: 'Maasai Mara', aliases: ['maasai mara', 'masai mara', 'mara'] },
+  { cityId: 'amboseli', label: 'Amboseli', aliases: ['amboseli'] },
+  { cityId: 'zanzibar', label: 'Zanzibar (Stone Town)', aliases: ['zanzibar', 'stone town', 'nungwi', 'paje', 'unguja'] },
+  { cityId: 'serengeti', label: 'Serengeti', aliases: ['serengeti', 'ngorongoro', 'karatu'] },
+  { cityId: 'arusha', label: 'Arusha & Kilimandjaro', aliases: ['arusha', 'kilimandjaro', 'kilimanjaro', 'moshi', 'tarangire'] },
+  { cityId: 'dar-es-salaam', label: 'Dar es Salaam', aliases: ['dar es salaam', 'dar es-salaam', 'dar', 'kariakoo'] },
+  { cityId: 'kigali', label: 'Kigali', aliases: ['kigali', 'nyamirambo', 'kimihurura', 'gisozi'] },
+  { cityId: 'musanze', label: 'Musanze (Volcans)', aliases: ['musanze', 'ruhengeri', 'volcans', 'gorilles', 'nyungwe', 'kivu'] },
+  { cityId: 'addis-abeba', label: 'Addis-Abeba', aliases: ['addis abeba', 'addis-abeba', 'addis ababa', 'bole', 'merkato'] },
+  { cityId: 'lalibela', label: 'Lalibela', aliases: ['lalibela'] },
+  { cityId: 'gondar', label: 'Gondar', aliases: ['gondar', 'fasil ghebbi', 'simien'] },
   { cityId: 'le-caire', label: 'Le Caire', aliases: ['le caire', 'caire', 'gizeh', 'pyramides', 'kheops'] },
   { cityId: 'louxor', label: 'Louxor', aliases: ['louxor', 'karnak', 'vallee des rois'] },
   { cityId: 'paris', label: 'Paris', aliases: ['paris', 'tour eiffel', 'louvre', 'champs elysees'] },
   { cityId: 'nice', label: 'Nice', aliases: ['nice', 'cote d azur', 'promenade des anglais'] },
+  { cityId: 'madrid', label: 'Madrid', aliases: ['madrid', 'prado', 'retiro', 'sol', 'atocha'] },
+  { cityId: 'barcelone', label: 'Barcelone', aliases: ['barcelone', 'barcelona', 'sagrada familia', 'ramblas', 'gotico'] },
+  { cityId: 'seville', label: 'Séville', aliases: ['seville', 'sevilla', 'alcazar', 'triana', 'andalousie'] },
+  { cityId: 'rome', label: 'Rome', aliases: ['rome', 'roma', 'colisee', 'vatican', 'trastevere'] },
+  { cityId: 'venise', label: 'Venise', aliases: ['venise', 'venezia', 'venice', 'saint marc', 'rialto'] },
+  { cityId: 'florence', label: 'Florence', aliases: ['florence', 'firenze', 'offices', 'duomo florence'] },
+  { cityId: 'milan', label: 'Milan', aliases: ['milan', 'milano', 'navigli'] },
+  { cityId: 'lisbonne', label: 'Lisbonne', aliases: ['lisbonne', 'lisboa', 'lisbon', 'alfama', 'belem', 'chiado'] },
+  { cityId: 'porto', label: 'Porto', aliases: ['porto', 'ribeira', 'douro'] },
+  { cityId: 'faro', label: 'Faro / Algarve', aliases: ['faro', 'algarve', 'lagos', 'tavira'] },
+  { cityId: 'istanbul', label: 'Istanbul', aliases: ['istanbul', 'sultanahmet', 'sainte sophie', 'bosphore', 'taksim', 'beyoglu'] },
+  { cityId: 'cappadoce', label: 'Cappadoce (Göreme)', aliases: ['cappadoce', 'cappadocia', 'goreme', 'uchisar'] },
+  { cityId: 'antalya', label: 'Antalya', aliases: ['antalya', 'kaleici', 'bodrum'] },
+  { cityId: 'dubai', label: 'Dubaï', aliases: ['dubai', 'burj khalifa', 'deira', 'jumeirah', 'marina dubai'] },
+  { cityId: 'abu-dhabi', label: 'Abou Dabi', aliases: ['abu dhabi', 'abou dabi', 'louvre abu dhabi', 'cheikh zayed'] },
 ];
 
 const CATEGORY_PATTERNS: Array<{ category: ServiceCategory; aliases: string[] }> = [
@@ -142,6 +186,7 @@ const CATEGORY_PATTERNS: Array<{ category: ServiceCategory; aliases: string[] }>
 ];
 
 export interface ConversationAnalysis {
+  countryCode: string;
   normalizedCurrent: string;
   intent:
     | 'greeting'
@@ -239,6 +284,7 @@ function addDaysIso(startDateIso: string, addDays: number): string {
  * et en intégrant 1 plage quotidienne de temps libre.
  */
 export function buildRealDraftItinerary(params: {
+  countryCode?: string;
   daysCount: number;
   travelersCount: number;
   preferredCities?: string[];
@@ -250,6 +296,8 @@ export function buildRealDraftItinerary(params: {
   maxVisitsSameCityDay?: number;
   extraPublishedItems?: CatalogueItem[];
 }): AssistantDraftItinerary {
+  const targetCountryCode = (params.countryCode || 'BJ').toUpperCase();
+  const targetCountryDef = COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode);
   const days = Math.min(14, Math.max(2, Math.round(params.daysCount || 4)));
   const travelers = Math.min(12, Math.max(1, Math.round(params.travelersCount || 2)));
   const dossierFeeXof = params.dossierFeeXof ?? 20_000;
@@ -266,10 +314,7 @@ export function buildRealDraftItinerary(params: {
       ? params.startDateIso
       : addDaysIso(new Date().toISOString().slice(0, 10), 14);
 
-  const catalogPool = [
-    ...(params.extraPublishedItems || []),
-    ...ALL_REAL_BENIN_ITEMS,
-  ].filter(
+  const catalogPool = getCountryItemsPool(targetCountryCode, params.extraPublishedItems).filter(
     (it) =>
       it.status === 'published' &&
       it.dataOrigin !== 'demo_test' &&
@@ -286,14 +331,19 @@ export function buildRealDraftItinerary(params: {
   }
   const allItems = Array.from(byId.values());
 
-  const defaultRoute = params.prefersNorth
-    ? ['cotonou', 'parakou', 'natitingou', 'boukoumbe']
-    : ['cotonou', 'ouidah', 'grand-popo', 'abomey'];
+  const defaultRoute =
+    targetCountryCode === 'BJ'
+      ? params.prefersNorth
+        ? ['cotonou', 'parakou', 'natitingou', 'boukoumbe']
+        : ['cotonou', 'ouidah', 'grand-popo', 'abomey']
+      : (targetCountryDef?.cities || []).slice(0, 4).map((c) => c.id);
 
   const routeCities =
     params.preferredCities && params.preferredCities.length > 0
       ? params.preferredCities
-      : defaultRoute;
+      : defaultRoute.length > 0
+      ? defaultRoute
+      : ['principal'];
 
   const sortPartnerFirst = (items: CatalogueItem[]) =>
     [...items].sort((a, b) => {
@@ -476,13 +526,11 @@ export function buildRealDraftItinerary(params: {
 export function modifyDraftItinerary(
   activeDraft: AssistantDraftItinerary,
   modificationRequest: string,
-  extraPublishedItems?: CatalogueItem[]
+  extraPublishedItems?: CatalogueItem[],
+  countryCode = 'BJ'
 ): { modifiedDraft: AssistantDraftItinerary; summaryChange: string } {
   const norm = normalizeText(modificationRequest);
-  const catalogPool = [
-    ...(extraPublishedItems || []),
-    ...ALL_REAL_BENIN_ITEMS,
-  ].filter(
+  const catalogPool = getCountryItemsPool(countryCode, extraPublishedItems).filter(
     (it) =>
       it.status === 'published' &&
       it.dataOrigin !== 'demo_test' &&
@@ -608,8 +656,10 @@ export function analyzeConversationAndCatalogue(
   locale: LocaleCode,
   extraPublishedItems?: CatalogueItem[],
   activeDraft?: AssistantDraftItinerary | null,
-  systemSettings?: { maxVisitsCityChangeDay?: number; maxVisitsSameCityDay?: number; dossierFeeXof?: number }
+  systemSettings?: { countryCode?: string; maxVisitsCityChangeDay?: number; maxVisitsSameCityDay?: number; dossierFeeXof?: number }
 ): ConversationAnalysis {
+  const targetCountryCode = (systemSettings?.countryCode || 'BJ').toUpperCase();
+  const targetCountryDef = COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode) || COUNTRIES_REGISTRY[0];
   const norm = normalizeText(rawMessage);
   const words = norm.split(' ').filter(Boolean);
   const isShortFollowUp = words.length <= 4;
@@ -733,7 +783,7 @@ export function analyzeConversationAndCatalogue(
   const isGeneralBenin =
     !currentCity &&
     !currentCategory &&
-    (/\b(connais rien|decouvrir le benin|visiter le benin|parle moi du benin|c est comment le benin|quelles villes|quels endroits|ou aller|je ne sais pas)\b/.test(
+    (/\b(connais rien|decouvrir|visiter|parle moi|c est comment|quelles villes|quels endroits|ou aller|je ne sais pas)\b/.test(
       norm
     ) ||
       norm === 'benin' ||
@@ -767,10 +817,20 @@ export function analyzeConversationAndCatalogue(
   const northCities = new Set(['parakou', 'natitingou', 'boukoumbe', 'tanguieta', 'nikki', 'djougou', 'kandi']);
   const southCities = new Set(['cotonou', 'ouidah', 'ganvie', 'porto-novo', 'grand-popo', 'possotome', 'abomey-calavi', 'seme-podji']);
 
-  const mergedCatalog = [
-    ...(extraPublishedItems || []),
-    ...ALL_REAL_BENIN_ITEMS,
-  ].filter((i) => i.status === 'published' && i.dataOrigin !== 'demo_test');
+  const mergedCatalog = getCountryItemsPool(targetCountryCode, extraPublishedItems).filter(
+    (i) => i.status === 'published' && i.dataOrigin !== 'demo_test'
+  );
+
+  // Guard city detection to belong to the active country (when non-BJ, ignore Benin city names unless explicitly found in active country cities)
+  const validCountryCityIds = new Set(targetCountryDef.cities.map((c) => c.id));
+  if (rememberedCity && !validCountryCityIds.has(rememberedCity.cityId)) {
+    const matchedLocalCity = targetCountryDef.cities.find((ct) =>
+      norm.includes(normalizeText(ct.name)) || norm.includes(normalizeText(ct.id))
+    );
+    rememberedCity = matchedLocalCity
+      ? { cityId: matchedLocalCity.id, label: matchedLocalCity.name }
+      : null;
+  }
 
   let candidates = mergedCatalog.filter((i) => !isAmaroOwnAssistanceOffer(i));
   if (rememberedCity) {
@@ -780,9 +840,9 @@ export function analyzeConversationAndCatalogue(
         (item.coveredCities && item.coveredCities.includes(rememberedCity!.cityId))
     );
     if (cityMatches.length > 0) candidates = cityMatches;
-  } else if (prefersNorth) {
+  } else if (targetCountryCode === 'BJ' && prefersNorth) {
     candidates = candidates.filter((item) => northCities.has(item.cityId));
-  } else if (prefersSouth) {
+  } else if (targetCountryCode === 'BJ' && prefersSouth) {
     candidates = candidates.filter((item) => southCities.has(item.cityId));
   }
 
@@ -848,13 +908,15 @@ export function analyzeConversationAndCatalogue(
 
   let draftItinerary: AssistantDraftItinerary | null = null;
   if (isModifyingActiveDraft && activeDraft) {
-    const mod = modifyDraftItinerary(activeDraft, rawMessage, extraPublishedItems);
+    const mod = modifyDraftItinerary(activeDraft, rawMessage, extraPublishedItems, targetCountryCode);
     draftItinerary = mod.modifiedDraft;
   } else if (isConfirmingDraftProposal || isDirectGenerationRequest) {
+    const filteredCities = allMentionedCities.filter((cid) => validCountryCityIds.has(cid));
     draftItinerary = buildRealDraftItinerary({
+      countryCode: targetCountryCode,
       daysCount: effectiveDays,
       travelersCount: requestedTravelers || (mentionsFamily ? 4 : 2),
-      preferredCities: allMentionedCities.length > 0 ? allMentionedCities : undefined,
+      preferredCities: filteredCities.length > 0 ? filteredCities : undefined,
       prefersNorth,
       maxVisitsCityChangeDay: systemSettings?.maxVisitsCityChangeDay,
       maxVisitsSameCityDay: systemSettings?.maxVisitsSameCityDay,
@@ -878,7 +940,10 @@ export function analyzeConversationAndCatalogue(
   if (intent === 'general_benin' || intent === 'capabilities') {
     suggestedActions.push({
       kind: 'explore_benin',
-      label: locale === 'en' ? 'Explore Benin (Free Guide)' : 'Explorer le Bénin (Guide gratuit)',
+      label:
+        locale === 'en'
+          ? `Explore ${targetCountryDef.nameEn} (Free Guide)`
+          : `Explorer ${targetCountryDef.nameFr} (Guide gratuit)`,
     });
   }
   if (rememberedCity) {
@@ -937,6 +1002,7 @@ export function analyzeConversationAndCatalogue(
       Boolean(draftItinerary));
 
   return {
+    countryCode: targetCountryCode,
     normalizedCurrent: norm,
     intent,
     canAnswerLocally,
@@ -969,14 +1035,20 @@ export function buildCatalogueContextSnippet(
   analysis: ConversationAnalysis,
   extraPublishedItems?: CatalogueItem[]
 ): string {
-  const counts = computeDynamicCatalogueCounts([
-    ...(extraPublishedItems || []),
-    ...ALL_REAL_BENIN_ITEMS,
-  ]);
+  const code = (analysis.countryCode || 'BJ').toUpperCase();
+  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
+  const pool = getCountryItemsPool(code, extraPublishedItems);
+  const counts = computeDynamicCatalogueCounts(pool);
   const lines: string[] = [];
-  lines.push(
-    `Repères Bénin : Capitale ${BENIN_GENERAL_PROFILE.constitutionalCapital} ; Métropole ${BENIN_GENERAL_PROFILE.economicSeat} ; Monnaie XOF (1 EUR = 655,957 XOF) ; 12 départements ; ${counts.thirdPartyCount} fiches d'établissements tiers + ${counts.amaroAssistanceCount} formules d'accompagnement humain AMARO.`
-  );
+  if (code === 'BJ') {
+    lines.push(
+      `Repères Bénin : Capitale ${BENIN_GENERAL_PROFILE.constitutionalCapital} ; Métropole ${BENIN_GENERAL_PROFILE.economicSeat} ; Monnaie XOF (1 EUR = 655,957 XOF) ; 12 départements ; ${counts.thirdPartyCount} fiches d'établissements tiers + ${counts.amaroAssistanceCount} formules d'accompagnement humain AMARO.`
+    );
+  } else {
+    lines.push(
+      `Repères ${cDef.nameFr} (${cDef.code}) : Monnaie ${cDef.currency} ; Fuseau ${cDef.timezone} ; Villes : ${cDef.cities.map((ct) => ct.name).join(', ')} ; ${counts.thirdPartyCount} fiches d'établissements recensées.`
+    );
+  }
 
   if (analysis.matchedItems.length > 0) {
     lines.push('Fiches préfiltrées pertinentes :');
@@ -989,7 +1061,7 @@ export function buildCatalogueContextSnippet(
         item.priceKnown === false
           ? 'Tarif sur demande / à confirmer'
           : item.priceAmount === 0
-          ? 'Accès libre (0 XOF)'
+          ? `Accès libre (0 ${item.currency || cDef.currency})`
           : `${item.priceAmount.toLocaleString('fr-FR')} ${item.currency}`;
       lines.push(
         `- [${badge}] "${item.title}" (${item.category}, ${item.cityId}) : ${priceText}`
@@ -1007,6 +1079,8 @@ export function buildConversationalSystemPrompt(params: {
   isSignedIn: boolean;
 }): string {
   const { locale, analysis, journeyContextJson, isSignedIn } = params;
+  const code = (analysis.countryCode || 'BJ').toUpperCase();
+  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
   const catalogueBlock = buildCatalogueContextSnippet(analysis);
   const folderBlock = journeyContextJson
     ? `Dossier actif : ${journeyContextJson.slice(0, 500)}`
@@ -1015,22 +1089,22 @@ export function buildConversationalSystemPrompt(params: {
     : 'Visiteur libre non connecté (exploration gratuite ; connexion uniquement pour sauvegarder ou ouvrir un dossier).';
 
   if (locale === 'en') {
-    return `You are AMARO, warm, concise travel counselor for Benin on AMARO.VOYAGE.
+    return `You are AMARO, warm, concise travel counselor for ${cDef.nameEn} on AMARO.VOYAGE.
 Rules:
 1. Reply in 60-120 words max, natural and warm. Ask at most 1-2 short clarifying questions (dates/duration, travelers, travel intention) before proposing a draft itinerary.
-2. If the user mentions cities, duration or travelers count, spontaneously offer: "I can prepare your travel folder and agenda. Would you like me to generate them?"
+2. Focus strictly on ${cDef.nameEn} (${cDef.currency}). NEVER mention another country or another country's currency/cities.
 3. Cite ONLY the prefiltered real items below. Distinguish "Partenaire AMARO" from "Recensé, non vérifié" and known prices from "price on request". Never invent prices or availability.
-4. Mention that exploration and itinerary drafts are free, while sending real availability requests requires opening a dossier (20,000 XOF deductible from the confirmed stay).
+4. Mention that exploration and itinerary drafts are free.
 ${catalogueBlock}
 ${folderBlock}`;
   }
 
-  return `Tu es AMARO, conseiller voyage humain, attentif et concis d’AMARO.VOYAGE au Bénin.
+  return `Tu es AMARO, conseiller voyage humain, attentif et concis d’AMARO.VOYAGE pour ${cDef.nameFr}.
 Règles strictes :
-1. Réponds en 60 à 130 mots maximum. Pour construire un séjour, pose 1 ou 2 questions courtes (durée/dates, voyageurs, intention du voyage : découverte, repos, retour aux racines, famille).
-2. Dès que la destination, la durée ou le nombre de voyageurs est abordé, propose spontanément : « Je peux préparer votre dossier de voyage et votre agenda. Voulez-vous que je les génère ? »
+1. Réponds en 60 à 130 mots maximum. Pour construire un séjour, pose 1 ou 2 questions courtes (durée/dates, voyageurs, intention du voyage).
+2. Reste strictement isolé sur ${cDef.nameFr} (devise : ${cDef.currency}). Ne cite JAMAIS un autre pays ni ses villes ou sa devise.
 3. Cite UNIQUEMENT les fiches réelles ci-dessous en distinguant « Partenaire AMARO » (prioritaire) et « Recensé, non vérifié », ainsi que tarifs connus et « tarif sur demande ». N’invente jamais de prix ni de disponibilité.
-4. Rappelle sobrement si pertinent que le brouillon est gratuit et que l’envoi des demandes réelles passe par l’ouverture d’un dossier (20 000 FCFA déductibles du séjour confirmé).
+4. Rappelle sobrement si pertinent que l’exploration et le brouillon sont gratuits.
 ${catalogueBlock}
 ${folderBlock}`;
 }
@@ -1039,7 +1113,113 @@ export function buildResilientHumanReply(
   analysis: ConversationAnalysis,
   locale: LocaleCode
 ): string {
-  const counts = computeDynamicCatalogueCounts(ALL_REAL_BENIN_ITEMS);
+  const code = (analysis.countryCode || 'BJ').toUpperCase();
+  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
+  const counts = computeDynamicCatalogueCounts(getCountryItemsPool(code));
+  const cityNames = cDef.cities.slice(0, 4).map((c) => c.name).join(', ');
+
+  if (code !== 'BJ') {
+    if (locale === 'en') {
+      if (analysis.draftItinerary) {
+        const d = analysis.draftItinerary;
+        return `I prepared a balanced ${d.daysCount}-day draft in ${cDef.nameEn} across ${d.cities.join(' → ')} for ${d.travelersCount} traveler(s), with daily free time.\n• Local currency: ${cDef.currency}.\n• Note: all partner availability and unconfirmed rates are verified before final confirmation.`;
+      }
+      if (analysis.intent === 'emergency_info') {
+        const lines = cDef.emergencyNumbers
+          .map((e) => `• ${e.serviceEn || e.serviceFr}: ${e.number} (${e.sourceNote})`)
+          .join('\n');
+        return `Official emergency numbers recorded for ${cDef.nameEn}:\n${lines}`;
+      }
+      if (analysis.intent === 'formalities_info') {
+        const rules = [
+          cDef.protocols?.visaFr,
+          cDef.protocols?.vaccinesHealthFr,
+          ...(cDef.localRulesEn || []),
+        ].filter(Boolean).slice(0, 3);
+        return `Traveler formalities for ${cDef.nameEn}:\n• ${rules.join('\n• ')}`;
+      }
+      if (analysis.intent === 'greeting') {
+        return `Hello and welcome to AMARO! Would you like to explore ${cDef.nameEn} (${cityNames}) freely or prepare a tailored itinerary draft?`;
+      }
+      if (analysis.matchedItems.length > 0) {
+        const listText = analysis.matchedItems
+          .slice(0, 3)
+          .map((item) => {
+            const priceLabel =
+              item.priceKnown === false
+                ? 'Rate to confirm'
+                : `${item.priceAmount.toLocaleString('en-US')} ${item.currency}`;
+            return `• ${item.title} (${item.cityId}) — ${priceLabel}`;
+          })
+          .join('\n');
+        return `Real listings for ${cDef.nameEn}:\n${listText}`;
+      }
+      return `Welcome to ${cDef.nameEn} on AMARO! We reference ${counts.thirdPartyCount} local establishments and sites (${cityNames}). Local currency: ${cDef.currency}. How many days are you planning?`;
+    }
+
+    if (analysis.intent === 'unclear_gibberish') {
+      return `Je veux être sûr de bien vous comprendre : souhaitez-vous explorer une ville en ${cDef.nameFr} (${cityNames}), connaître un tarif en ${cDef.currency} ou préparer un brouillon d’itinéraire ?`;
+    }
+    if (analysis.intent === 'greeting') {
+      return `Bonjour et bienvenue sur AMARO ! Souhaitez-vous explorer librement ${cDef.nameFr} (${cityNames}) ou préparer un brouillon d’itinéraire en m’indiquant votre durée et le nombre de voyageurs ?`;
+    }
+    if (analysis.intent === 'how_are_you') {
+      return `Je vais très bien, merci ! Prêt à vous accompagner pour ${cDef.nameFr} : souhaitez-vous découvrir ${cityNames} ou préparer votre programme ?`;
+    }
+    if (analysis.intent === 'thanks') {
+      return 'Avec plaisir ! Dites-moi si vous souhaitez explorer un autre lieu ou enregistrer votre brouillon.';
+    }
+    if (analysis.intent === 'goodbye') {
+      return 'À très bientôt sur AMARO ! Votre préparation reste libre et accessible à votre rythme.';
+    }
+    if (analysis.intent === 'emergency_info') {
+      const lines = cDef.emergencyNumbers
+        .map((e) => `• ${e.serviceFr} : ${e.number} (${e.sourceNote})`)
+        .join('\n');
+      return `Voici les numéros d’urgence officiels enregistrés pour ${cDef.nameFr} :\n${lines}`;
+    }
+    if (analysis.intent === 'formalities_info') {
+      const details = [
+        cDef.protocols?.visaFr ? `• Visa & entrée : ${cDef.protocols.visaFr}` : null,
+        cDef.protocols?.vaccinesHealthFr ? `• Santé & vaccins : ${cDef.protocols.vaccinesHealthFr}` : null,
+        cDef.protocols?.electricalPlugs ? `• Prises électriques : ${cDef.protocols.electricalPlugs}` : null,
+        ...(cDef.localRulesFr || []).slice(0, 2).map((r) => `• ${r}`),
+      ].filter(Boolean);
+      return `Repères pratiques pour voyager en ${cDef.nameFr} :\n${details.join('\n')}`;
+    }
+    if (analysis.intent === 'budget_question') {
+      return `Repères pour ${cDef.nameFr} :\n• Devise officielle : ${cDef.currency}\n• Moyens de paiement : ${cDef.paymentMethods.join(', ')}\n• Exploration & brouillon d’itinéraire : 100 % gratuits. Les tarifs affichés sont en ${cDef.currency} avec conversion indicative.`;
+    }
+    if (analysis.draftItinerary) {
+      const d = analysis.draftItinerary;
+      return `Voici une proposition d’itinéraire sur ${d.daysCount} jours en ${cDef.nameFr} (${d.cities.join(' → ')}) pour ${d.travelersCount} voyageur(s) :\n• Devise locale : ${cDef.currency}${d.onRequestCount > 0 ? ` (${d.onRequestCount} prestation(s) « tarif à vérifier »)` : ''}.\n• Chaque journée conserve une plage de temps libre.`;
+    }
+    if (analysis.matchedItems.length > 0) {
+      const listText = analysis.matchedItems
+        .slice(0, 3)
+        .map((item) => {
+          const badge =
+            item.dataOrigin === 'verified_partner'
+              ? 'Partenaire AMARO'
+              : 'Recensé, non vérifié';
+          const priceLabel =
+            item.priceKnown === false
+              ? 'Tarif à vérifier / sur demande'
+              : item.priceAmount === 0
+              ? 'Accès libre'
+              : `${item.priceAmount.toLocaleString('fr-FR')} ${item.currency}`;
+          return `• [${badge}] ${item.title} (${item.cityId}) — ${priceLabel}`;
+        })
+        .join('\n');
+      const whereLabel = analysis.activeCityLabel
+        ? ` à ${analysis.activeCityLabel}`
+        : ` en ${cDef.nameFr}`;
+      return `Voici des options réelles du catalogue AMARO${whereLabel} :\n${listText}`;
+    }
+    return `${cDef.nameFr} compte actuellement ${counts.thirdPartyCount} adresses et sites recensés (${cityNames}) en devise locale (${cDef.currency}), langue(s) : ${cDef.languages.join(', ')}. Combien de jours envisagez-vous ?`;
+  }
+
+  const beninCounts = computeDynamicCatalogueCounts(ALL_REAL_BENIN_ITEMS);
 
   if (locale === 'en') {
     if (analysis.draftItinerary) {
@@ -1049,7 +1229,7 @@ export function buildResilientHumanReply(
     if (analysis.intent === 'greeting') {
       return 'Hello and welcome to AMARO! Would you like to explore Benin freely or prepare a tailored itinerary draft in 2 quick questions?';
     }
-    return `Welcome to AMARO! We reference ${counts.thirdPartyCount} real establishments and heritage sites across Benin's 12 departments (plus ${counts.amaroAssistanceCount} optional AMARO human assistance formulas). Tell me your duration and what inspires you (culture, beaches, roots, family, North), and I will build your draft itinerary.`;
+    return `Welcome to AMARO! We reference ${beninCounts.thirdPartyCount} real establishments and heritage sites across Benin's 12 departments (plus ${beninCounts.amaroAssistanceCount} optional AMARO human assistance formulas). Tell me your duration and what inspires you (culture, beaches, roots, family, North), and I will build your draft itinerary.`;
   }
 
   if (analysis.intent === 'unclear_gibberish') {
@@ -1092,13 +1272,13 @@ export function buildResilientHumanReply(
     return 'Avec plaisir pour vous construire un brouillon d’itinéraire réel ! Pour qu’il vous ressemble en deux repères simples :\n1. Combien de jours et combien de voyageurs prévoyez-vous ?\n2. Quelle est l’intention principale de ce voyage (découverte culturelle, repos côtier, retour aux racines, famille ou nature du Nord) ?';
   }
   if (analysis.intent === 'capabilities') {
-    return `Je vous aide gratuitement à explorer les 12 départements du Bénin, consulter ${counts.thirdPartyCount} établissements et sites référencés (en distinguant clairement nos « Partenaires AMARO » des adresses « Recensé, non vérifié ») ainsi que ${counts.amaroAssistanceCount} formules d’accompagnement humain AMARO, et générer un brouillon d’itinéraire équilibré avec temps libres. Combien de jours envisagez-vous ?`;
+    return `Je vous aide gratuitement à explorer les 12 départements du Bénin, consulter ${beninCounts.thirdPartyCount} établissements et sites référencés (en distinguant clairement nos « Partenaires AMARO » des adresses « Recensé, non vérifié ») ainsi que ${beninCounts.amaroAssistanceCount} formules d’accompagnement humain AMARO, et générer un brouillon d’itinéraire équilibré avec temps libres. Combien de jours envisagez-vous ?`;
   }
   if (analysis.intent === 'budget_question') {
     return 'Repères budgétaires honnêtes au Bénin (1 EUR = 655,957 FCFA, parité fixe BCEAO) :\n• Exploration & brouillon d’itinéraire : 0 FCFA (100 % gratuit).\n• Ouverture d’un dossier de coordination réelle : 20 000 FCFA (déductibles de votre facture finale si vous confirmez votre séjour).\n• Hébergements : env. 20 000 à 45 000 FCFA/nuit (maisons d’hôtes / économique) ou 50 000 à 130 000 FCFA/nuit (confort) ; véhicule avec chauffeur : env. 35 000 à 75 000 FCFA/jour.\nCombien de jours et de personnes souhaitez-vous chiffrer ?';
   }
   if (analysis.intent === 'general_benin') {
-    return `Le Bénin offre une diversité remarquable du littoral atlantique aux montagnes de l’Atacora (${counts.thirdPartyCount} adresses et sites référencés) :\n• Sud : Cotonou, cité lacustre de Ganvié, Ouidah (mémoire et traditions), Porto-Novo et Grand-Popo.\n• Centre : Palais Royaux d’Abomey (UNESCO) et collines de Dassa-Zoumè.\n• Nord : Parakou, chutes de Kota, Tata Somba et Parc de la Pendjari.\nCombien de jours aimeriez-vous partir et dans quel esprit (culture, repos, racines, famille) ?`;
+    return `Le Bénin offre une diversité remarquable du littoral atlantique aux montagnes de l’Atacora (${beninCounts.thirdPartyCount} adresses et sites référencés) :\n• Sud : Cotonou, cité lacustre de Ganvié, Ouidah (mémoire et traditions), Porto-Novo et Grand-Popo.\n• Centre : Palais Royaux d’Abomey (UNESCO) et collines de Dassa-Zoumè.\n• Nord : Parakou, chutes de Kota, Tata Somba et Parc de la Pendjari.\nCombien de jours aimeriez-vous partir et dans quel esprit (culture, repos, racines, famille) ?`;
   }
   if (analysis.noRestaurantInRequestedCity && analysis.activeCityLabel) {
     const fallbackList = analysis.matchedItems

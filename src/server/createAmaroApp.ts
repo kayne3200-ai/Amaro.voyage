@@ -3100,7 +3100,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   app.post('/api/amaro/rescue/incident', async (req: Request, res: Response) => {
     // Bloc 3: Dynamic Rescue mode ("Signaler un imprévu")
     const incidentType = String(req.body?.incidentType || 'late_arrival').trim();
-    const cityId = String(req.body?.cityId || 'cotonou').trim();
+    const requestedCountryCode = String(req.body?.countryCode || 'BJ').trim().toUpperCase();
+    const cityId = String(req.body?.cityId || '').trim();
     const category = VALID_CATEGORIES.has(String(req.body?.category || ''))
       ? (req.body.category as ServiceCategory)
       : 'transport';
@@ -3110,7 +3111,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
     try {
       const bearer = extractBearerToken(req) || undefined;
-      const setting = await store.getSystemSetting('BJ', bearer);
+      const setting = await store.getSystemSetting(requestedCountryCode, bearer);
       const catalogue = await resolveMergedPublishedCatalogue(bearer);
       const failedServiceId = String(req.body?.serviceId || '').trim();
       const existingFailed = await resolveServiceOrOfficial(failedServiceId, bearer);
@@ -3121,11 +3122,11 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           ownerId: 'manual_concierge',
           title: 'Prestation signalée',
           category,
-          countryCode: 'BJ',
-          cityId,
+          countryCode: requestedCountryCode,
+          cityId: cityId || 'capitale',
           priceAmount: 0,
           priceKnown: false,
-          currency: 'XOF',
+          currency: (setting.currency || 'XOF') as CurrencyCode,
           durationMinutes: 90,
           capacity: Math.max(1, Number(req.body?.participants || 1)),
           status: 'published',
@@ -4195,13 +4196,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       res.status(429).json({ error: 'Trop de générations rapprochées.' });
       return;
     }
+    const requestedCountryCode = String(req.body?.countryCode || 'BJ').trim().toUpperCase();
     const rawCitiesInput = Array.isArray(req.body?.preferredCities)
       ? req.body.preferredCities
       : Array.isArray(req.body?.cityIds)
       ? req.body.cityIds
       : req.body?.cityId
       ? [String(req.body.cityId)]
-      : ['cotonou', 'ouidah'];
+      : requestedCountryCode === 'BJ'
+      ? ['cotonou', 'ouidah']
+      : [];
     const rawCities: string[] = rawCitiesInput.map(String).slice(0, 6);
     const daysCount = Math.max(2, Math.min(14, Number(req.body?.daysCount || 4)));
     const travelersCount = Math.max(
@@ -4216,17 +4220,18 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     const rawStart = String(req.body?.startDateIso || req.body?.startDate || '').trim();
     const startDateIso = isValidIsoDate(rawStart) ? rawStart : undefined;
 
-    const bjSetting = await store.getSystemSetting('BJ').catch(() => null);
+    const countrySetting = await store.getSystemSetting(requestedCountryCode).catch(() => null);
 
     const draft = buildRealDraftItinerary({
+      countryCode: requestedCountryCode,
       preferredCities: rawCities,
       daysCount,
       travelersCount,
       intentionSummary,
       startDateIso,
-      maxVisitsCityChangeDay: bjSetting?.maxVisitsCityChangeDay,
-      maxVisitsSameCityDay: bjSetting?.maxVisitsSameCityDay,
-      dossierFeeXof: bjSetting?.dossierFeeXof ?? 20_000,
+      maxVisitsCityChangeDay: countrySetting?.maxVisitsCityChangeDay,
+      maxVisitsSameCityDay: countrySetting?.maxVisitsSameCityDay,
+      dossierFeeXof: countrySetting?.dossierFeeXof ?? 20_000,
     });
     res.json({ ok: true, draftItinerary: draft, draft });
   });
@@ -4303,7 +4308,17 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       serializedContext = JSON.stringify(rawContext).slice(0, 2_500);
     }
 
-    const bjSetting = await store.getSystemSetting('BJ').catch(() => null);
+    const requestedCountryCode = String(
+      req.body?.countryCode ||
+        (rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
+          ? (rawContext as Record<string, unknown>).countryCode || ''
+          : '') ||
+        'BJ'
+    )
+      .trim()
+      .toUpperCase();
+
+    const countrySetting = await store.getSystemSetting(requestedCountryCode).catch(() => null);
 
     const analysis = analyzeConversationAndCatalogue(
       prompt,
@@ -4313,26 +4328,31 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       undefined,
       rawActiveDraft,
       {
-        maxVisitsCityChangeDay: bjSetting?.maxVisitsCityChangeDay,
-        maxVisitsSameCityDay: bjSetting?.maxVisitsSameCityDay,
-        dossierFeeXof: bjSetting?.dossierFeeXof ?? 20_000,
+        countryCode: requestedCountryCode,
+        maxVisitsCityChangeDay: countrySetting?.maxVisitsCityChangeDay,
+        maxVisitsSameCityDay: countrySetting?.maxVisitsSameCityDay,
+        dossierFeeXof: countrySetting?.dossierFeeXof ?? 20_000,
       }
     );
 
     const sendPayload = (payload: any) => {
+      const enrichedPayload = {
+        countryCode: requestedCountryCode,
+        ...payload,
+      };
       if (shouldStream) {
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         // Progressive flush of the full text in realistic words
-        const words = String(payload.reply || '').split(' ');
+        const words = String(enrichedPayload.reply || '').split(' ');
         for (const w of words) {
           res.write(`event: token\ndata: ${JSON.stringify({ text: `${w} ` })}\n\n`);
         }
-        res.write(`event: result\ndata: ${JSON.stringify(payload)}\n\n`);
+        res.write(`event: result\ndata: ${JSON.stringify(enrichedPayload)}\n\n`);
         res.end();
       } else {
-        res.json(payload);
+        res.json(enrichedPayload);
       }
     };
 
@@ -4351,7 +4371,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       return;
     }
 
-    const cacheKey = `${locale}|${Boolean(verifiedUid)}|${prompt.toLowerCase()}|${cleanHistory.length}|${Boolean(rawActiveDraft)}`;
+    const cacheKey = `${requestedCountryCode}|${locale}|${Boolean(verifiedUid)}|${prompt.toLowerCase()}|${cleanHistory.length}|${Boolean(rawActiveDraft)}`;
     const cached = assistantResponseCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt < 10 * 60_000 && !deps.geminiResponder && !rawActiveDraft) {
       sendPayload({

@@ -1,6 +1,23 @@
 export type LocaleCode = 'fr' | 'en';
 export type SupportedLocale = LocaleCode;
-export type CurrencyCode = 'XOF' | 'EUR' | 'USD';
+export type CurrencyCode =
+  | 'XOF'
+  | 'EUR'
+  | 'USD'
+  | 'XAF'
+  | 'MAD'
+  | 'GHS'
+  | 'NGN'
+  | 'EGP'
+  | 'ZAR'
+  | 'TND'
+  | 'KES'
+  | 'TZS'
+  | 'RWF'
+  | 'ETB'
+  | 'TRY'
+  | 'AED'
+  | (string & {});
 
 export interface EmergencyNumberEntry {
   id: string;
@@ -31,7 +48,11 @@ export type DataOriginType =
 
 export type VerificationLevel = 'verified' | 'partially_verified' | 'to_confirm';
 
-export type PhotoIndicatorType = 'propre_etablissement' | 'illustration' | 'a_verifier';
+export type PhotoIndicatorType =
+  | 'propre_etablissement'
+  | 'illustration'
+  | 'a_verifier'
+  | 'photo_a_ajouter';
 
 export type StandingLevel =
   | 'luxe'
@@ -72,7 +93,7 @@ export type PartnerCommissionStatus =
 
 export interface TouristSiteEditorial {
   exactName: string;
-  imageKey: string;
+  imageKey?: string;
   cityAndDepartment: string;
   historyAndOrigin: string;
   culturalOrNaturalSignificance: string;
@@ -87,17 +108,29 @@ export interface TouristSiteEditorial {
   sources: Array<{ name: string; url?: string }>;
 }
 
+export interface TravelerProtocols {
+  visaFr: string;
+  vaccinesHealthFr: string;
+  electricalPlugs: string;
+  tippingFr: string;
+  seasonsFr: string;
+  securityFr: string;
+  dialingCode?: string;
+}
+
 export interface CountryDefinition {
   code: string;
   nameFr: string;
   nameEn: string;
+  continent?: string;
   currency: CurrencyCode | string;
   timezone: string;
   languages: string[];
   operationalStatus: 'operational' | 'architecture_ready';
   paymentMethods: string[];
   localRulesFr: string[];
-  localRulesEn: string[];
+  localRulesEn?: string[];
+  protocols?: TravelerProtocols;
   emergencyNumbers: Array<{
     serviceFr: string;
     serviceEn: string;
@@ -110,7 +143,7 @@ export interface CountryDefinition {
     region: string;
     summaryFr: string;
     summaryEn: string;
-    imageKey: string;
+    imageKey?: string;
   }>;
 }
 
@@ -122,16 +155,16 @@ export interface CatalogueItem {
   category: ServiceCategory;
   countryCode: string;
   cityId: string;
-  address: string;
-  description: string;
+  address?: string;
+  description?: string;
   priceAmount: number;
-  currency: CurrencyCode;
+  currency: CurrencyCode | string;
   durationMinutes: number;
   capacity: number;
   dataOrigin: DataOriginType;
   status: 'draft' | 'published' | 'archived';
-  imageKey: string;
-  imageLicense: string;
+  imageKey?: string;
+  imageLicense?: string;
   // Extended real directory & verification metadata
   subCategory?: string;
   standing?: StandingLevel;
@@ -160,7 +193,7 @@ export interface CatalogueItem {
   // Bloc 5.4, 9.5 & 10.2 Extended Honest Media, Sacred Site & Provider Availability Metadata
   customPhotoUrl?: string;
   photoVerified?: boolean;
-  photoIndicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+  photoIndicator?: 'propre_etablissement' | 'illustration' | 'a_verifier' | 'photo_a_ajouter';
   photoSource?: string;
   photoUsageRights?: string;
   imageSourceNote?: string;
@@ -502,7 +535,7 @@ export interface SystemSettingDoc {
   photoRegistryOverrides?: Record<
     string,
     {
-      indicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+      indicator?: PhotoIndicatorType;
       sourceAndLicense?: string;
     }
   >;
@@ -608,7 +641,7 @@ export interface AssistantSuggestionItem {
   cityId: string;
   priceKnown: boolean;
   priceAmount: number;
-  currency: CurrencyCode;
+  currency: CurrencyCode | string;
   priceRangeNote?: string;
   verificationStatus: VerificationLevel;
   dataOrigin: DataOriginType;
@@ -723,6 +756,7 @@ export type ReservationDispatchStatus =
 export interface PilotPartnerDoc {
   id: string;
   businessName: string;
+  countryCode?: string;
   category: PilotPartnerCategory;
   cityId: PilotZoneId;
   coveredZones: string;

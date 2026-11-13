@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   CalendarPlus,
+  Camera,
   Car,
   CheckCircle2,
   Compass,
@@ -16,6 +17,7 @@ import {
   Plus,
   Scale,
   Search,
+  ShieldCheck,
 } from 'lucide-react';
 import type {
   CatalogueItem,
@@ -39,6 +41,7 @@ import {
 } from '../../data/amaroRegistry';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { BeninExploreSection } from './BeninExploreSection';
+import { CountryExploreSection } from './CountryExploreSection';
 import {
   AccommodationComparatorModal,
   ServiceDetailModal,
@@ -53,6 +56,7 @@ import {
 import {
   CLIENT_TAXES_AND_FEES_LABEL,
   computeCategoryPaymentSchedule,
+  convertCurrencyIndicative,
   OFFER_PRICE_STATE_LABELS,
   resolveServiceOffers,
   validateAndPriceOfferSelection,
@@ -153,20 +157,39 @@ const STANDING_OPTIONS: Array<{ value: StandingLevel | 'all'; label: string }> =
 
 function convertDisplayPrice(
   amount: number,
-  from: CurrencyCode,
+  from: string,
   to: CurrencyCode,
   rates?: Record<'EUR' | 'XOF' | 'USD', number>
 ): string {
-  if (!rates || from === to) {
-    return `${amount.toLocaleString('fr-FR')} ${from}`;
+  const normalizedFrom = from.trim().toUpperCase();
+  const normalizedTo = String(to).trim().toUpperCase();
+  const zeroDecimal = new Set([
+    'XOF',
+    'XAF',
+    'JPY',
+    'KRW',
+    'VND',
+    'NGN',
+    'CLP',
+    'COP',
+    'PYG',
+    'IDR',
+    'UGX',
+    'TZS',
+    'RWF',
+    'MGA',
+    'GNF',
+  ]);
+  const displayFrom = normalizedFrom === 'XOF' ? 'FCFA' : normalizedFrom;
+  if (normalizedFrom === normalizedTo) {
+    return `${amount.toLocaleString('fr-FR')} ${displayFrom}`;
   }
-  const inEur = amount / rates[from];
-  const converted = inEur * rates[to];
-  const formatted =
-    to === 'XOF'
-      ? Math.round(converted).toLocaleString('fr-FR')
-      : converted.toFixed(2);
-  return `${formatted} ${to}`;
+  const converted = convertCurrencyIndicative(amount, normalizedFrom, normalizedTo, rates);
+  const formatted = zeroDecimal.has(normalizedTo)
+    ? Math.round(converted).toLocaleString('fr-FR')
+    : converted.toFixed(2);
+  const displayTo = normalizedTo === 'XOF' ? 'FCFA' : normalizedTo;
+  return `${amount.toLocaleString('fr-FR')} ${displayFrom} (≈ ${formatted} ${displayTo})`;
 }
 
 export function ExplorerView({
@@ -313,6 +336,16 @@ export function ExplorerView({
   const activeCountry =
     COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) || COUNTRIES_REGISTRY[0];
 
+  useEffect(() => {
+    setCompareIds([]);
+    setSelectedCityId('all');
+    setMaxBudgetXof('');
+    setLanguageFilter('all');
+    if (activeCountry.cities.length > 0) {
+      setStoryCity(activeCountry.cities[0].id);
+    }
+  }, [activeCountry.code, activeCountry.cities]);
+
   // Category lock according to active dedicated space
   const effectiveCategoryFilter = useMemo((): ServiceCategory | 'all' | 'services_group' => {
     if (space === 'accommodations') return 'accommodation';
@@ -366,8 +399,8 @@ export function ExplorerView({
         const q = searchQuery.toLowerCase();
         const match =
           item.title.toLowerCase().includes(q) ||
-          item.description.toLowerCase().includes(q) ||
-          item.address.toLowerCase().includes(q) ||
+          (item.description || '').toLowerCase().includes(q) ||
+          (item.address || '').toLowerCase().includes(q) ||
           item.cityId.toLowerCase().includes(q) ||
           (item.neighborhood || '').toLowerCase().includes(q);
         if (!match) return false;
@@ -424,6 +457,9 @@ export function ExplorerView({
   };
 
   const heroImage = useMemo(() => {
+    if (activeCountry.code !== 'BJ') {
+      return null;
+    }
     if (selectedCityId === 'ouidah') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
     if (selectedCityId === 'portonovo') return EDITORIAL_IMAGES.portonovo_heritage;
     if (selectedCityId === 'abomey' || selectedCityId === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
@@ -435,7 +471,7 @@ export function ExplorerView({
     if (selectedCategory === 'transport') return EDITORIAL_IMAGES.transport_tourisme_suv;
     if (selectedCategory === 'accommodation') return EDITORIAL_IMAGES.sofitel_cotonou_luxury;
     return EDITORIAL_IMAGES.monument_amazone_cotonou;
-  }, [selectedCityId, selectedCategory]);
+  }, [activeCountry.code, selectedCityId, selectedCategory]);
 
   const modalOffers = useMemo(
     () =>
@@ -585,11 +621,13 @@ export function ExplorerView({
           <div className="flex flex-wrap items-center gap-2 text-slate-300 tabular-nums">
             <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>
-              {rateInfo
-                ? `Conversion indicative (règlement en FCFA) · 1 EUR = 655,957 XOF · 1 EUR = ${rateInfo.rates.USD.toFixed(
-                    3
-                  )} USD · Source : ${rateInfo.source} (${rateInfo.updatedAt.slice(0, 10)})`
-                : 'Conversion indicative (règlement en FCFA) · Parité fixe BCEAO : 1 EUR = 655,957 XOF'}
+              {activeCountry.currency === 'XOF' || activeCountry.currency === 'XAF'
+                ? rateInfo
+                  ? `Conversion indicative (règlement en FCFA) · 1 EUR = 655,957 ${activeCountry.currency} · 1 EUR = ${rateInfo.rates.USD.toFixed(
+                      3
+                    )} USD · Source : ${rateInfo.source} (${rateInfo.updatedAt.slice(0, 10)})`
+                  : `Conversion indicative (règlement en FCFA) · Parité fixe : 1 EUR = 655,957 ${activeCountry.currency}`
+                : `Règlement en devise locale officielle : ${activeCountry.currency} · Conversion indicative selon parités interbancaires en vigueur`}
             </span>
             {activeReferralCode && (
               <>
@@ -620,7 +658,9 @@ export function ExplorerView({
             </div>
 
             <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded-md font-mono">
-              {(['XOF', 'EUR', 'USD'] as CurrencyCode[]).map((cur) => (
+              {Array.from(
+                new Set<CurrencyCode>([activeCountry.currency, 'EUR', 'USD', 'XOF'])
+              ).map((cur) => (
                 <button
                   key={cur}
                   type="button"
@@ -651,7 +691,16 @@ export function ExplorerView({
                   : `All listings (${realCount})`,
               icon: Compass,
             },
-            { id: 'benin_guide' as ExplorerSpace, label: t.nav.discoverBenin, icon: BookOpen },
+            {
+              id: 'benin_guide' as ExplorerSpace,
+              label:
+                activeCountry.code === 'BJ'
+                  ? t.nav.discoverBenin
+                  : locale === 'fr'
+                  ? `Guide & Formalités (${activeCountry.nameFr})`
+                  : `Guide & Entry (${activeCountry.nameEn})`,
+              icon: BookOpen,
+            },
             {
               id: 'accommodations' as ExplorerSpace,
               label: `${t.categories.accommodation} (${realAccommodationCount})`,
@@ -692,18 +741,32 @@ export function ExplorerView({
         </div>
       </div>
 
-      {/* Dedicated Free Public Encyclopedia View */}
+      {/* Dedicated Free Public Encyclopedia / National Guide View */}
       {space === 'benin_guide' ? (
-        <BeninExploreSection
-          emergencyNumbers={emergencyNumbers}
-          onSelectCityFilter={(cityId) => {
-            setSelectedCountryCode('BJ');
-            setSelectedCityId(cityId);
-            setSpace('overview');
-          }}
-          onOpenJourneyCta={onOpenJourneyTab}
-          smartJourneyCtaLabel={smartJourneyCtaLabel}
-        />
+        activeCountry.code === 'BJ' ? (
+          <BeninExploreSection
+            emergencyNumbers={emergencyNumbers}
+            onSelectCityFilter={(cityId) => {
+              setSelectedCountryCode('BJ');
+              setSelectedCityId(cityId);
+              setSpace('overview');
+            }}
+            onOpenJourneyCta={onOpenJourneyTab}
+            smartJourneyCtaLabel={smartJourneyCtaLabel}
+          />
+        ) : (
+          <CountryExploreSection
+            country={activeCountry}
+            locale={locale}
+            onSelectCityFilter={(cityId) => {
+              setSelectedCityId(cityId);
+              setSpace('overview');
+            }}
+            onOpenJourneyCta={onOpenJourneyTab}
+            smartJourneyCtaLabel={smartJourneyCtaLabel}
+            catalogue={catalogue}
+          />
+        )
       ) : (
         <>
           {/* Hero Section (Shown on Overview — zero duplicate header CTA) */}
@@ -712,17 +775,28 @@ export function ExplorerView({
               <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 md:py-14 grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
                 <div className="lg:col-span-7 flex flex-col justify-center space-y-5">
                   <p className="text-xs md:text-sm font-medium text-teal-400">
-                    {t.hero.kicker} · {realCount} établissements et sites tiers recensés +{' '}
-                    {amaroAccompanimentCount} offres d’accompagnement humain AMARO
+                    {activeCountry.code === 'BJ'
+                      ? `${t.hero.kicker} · ${realCount} établissements et sites tiers recensés + ${amaroAccompanimentCount} offres d’accompagnement humain AMARO`
+                      : locale === 'fr'
+                      ? `Compagnon Universel de Voyage · Territoire : ${activeCountry.nameFr} (${activeCountry.continent || 'Destination AMARO'}) · ${realCount} prestations réelles recensées`
+                      : `Universal Travel Companion · Territory: ${activeCountry.nameEn} (${activeCountry.continent || 'AMARO Destination'}) · ${realCount} verified real listings`}
                   </p>
                   <h1
                     className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-white leading-[1.12]"
                     style={{ textWrap: 'balance' }}
                   >
-                    {t.hero.title}
+                    {activeCountry.code === 'BJ'
+                      ? t.hero.title
+                      : locale === 'fr'
+                      ? `Explorez ${activeCountry.nameFr}, organisez votre itinéraire et vivez votre carnet de voyage.`
+                      : `Explore ${activeCountry.nameEn}, coordinate your itinerary, and keep your digital travel logbook.`}
                   </h1>
                   <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl">
-                    {t.hero.subtitle}
+                    {activeCountry.code === 'BJ'
+                      ? t.hero.subtitle
+                      : locale === 'fr'
+                      ? `Découvrez les hébergements vérifiés, la gastronomie locale, les sites patrimoniaux et les liaisons de transport répertoriés pour ${activeCountry.nameFr}. Planifiez votre séjour avec Journey Brain et voyagez en toute sérénité.`
+                      : `Discover verified accommodations, local gastronomy, heritage landmarks, and official transport across ${activeCountry.nameEn}. Coordinate your journey with Journey Brain.`}
                   </p>
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
@@ -737,37 +811,71 @@ export function ExplorerView({
                       onClick={() => setSpace('benin_guide')}
                       className="min-h-[46px] px-5 py-2.5 text-sm font-semibold text-white bg-teal-700 hover:bg-teal-600 rounded-xl transition-colors whitespace-nowrap"
                     >
-                      {t.hero.secondaryCta}
+                      {activeCountry.code === 'BJ'
+                        ? t.hero.secondaryCta
+                        : locale === 'fr'
+                        ? `Guide & Formalités (${activeCountry.nameFr})`
+                        : `Guide & Formalities (${activeCountry.nameEn})`}
                     </button>
                     <a
-                      href="#catalogue-benin"
+                      href="#catalogue-national"
                       className="min-h-[46px] inline-flex items-center px-5 py-2.5 text-sm font-semibold text-white border border-slate-600 hover:border-slate-400 rounded-xl transition-colors whitespace-nowrap"
                     >
                       {t.hero.catalogueCta} ({realCount})
                     </a>
                   </div>
-                  <p className="text-xs text-slate-400 pt-1">{t.hero.freeNote}</p>
+                  <p className="text-xs text-slate-400 pt-1">
+                    {activeCountry.code === 'BJ'
+                      ? t.hero.freeNote
+                      : locale === 'fr'
+                      ? `Guide culturel, répertoire national de ${activeCountry.nameFr}, agenda Journey Brain, carnet électronique et numéros d’urgence 100 % gratuits.`
+                      : `Cultural guide, national directory of ${activeCountry.nameEn}, Journey Brain planner, digital logbook, and emergency contacts are 100% free.`}
+                  </p>
                 </div>
 
                 <div className="lg:col-span-5 relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-900 min-h-[240px]">
-                  {!failedImages[heroImage.src] ? (
-                    <img
-                      src={heroImage.src}
-                      alt={heroImage.alt}
-                      referrerPolicy="no-referrer"
-                      onError={() =>
-                        setFailedImages((prev) => ({ ...prev, [heroImage.src]: true }))
-                      }
-                      className="w-full h-full object-cover"
-                    />
+                  {heroImage && !failedImages[heroImage.src] ? (
+                    <>
+                      <img
+                        src={heroImage.src}
+                        alt={heroImage.alt}
+                        referrerPolicy="no-referrer"
+                        onError={() =>
+                          setFailedImages((prev) => ({ ...prev, [heroImage.src]: true }))
+                        }
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 via-black/45 to-transparent text-xs text-slate-200">
+                        {heroImage.alt} · {heroImage.license}
+                      </div>
+                    </>
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center p-6 bg-gradient-to-br from-[#0B192C] to-slate-800 text-slate-300 text-sm text-center">
-                      Littoral Atlantique de Cotonou · Bénin
+                    <div className="w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-[#0B192C] via-slate-900 to-slate-800 text-white space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                          {activeCountry.code} · {activeCountry.continent || 'AMARO'}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30 font-mono">
+                          Devise : {activeCountry.currency}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        <h2 className="text-xl font-bold font-display text-white">
+                          {activeCountry.nameFr}
+                        </h2>
+                        <p className="text-xs text-slate-300 line-clamp-2">
+                          {activeCountry.cities.map((c) => c.name).join(' · ')}
+                        </p>
+                      </div>
+                      <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                        <span>Fuseau : {activeCountry.timezone.split(' ')[0]}</span>
+                        <span className="inline-flex items-center gap-1 text-amber-400/90 text-[11px]">
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>Photo à ajouter</span>
+                        </span>
+                      </div>
                     </div>
                   )}
-                  <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 via-black/45 to-transparent text-xs text-slate-200">
-                    {heroImage.alt} · {heroImage.license}
-                  </div>
                 </div>
               </div>
             </section>
@@ -796,14 +904,24 @@ export function ExplorerView({
                 </p>
                 <h2 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
                   {space === 'accommodations'
-                    ? 'Grand Répertoire National des Hébergements au Bénin'
+                    ? (locale === 'fr'
+                        ? `Grand Répertoire National des Hébergements — ${activeCountry.nameFr}`
+                        : `National Accommodations Directory — ${activeCountry.nameEn}`)
                     : space === 'transports'
-                    ? 'Transports Urbains, Locations, Cars Interurbains & Logistique'
+                    ? (locale === 'fr'
+                        ? `Transports Urbains, Locations & Logistique — ${activeCountry.nameFr}`
+                        : `Urban Transport, Rentals & Logistics — ${activeCountry.nameEn}`)
                     : space === 'sites'
-                    ? 'Bibliothèque Patrimoniale, Naturelle & Culturelle du Bénin'
+                    ? (locale === 'fr'
+                        ? `Bibliothèque Patrimoniale, Naturelle & Culturelle — ${activeCountry.nameFr}`
+                        : `Heritage, Natural & Cultural Sites — ${activeCountry.nameEn}`)
                     : space === 'services'
-                    ? 'Interprètes, Bien-Être, Artisanat & Tables Référencées'
-                    : `Catalogue Touristique & Prestataires (${activeCountry.code})`}
+                    ? (locale === 'fr'
+                        ? `Interprètes, Bien-Être, Artisanat & Tables — ${activeCountry.nameFr}`
+                        : `Interpreters, Crafts & Dining — ${activeCountry.nameEn}`)
+                    : (locale === 'fr'
+                        ? `Catalogue Touristique & Prestataires (${activeCountry.nameFr})`
+                        : `Tourism & Service Catalog (${activeCountry.nameEn})`)}
                 </h2>
               </div>
 
@@ -881,7 +999,7 @@ export function ExplorerView({
 
           {/* Catalogue Filters & Cards */}
           <section
-            id="catalogue-benin"
+            id="catalogue-national"
             className="max-w-7xl mx-auto px-4 md:px-8 py-4 space-y-5"
           >
             {/* Search, Origin, Standing / Language & Budget Filter Bar */}
@@ -936,14 +1054,16 @@ export function ExplorerView({
                   aria-label="Filtrer par langue parlée"
                   className="min-h-[44px] px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl outline-none"
                 >
-                  <option value="all">Toutes langues</option>
+                  <option value="all">Toutes langues ({activeCountry.nameFr})</option>
                   <option value="Français">Français</option>
                   <option value="Anglais">Anglais</option>
-                  <option value="Fon">Fon</option>
-                  <option value="Yoruba">Yoruba</option>
-                  <option value="Mina">Mina</option>
-                  <option value="Bariba">Bariba</option>
-                  <option value="Dendi">Dendi</option>
+                  {activeCountry.languages
+                    .filter((l) => l !== 'Français' && l !== 'Anglais')
+                    .map((lng) => (
+                      <option key={lng} value={lng}>
+                        {lng}
+                      </option>
+                    ))}
                 </select>
               ) : (
                 <select
@@ -1068,7 +1188,7 @@ export function ExplorerView({
                         <div>
                           {/* Visual Header */}
                           <div className="h-44 bg-slate-200 dark:bg-slate-800 relative overflow-hidden group">
-                            {!failedImages[item.id] ? (
+                            {photoSrc && !failedImages[item.id] ? (
                               <img
                                 src={photoSrc}
                                 alt={item.title}
@@ -1078,8 +1198,14 @@ export function ExplorerView({
                                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                               />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center bg-slate-800 text-white text-xs px-4 text-center">
-                                {item.title}
+                              <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 text-white p-4 text-center space-y-1.5">
+                                <Camera className="w-6 h-6 text-slate-400" />
+                                <span className="text-xs font-semibold text-slate-200 line-clamp-1">
+                                  {item.title}
+                                </span>
+                                <span className="text-[11px] text-amber-300 font-mono">
+                                  Photo du lieu à ajouter
+                                </span>
                               </div>
                             )}
                             {isPhotoVerified ? (
@@ -1087,6 +1213,13 @@ export function ExplorerView({
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
                                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                   <span>Photo certifiée</span>
+                                </span>
+                              </div>
+                            ) : imgMeta.indicator === 'photo_a_ajouter' || !photoSrc ? (
+                              <div className="absolute top-2.5 left-2.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-900/80 text-amber-300 border border-amber-500/30 backdrop-blur-xs">
+                                  <Camera className="w-3 h-3 text-amber-400" />
+                                  <span>Photo à ajouter</span>
                                 </span>
                               </div>
                             ) : (
@@ -1252,14 +1385,14 @@ export function ExplorerView({
             )}
           </section>
 
-          {/* Benin Cultural Heritage Space (Moderated) */}
+          {/* Cultural Heritage Space (Moderated) */}
           <section className="max-w-7xl mx-auto px-4 md:px-8 py-10 border-t border-slate-200 dark:border-slate-800 space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                   <BookOpen className="w-4 h-4" />
                   <span>
-                    Espace Culturel Consacré au Bénin · Modération administrative active
+                    Espace Culturel &amp; Traditions — {activeCountry.nameFr} · Modération administrative active
                   </span>
                 </div>
                 <h2 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
@@ -1292,7 +1425,7 @@ export function ExplorerView({
                     onChange={(e) => setStoryCity(e.target.value)}
                     className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   >
-                    {COUNTRIES_REGISTRY[0].cities.map((c) => (
+                    {activeCountry.cities.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
@@ -1330,34 +1463,68 @@ export function ExplorerView({
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  Repère culturel vérifié · Abomey-Calavi &amp; Lac Nokoué
-                </div>
-                <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                  Respect de la vie quotidienne sur les cités lacustres
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Les villages sur pilotis du lac Nokoué sont des lieux d’habitation et de pêche familiale. Privilégiez les embarcations accompagnées d’un guide local reconnu et demandez systématiquement l’accord des habitants avant de photographier les scènes de vie.
-                </p>
-              </article>
+              {activeCountry.code === 'BJ' ? (
+                <>
+                  <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Repère culturel vérifié · Abomey-Calavi &amp; Lac Nokoué
+                    </div>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Respect de la vie quotidienne sur les cités lacustres
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Les villages sur pilotis du lac Nokoué sont des lieux d’habitation et de pêche familiale. Privilégiez les embarcations accompagnées d’un guide local reconnu et demandez systématiquement l’accord des habitants avant de photographier les scènes de vie.
+                    </p>
+                  </article>
 
-              <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  Repère culturel vérifié · Parakou, Nikki &amp; Borgou
-                </div>
-                <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                  Savoir-faire du coton tissé et salutations traditionnelles
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                  À Parakou et dans le Borgou, carrefour entre le sud côtier et le septentrion, prendre le temps des salutations d’usage avant toute négociation au marché artisanal témoigne d’une marque d’estime essentielle envers les maîtres tisserands.
-                </p>
-              </article>
+                  <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Repère culturel vérifié · Parakou, Nikki &amp; Borgou
+                    </div>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Savoir-faire du coton tissé et salutations traditionnelles
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                      À Parakou et dans le Borgou, carrefour entre le sud côtier et le septentrion, prendre le temps des salutations d’usage avant toute négociation au marché artisanal témoigne d’une marque d’estime essentielle envers les maîtres tisserands.
+                    </p>
+                  </article>
+                </>
+              ) : (
+                <>
+                  <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Repère culturel vérifié · {activeCountry.cities[0]?.name || activeCountry.nameFr}
+                    </div>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Salutations, courtoisie et respect social
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                      {activeCountry.localRulesFr[1] || activeCountry.localRulesFr[0] || `En ${activeCountry.nameFr}, le respect des usages locaux et la courtoisie avec les hôtes et prestataires locaux sont au cœur de l'expérience de voyage.`}
+                    </p>
+                  </article>
+
+                  <article className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Repère culturel vérifié · {activeCountry.cities[1]?.name || activeCountry.cities[0]?.name || activeCountry.nameFr}
+                    </div>
+                    <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                      Patrimoine, traditions et logistique encadrée
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                      {activeCountry.localRulesFr[2] || activeCountry.localRulesFr[0] || `Privilégiez les guides accrédités pour la visite des sites historiques et respectez scrupuleusement les consignes de sécurité et de discrétion.`}
+                    </p>
+                  </article>
+                </>
+              )}
 
               {Array.from(
                 new Map(
                   culturalStories
                     .filter((s) => s.moderationStatus === 'approved')
+                    .filter((s) => {
+                      const cityIds = new Set(activeCountry.cities.map((c) => c.id));
+                      return cityIds.has(s.cityId);
+                    })
                     .filter((s) => {
                       const norm = s.title.trim().toLowerCase();
                       return (
@@ -1393,7 +1560,7 @@ export function ExplorerView({
                 <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-950 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2">
                   <span>
                     <strong>Contribution locale réelle engagée ({countrySetting?.localContributionPercent}% de la marge AMARO) :</strong>{' '}
-                    reversée à des initiatives locales ou patrimoniales au Bénin.
+                    reversée à des initiatives locales ou patrimoniales ({activeCountry.nameFr}).
                   </span>
                   <strong className="font-mono text-sm">
                     {realLocalContributionTotalXof.toLocaleString('fr-FR')} FCFA

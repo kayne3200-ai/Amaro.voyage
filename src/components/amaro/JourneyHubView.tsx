@@ -60,6 +60,7 @@ import { authorizedFetch } from '../../lib/apiClient';
 import {
   calculateCircuitAFee,
   CLIENT_TAXES_AND_FEES_LABEL,
+  convertCurrencyIndicative,
   OFFER_PRICE_STATE_LABELS,
   parseSelectedOffersJson,
   PROVIDER_COMMISSION_LABEL,
@@ -228,27 +229,27 @@ interface JourneyHubViewProps {
   onApplyAssistantDraft?: (draft: AssistantDraftItinerary) => Promise<void>;
   onOpenExplorer?: (cityId?: string, category?: ServiceCategory, serviceId?: string) => void;
   onOpenAssistant?: () => void;
+  selectedCountryCode?: string;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
 
 function convertValue(
   amount: number,
-  from: CurrencyCode,
-  to: CurrencyCode,
+  from: CurrencyCode | string,
+  to: CurrencyCode | string,
   rates?: Record<'EUR' | 'XOF' | 'USD', number>
 ): number {
-  if (!rates || from === to) return amount;
-  const inEur = amount / rates[from];
-  const converted = inEur * rates[to];
-  return to === 'XOF' ? Math.round(converted) : Math.round(converted * 100) / 100;
+  return convertCurrencyIndicative(amount, from, to, rates);
 }
 
-function formatMoney(amount: number, cur: CurrencyCode): string {
-  if (cur === 'XOF') {
-    return `${Math.round(amount).toLocaleString('fr-FR')} XOF`;
+function formatMoney(amount: number, cur: CurrencyCode | string): string {
+  const zeroDecCurrencies = new Set(['XOF', 'XAF', 'JPY', 'KRW', 'NGN', 'GNF', 'RWF', 'UGX', 'TZS', 'COP', 'CLP', 'VND', 'IDR', 'KHR']);
+  const code = String(cur || 'XOF').toUpperCase();
+  if (zeroDecCurrencies.has(code)) {
+    return `${Math.round(amount).toLocaleString('fr-FR')} ${code}`;
   }
-  return `${amount.toFixed(2)} ${cur}`;
+  return `${amount.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`;
 }
 
 function isPriceOnRequestSnapshot(pricingSnapshot: string | undefined): boolean {
@@ -332,15 +333,27 @@ export function JourneyHubView({
   onApplyAssistantDraft,
   onOpenExplorer,
   onOpenAssistant,
+  selectedCountryCode = 'BJ',
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
+
+  const currentCountry = useMemo(() => {
+    return (
+      COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY[0]
+    );
+  }, [selectedCountryCode]);
 
   const [subTab, setSubTab] = useState<JourneySubTab>('agenda');
   const [lifecyclePhase, setLifecyclePhase] = useState<JourneyLifecyclePhase>('avant');
   const [showNewFolderForm, setShowNewFolderForm] = useState<boolean>(false);
-  const [title, setTitle] = useState<string>('Séjour Découverte Sud & Nord Bénin');
-  const [countryCode, setCountryCode] = useState<string>('BJ');
-  const [primaryCityId, setPrimaryCityId] = useState<string>('cotonou');
+  const [title, setTitle] = useState<string>(
+    () => `Séjour Découverte — ${currentCountry.nameFr}`
+  );
+  const [countryCode, setCountryCode] = useState<string>(() => currentCountry.code);
+  const [primaryCityId, setPrimaryCityId] = useState<string>(
+    () => currentCountry.cities[0]?.id || 'cotonou'
+  );
   const [startDate, setStartDate] = useState<string>('2026-11-15');
   const [endDate, setEndDate] = useState<string>('2026-11-21');
   const [travelersCount, setTravelersCount] = useState<number>(2);
@@ -352,8 +365,32 @@ export function JourneyHubView({
   );
   const [isCreating, setIsCreating] = useState<boolean>(false);
 
+  React.useEffect(() => {
+    if (selectedCountryCode && (!activeFolder || folders.length === 0)) {
+      setCountryCode(selectedCountryCode);
+      const targetCountry = COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode);
+      if (targetCountry) {
+        setTitle(`Séjour Découverte — ${targetCountry.nameFr}`);
+        setFolderCurrency((targetCountry.currency as CurrencyCode) || 'EUR');
+        if (targetCountry.cities.length > 0) {
+          setPrimaryCityId(targetCountry.cities[0].id);
+        }
+      }
+    }
+  }, [selectedCountryCode, activeFolder, folders.length]);
+
+  React.useEffect(() => {
+    setFeePaymentMethod(currentCountry.paymentMethods[0] || 'Virement bancaire');
+    setCustomCityId((prev) => {
+      if (currentCountry.cities.some((c) => c.id === prev)) return prev;
+      return currentCountry.cities[0]?.id || '';
+    });
+  }, [currentCountry]);
+
   // Dossier Fee Declaration State (Bloc 2)
-  const [feePaymentMethod, setFeePaymentMethod] = useState<string>('MTN Mobile Money');
+  const [feePaymentMethod, setFeePaymentMethod] = useState<string>(
+    () => currentCountry.paymentMethods[0] || 'Virement bancaire'
+  );
   const [feePayerName, setFeePayerName] = useState<string>('');
   const [feePayerPhone, setFeePayerPhone] = useState<string>('');
   const [feeTxRef, setFeeTxRef] = useState<string>('');
@@ -438,7 +475,7 @@ export function JourneyHubView({
 
   // Custom milestone form for Logbook
   const [customStepTitle, setCustomStepTitle] = useState<string>('');
-  const [customCityId, setCustomCityId] = useState<string>('ouidah');
+  const [customCityId, setCustomCityId] = useState<string>(() => currentCountry.cities[0]?.id || '');
   const [customDate, setCustomDate] = useState<string>('2026-11-16');
   const [customPersonalNote, setCustomPersonalNote] = useState<string>('');
   const [customPhotoUrl, setCustomPhotoUrl] = useState<string>('');
@@ -723,9 +760,10 @@ export function JourneyHubView({
     countrySetting,
   ]);
 
-  // 3 Real Budget Scenarios based on actual Benin catalogue items (5.3)
+  // 3 Real Budget Scenarios based on actual country catalogue items (5.3)
   const realBudgetScenarios = useMemo(() => {
-    const city = activeFolder?.primaryCityId || 'cotonou';
+    const targetCountryCode = activeFolder?.countryCode || currentCountry.code;
+    const city = activeFolder?.primaryCityId || currentCountry.cities[0]?.id || '';
     const nights = Math.max(
       1,
       activeFolder
@@ -738,6 +776,7 @@ export function JourneyHubView({
     const cityLodgings = catalogue
       .filter(
         (c) =>
+          c.countryCode === targetCountryCode &&
           c.cityId === city &&
           c.category === 'accommodation' &&
           c.priceKnown !== false &&
@@ -751,6 +790,7 @@ export function JourneyHubView({
         : catalogue
             .filter(
               (c) =>
+                c.countryCode === targetCountryCode &&
                 c.category === 'accommodation' &&
                 c.priceKnown !== false &&
                 c.priceAmount > 0 &&
@@ -761,6 +801,7 @@ export function JourneyHubView({
     const sites = catalogue
       .filter(
         (c) =>
+          c.countryCode === targetCountryCode &&
           c.cityId === city &&
           c.category === 'site' &&
           c.priceKnown !== false &&
@@ -772,32 +813,40 @@ export function JourneyHubView({
     const ecoHotel = allLodgings[0];
     const midHotel = allLodgings[Math.floor(allLodgings.length / 2)] || ecoHotel;
     const confHotel = allLodgings[allLodgings.length - 1] || midHotel;
-    const sampleSiteCost = (sites[0]?.priceAmount || 2500) * 2;
+    const fallbackCountry = COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode) || currentCountry;
+    const baseCur = ecoHotel.currency || fallbackCountry.currency || 'EUR';
+    const sampleSiteCost =
+      sites[0] && sites[0].priceAmount > 0
+        ? convertCurrencyIndicative(sites[0].priceAmount, sites[0].currency || baseCur, baseCur, rateInfo?.rates) * 2
+        : 0;
 
     return [
       {
         id: 'eco',
         label: 'Scénario Économique (catalogue réel)',
         hotelTitle: ecoHotel.title,
-        totalXof: ecoHotel.priceAmount * nights + sampleSiteCost,
+        currency: ecoHotel.currency || baseCur,
+        totalAmount: ecoHotel.priceAmount * nights + sampleSiteCost,
         detail: `${nights} nuit(s) · ${ecoHotel.title}`,
       },
       {
         id: 'equilibre',
         label: 'Scénario Équilibré (catalogue réel)',
         hotelTitle: midHotel.title,
-        totalXof: midHotel.priceAmount * nights + sampleSiteCost * 2,
+        currency: midHotel.currency || baseCur,
+        totalAmount: midHotel.priceAmount * nights + sampleSiteCost * 2,
         detail: `${nights} nuit(s) · ${midHotel.title}`,
       },
       {
         id: 'confort',
         label: 'Scénario Confort (catalogue réel)',
         hotelTitle: confHotel.title,
-        totalXof: confHotel.priceAmount * nights + sampleSiteCost * 3,
+        currency: confHotel.currency || baseCur,
+        totalAmount: confHotel.priceAmount * nights + sampleSiteCost * 3,
         detail: `${nights} nuit(s) · ${confHotel.title}`,
       },
     ];
-  }, [activeFolder, catalogue]);
+  }, [activeFolder, catalogue, currentCountry, rateInfo?.rates]);
 
   // Global Dossier Confirmation Summary & Dependent Services Detection (Lot 1.5)
   const dossierGlobalConfirmation = useMemo(() => {
@@ -1162,7 +1211,7 @@ export function JourneyHubView({
                 Brouillon d’itinéraire conservé
               </span>
               <span className="font-mono text-xs text-slate-500">
-                {sessionDraft.preferredCities?.join(' · ') || 'Bénin'}
+                {sessionDraft.preferredCities?.join(' · ') || currentCountry.nameFr}
               </span>
             </div>
             <div>
@@ -1246,7 +1295,7 @@ export function JourneyHubView({
             Connectez-vous pour ouvrir votre Dossier de Voyage et votre Carnet Souvenir
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed max-w-2xl">
-            Retrouvez automatiquement votre itinéraire actif à travers les 12 départements du Bénin sans jamais créer de doublon involontaire : contrôle d’agenda Journey Brain, transporteur unique par séjour, suivi budgétaire en 6 états et Carnet de Voyage Électronique imprimable en PDF.
+            Retrouvez automatiquement votre itinéraire actif à travers les villes et étapes de {currentCountry.nameFr} sans jamais créer de doublon involontaire : contrôle d’agenda Journey Brain, transporteur unique par séjour, suivi budgétaire en 6 états et Carnet de Voyage Électronique imprimable en PDF.
           </p>
           <button
             type="button"
@@ -1327,7 +1376,7 @@ export function JourneyHubView({
               {activeFolder.startDate} → {activeFolder.endDate}
             </strong>
             <span className="text-[11px] text-teal-700 dark:text-teal-400">
-              Africa/Porto-Novo (UTC+1)
+              {currentCountry.timezone || 'Africa/Porto-Novo (UTC+1)'}
             </span>
           </div>
           <div>
@@ -1708,10 +1757,17 @@ export function JourneyHubView({
                         onChange={(e) => setFeePaymentMethod(e.target.value)}
                         className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                       >
-                        <option value="MTN Mobile Money">MTN Mobile Money</option>
-                        <option value="Moov Money">Moov Money</option>
-                        <option value="Celtiis Cash">Celtiis Cash</option>
-                        <option value="Virement bancaire">Virement bancaire</option>
+                        {Array.from(
+                          new Set([
+                            ...(currentCountry.paymentMethods || []),
+                            'Virement bancaire',
+                            'Carte bancaire',
+                          ])
+                        ).map((pm) => (
+                          <option key={pm} value={pm}>
+                            {pm}
+                          </option>
+                        ))}
                       </select>
                       <input
                         type="text"
@@ -1731,7 +1787,7 @@ export function JourneyHubView({
                             setFeePayerPhone(e.target.value);
                             setIsPhoneVerified(false);
                           }}
-                          placeholder="Téléphone émetteur (+229...)"
+                          placeholder={`Téléphone émetteur (${currentCountry.protocols?.dialingCode || '+...'})`}
                           className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
                         />
                         <div className="flex items-center justify-between text-[11px]">
@@ -1985,14 +2041,14 @@ export function JourneyHubView({
                 <div className="p-4 rounded-xl bg-teal-50/60 dark:bg-teal-950/20 border border-teal-200 dark:border-teal-800/60 flex items-start justify-between gap-3">
                   <div className="space-y-1 text-xs">
                     <p className="font-bold text-teal-900 dark:text-teal-200">
-                      Idée discrète pour un prochain séjour au Bénin
+                      Idée discrète pour un prochain séjour en {currentCountry.nameFr}
                     </p>
                     <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                      Après {activeFolder.primaryCityId}, de nombreux voyageurs découvrent à leur rythme{' '}
+                      Après {activeFolder.primaryCityId}, explorez à votre rythme{' '}
                       <strong>
-                        {activeFolder.primaryCityId === 'cotonou' || activeFolder.primaryCityId === 'ouidah'
-                          ? 'Abomey (palais royaux) ou Natitingou (Tata Somba & Pendjari)'
-                          : 'Grand-Popo (embouchure du Mono) ou Ouidah'}
+                        {currentCountry.cities.length > 1
+                          ? `${currentCountry.cities[1].name} (${currentCountry.cities[1].region})`
+                          : 'de nouvelles régions'}
                       </strong>
                       .
                     </p>
@@ -2012,6 +2068,81 @@ export function JourneyHubView({
         </section>
       )}
 
+      {/* Prominent Automatic Electronic Agenda Showcase (when 0 folders) */}
+      {folders.length === 0 && (
+        <section className="no-print p-6 sm:p-8 bg-gradient-to-br from-[#0B192C] to-slate-900 text-white rounded-3xl border border-slate-800 shadow-xl space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-xs font-bold">
+              <Calendar className="w-4 h-4 text-amber-400" />
+              <span>Agenda Électronique Automatique Journey Brain</span>
+            </div>
+            <span className="text-xs text-slate-400">
+              Destination active : <strong className="text-white">{currentCountry.nameFr}</strong> ({currentCountry.code})
+            </span>
+          </div>
+
+          <div className="space-y-3 max-w-3xl">
+            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white leading-snug">
+              Votre Agenda Électronique Automatique &amp; Contrôle de Cohérence en Temps Réel
+            </h2>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Sur AMARO, votre agenda se structure automatiquement sans saisie fastidieuse. Dès l’ajout d’un hébergement, d’un transport ou d’une visite, le moteur Journey Brain vérifie la chronologie, alerte contre les conflits horaires et applique la règle du transporteur unique pour garantir un voyage fluide en {currentCountry.nameFr}.
+            </p>
+          </div>
+
+          {/* 4 Pillars Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-400/20 text-amber-300 flex items-center justify-center font-bold text-xs">
+                1
+              </div>
+              <h3 className="font-display text-xs font-bold text-white">
+                Chronologie Automatique
+              </h3>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Vos étapes s’ordonnent instantanément par jour et heure. Zéro risque de chevauchement.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+              <div className="w-8 h-8 rounded-xl bg-teal-400/20 text-teal-300 flex items-center justify-center font-bold text-xs">
+                2
+              </div>
+              <h3 className="font-display text-xs font-bold text-white">
+                Détecteur de Conflits
+              </h3>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Diagnostic en direct sur les temps de trajet entre villes et les doublons de réservation.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-400/20 text-emerald-300 flex items-center justify-center font-bold text-xs">
+                3
+              </div>
+              <h3 className="font-display text-xs font-bold text-white">
+                Transporteur Unique
+              </h3>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Un seul loueur principal attitré par séjour, avec courses urbaines libres (VTC/taxis).
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+              <div className="w-8 h-8 rounded-xl bg-indigo-400/20 text-indigo-300 flex items-center justify-center font-bold text-xs">
+                4
+              </div>
+              <h3 className="font-display text-xs font-bold text-white">
+                Budget Réel &amp; PDF
+              </h3>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Suivi transparent des 6 états de dépenses et carnet souvenir imprimable en un clic.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Create New Journey Folder Form */}
       {(showNewFolderForm || folders.length === 0) && (
         <form
@@ -2020,7 +2151,9 @@ export function JourneyHubView({
         >
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-              Créer un Nouveau Dossier de Voyage Intelligent
+              {folders.length === 0
+                ? `Activer mon Premier Dossier & Agenda Automatique (${currentCountry.nameFr})`
+                : 'Créer un Nouveau Dossier de Voyage Intelligent'}
             </h2>
             {folders.length > 0 && (
               <button
@@ -2060,7 +2193,8 @@ export function JourneyHubView({
                     const next = e.target.value;
                     setCountryCode(next);
                     const c = COUNTRIES_REGISTRY.find((x) => x.code === next);
-                    if (c && c.cities[0]) setPrimaryCityId(c.cities[0].id);
+                    if (c?.cities[0]) setPrimaryCityId(c.cities[0].id);
+                    if (c?.currency) setFolderCurrency(c.currency as CurrencyCode);
                   }}
                   className="min-h-[44px] px-2.5 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                 >
@@ -2162,9 +2296,38 @@ export function JourneyHubView({
                 onChange={(e) => setFolderCurrency(e.target.value as CurrencyCode)}
                 className="w-full min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               >
-                <option value="XOF">XOF (Franc CFA)</option>
-                <option value="EUR">EUR (Euro)</option>
-                <option value="USD">USD (Dollar US)</option>
+                {Array.from(
+                  new Set([
+                    selectedCountry.currency,
+                    'XOF',
+                    'XAF',
+                    'MAD',
+                    'TND',
+                    'GHS',
+                    'NGN',
+                    'EGP',
+                    'ZAR',
+                    'KES',
+                    'TZS',
+                    'RWF',
+                    'ETB',
+                    'EUR',
+                    'TRY',
+                    'AED',
+                    'USD',
+                  ])
+                ).map((cur) => (
+                  <option key={cur} value={cur}>
+                    {cur}
+                    {cur === selectedCountry.currency
+                      ? ` (Devise locale · ${selectedCountry.nameFr})`
+                      : cur === 'EUR'
+                      ? ' (Euro)'
+                      : cur === 'USD'
+                      ? ' (Dollar US)'
+                      : ''}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -2514,7 +2677,7 @@ export function JourneyHubView({
             {realBudgetScenarios.length > 0 && (
               <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
                 <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                  Repères budgétaires réels basés sur le catalogue Bénin ({activeFolder.primaryCityId}) :
+                  Repères budgétaires réels basés sur le catalogue {currentCountry.nameFr} ({activeFolder.primaryCityId}) :
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                   {realBudgetScenarios.map((sc) => (
@@ -2526,10 +2689,13 @@ export function JourneyHubView({
                         {sc.label}
                       </span>
                       <span className="font-mono text-teal-700 dark:text-teal-400 font-bold block">
-                        {formatMoney(
-                          convertValue(sc.totalXof, 'XOF', budgetBreakdown.targetCur, rateInfo?.rates),
-                          budgetBreakdown.targetCur
-                        )}
+                        {formatMoney(sc.totalAmount, sc.currency)}
+                        {budgetBreakdown.targetCur !== sc.currency
+                          ? ` (≈ ${formatMoney(
+                              convertValue(sc.totalAmount, sc.currency, budgetBreakdown.targetCur, rateInfo?.rates),
+                              budgetBreakdown.targetCur
+                            )})`
+                          : ''}
                       </span>
                       <span className="text-[11px] text-slate-500 block truncate">{sc.detail}</span>
                     </div>
@@ -2833,7 +2999,7 @@ export function JourneyHubView({
 
             {logbookSummary.allRows.length === 0 ? (
               <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500">
-                Votre carnet se remplit automatiquement avec les étapes de votre itinéraire, ou via le formulaire ci-dessous pour vos découvertes spontanées au Bénin.
+                Votre carnet se remplit automatiquement avec les étapes de votre itinéraire, ou via le formulaire ci-dessous pour vos découvertes spontanées en {currentCountry.nameFr}.
               </div>
             ) : (
               <div className="space-y-3">
@@ -3081,7 +3247,7 @@ export function JourneyHubView({
                 onChange={(e) => setCustomCityId(e.target.value)}
                 className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               >
-                {COUNTRIES_REGISTRY[0].cities.map((c) => (
+                {currentCountry.cities.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>

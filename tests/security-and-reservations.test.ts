@@ -51,6 +51,7 @@ import {
   BENIN_PUBLIC_DIRECTORY,
   COUNTRIES_REGISTRY,
   EDITORIAL_IMAGES,
+  resolveItemEditorialImage,
   shouldShowIllustrationBadge,
 } from '../src/data/amaroRegistry';
 import {
@@ -4831,8 +4832,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     }
     assert.equal(jpQuoteRes.status, 200);
     assert.equal(jpQuoteJson.breakdown.providerPrice, 850000);
-    assert.equal(jpQuoteJson.breakdown.amaroFee, 51500); // 850000 * 0.06 + 500 = 51500
-    assert.equal(jpQuoteJson.breakdown.totalAmount, 901500);
+    assert.equal(jpQuoteJson.breakdown.amaroFee, 4000); // 850000 * 0.06 + 500 = 51500 -> Plafonné à 4000 FCFA
+    assert.equal(jpQuoteJson.breakdown.totalAmount, 854000);
 
     // 46d. Server-authoritative quote calculation for an American destination (USA Central Park)
     store.settings.set('US', {
@@ -4858,6 +4859,246 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(usQuoteJson.breakdown.providerPrice, 38000);
     assert.equal(usQuoteJson.breakdown.amaroFee, 2780); // 38000 * 0.06 + 500 = 2780
     assert.equal(usQuoteJson.breakdown.totalAmount, 40780);
+  });
+
+  it('47. Partie A & Lot 1 (10 pays) — Isolation stricte sans contamination du Bénin, emplacement photo_a_ajouter et complétude des 10 pays', async () => {
+    const beninLeakRegex = /\b(cotonou|ouidah|abomey|porto-novo|ganvie|grand-popo|natitingou|parakou|pendjari|benin|bénin|fcfa)\b/i;
+
+    for (const item of ALL_PUBLIC_DIRECTORIES) {
+      if (item.countryCode === 'BJ') continue;
+
+      // 47a. Aucune image béninoise réutilisée hors Bénin sans customPhotoUrl
+      const img = resolveItemEditorialImage(item);
+      if (!item.customPhotoUrl) {
+        assert.equal(img.indicator, 'photo_a_ajouter', `Photo à ajouter attendue pour ${item.id}`);
+        assert.equal(img.src, '', `Aucune URL d’image béninoise ne doit fuiter sur ${item.id}`);
+      }
+
+      // 47b. Zéro contamination textuelle ou monétaire du Bénin
+      const countryDef = COUNTRIES_REGISTRY.find((c) => c.code === item.countryCode);
+      assert.ok(countryDef, `Pays introuvable pour ${item.id} (${item.countryCode})`);
+      assert.equal(item.currency, countryDef.currency, `Devise incohérente sur ${item.id}: ${item.currency} vs ${countryDef.currency}`);
+
+      const textBlob = [item.title, item.address, item.description, item.priceRangeNote || '', item.verificationNote || ''].join(' ');
+      assert.equal(beninLeakRegex.test(textBlob), false, `Contamination Bénin/FCFA détectée sur ${item.id}`);
+    }
+
+    // 47c. Vérification complète des 10 pays du Lot 1
+    const lot1Codes = ['CI', 'MA', 'SN', 'TG', 'GH', 'NG', 'CM', 'FR', 'EG', 'ZA'];
+    for (const code of lot1Codes) {
+      const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code);
+      assert.ok(cDef, `Pays Lot 1 manquant: ${code}`);
+      assert.ok(cDef.protocols, `Protocoles du voyageur manquants pour ${code}`);
+      assert.ok(cDef.protocols!.visaFr.length > 10, `Visa manquant pour ${code}`);
+      assert.ok(cDef.protocols!.vaccinesHealthFr.length > 5, `Vaccins manquants pour ${code}`);
+      assert.ok(cDef.protocols!.electricalPlugs.length > 3, `Prises électriques manquantes pour ${code}`);
+      assert.ok(cDef.protocols!.tippingFr.length > 5, `Pourboires manquants pour ${code}`);
+      assert.ok(cDef.protocols!.seasonsFr.length > 10, `Saisons manquantes pour ${code}`);
+      assert.ok(cDef.protocols!.securityFr.length > 10, `Sécurité manquante pour ${code}`);
+      assert.ok(cDef.paymentMethods.length >= 2, `Moyens de paiement manquants pour ${code}`);
+      assert.ok(cDef.timezone.length > 3, `Fuseau horaire manquant pour ${code}`);
+      assert.ok(cDef.localRulesFr.length >= 1, `Règles culturelles manquantes pour ${code}`);
+      assert.ok(cDef.languages.length >= 2, `Langues insuffisantes pour ${code}`);
+
+      const items = ALL_PUBLIC_DIRECTORIES.filter((it) => it.countryCode === code);
+      const validCityIds = new Set(cDef.cities.map((ct) => ct.id));
+      for (const it of items) {
+        assert.ok(validCityIds.has(it.cityId), `Ville invalide ${it.cityId} sur ${it.id} (${code})`);
+      }
+
+      const acc = items.filter((it) => it.category === 'accommodation');
+      const resid = acc.filter((it) => it.standing === 'residence_meublee');
+      const resto = items.filter((it) => it.category === 'restaurant');
+      const transp = items.filter((it) => it.category === 'transport');
+      const sites = items.filter((it) => it.category === 'site');
+      const leisure = items.filter((it) => ['wellness', 'shopping', 'translation'].includes(it.category));
+
+      assert.ok(acc.length >= 5, `${code}: au moins 5 hébergements`);
+      assert.ok(resid.length >= 1, `${code}: au moins 1 résidence meublée / appart-hôtel`);
+      assert.ok(resto.length >= 2, `${code}: au moins 2 restaurants / spécialités`);
+      assert.ok(transp.length >= 2, `${code}: au moins 2 solutions de transport`);
+      assert.ok(sites.length >= 4, `${code}: au moins 4 sites touristiques`);
+      assert.ok(leisure.length >= 2, `${code}: au moins 2 loisirs / artisanat / guides`);
+    }
+
+    // 47d. Isolation serveur Amaro Assistant par countryCode (ex: Maroc & France ne doivent jamais citer Cotonou ou FCFA)
+    const prevSim = simulateHumanFallback;
+    simulateHumanFallback = true;
+    try {
+      for (const [testCode, expectedCur] of [['MA', 'MAD'], ['FR', 'EUR']] as const) {
+        const assistantRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer valid-traveler-jwt',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: 'Bonjour, quel est le budget et quelles villes visiter ?',
+            countryCode: testCode,
+            locale: 'fr',
+          }),
+        });
+        assert.equal(assistantRes.status, 200);
+        const assistantJson: any = await assistantRes.json();
+        assert.equal(assistantJson.countryCode, testCode);
+        assert.equal(beninLeakRegex.test(assistantJson.reply), false, `Réponse Assistant ${testCode} contaminée par le Bénin: ${assistantJson.reply}`);
+        assert.ok(assistantJson.reply.includes(expectedCur) || assistantJson.reply.includes(testCode === 'MA' ? 'Maroc' : 'France'));
+      }
+    } finally {
+      simulateHumanFallback = prevSim;
+    }
+  });
+
+  it('48. Contrôle Lot 1 (10 pays) & Lot 2 (10 pays : TN, KE, TZ, RW, ET, ES, IT, PT, TR, AE) — Standard complet, zéro valeur inventée, zéro contamination et sélecteur des 20 pays', async () => {
+    const beninLeakRegex = /\b(cotonou|ouidah|abomey|porto-novo|ganvie|grand-popo|natitingou|parakou|pendjari|benin|bénin|fcfa)\b/i;
+
+    // 48a. Re-check Lot 1 stricter standards (all 7 categories covered or full required categories + economique + no unconfirmed price > 0)
+    const lot1Codes = ['CI', 'MA', 'SN', 'TG', 'GH', 'NG', 'CM', 'FR', 'EG', 'ZA'];
+    for (const code of lot1Codes) {
+      const items = ALL_PUBLIC_DIRECTORIES.filter((it) => it.countryCode === code);
+      const acc = items.filter((it) => it.category === 'accommodation');
+      const hasBudget = acc.some((it) => it.standing === 'economique');
+      const hasResid = acc.some((it) => it.standing === 'residence_meublee');
+      const resto = items.filter((it) => it.category === 'restaurant');
+      const transp = items.filter((it) => it.category === 'transport');
+      const sites = items.filter((it) => it.category === 'site');
+      const wellness = items.filter((it) => it.category === 'wellness');
+      const shopping = items.filter((it) => it.category === 'shopping');
+      const trans = items.filter((it) => it.category === 'translation');
+
+      assert.ok(hasBudget, `${code} Lot 1 doit inclure au moins 1 hébergement économique`);
+      assert.ok(hasResid, `${code} Lot 1 doit inclure au moins 1 résidence meublée`);
+      assert.ok(resto.length >= 2, `${code} Lot 1 doit inclure >=2 restaurants`);
+      assert.ok(transp.length >= 3, `${code} Lot 1 doit inclure >=3 solutions transport (aéroport, VTC/taxi, location/rail)`);
+      assert.ok(sites.length >= 4, `${code} Lot 1 doit inclure >=4 sites`);
+      assert.ok(wellness.length >= 1, `${code} Lot 1 doit inclure >=1 loisir/bien-être`);
+      assert.ok(shopping.length >= 1, `${code} Lot 1 doit inclure >=1 artisanat/marché`);
+      assert.ok(trans.length >= 1, `${code} Lot 1 doit inclure >=1 guide/interprète`);
+
+      for (const it of items) {
+        if (it.verificationStatus === 'to_confirm') {
+          assert.equal(it.priceAmount, 0, `${it.id} (to_confirm) ne doit pas afficher un prix arbitraire > 0`);
+          assert.equal(it.priceKnown, false, `${it.id} (to_confirm) doit avoir priceKnown: false`);
+        }
+      }
+    }
+
+    // 48b. Verify all 10 Lot 2 countries meet exact Benin-level structural standard
+    const lot2Expectations: Record<string, string> = {
+      TN: 'TND',
+      KE: 'KES',
+      TZ: 'TZS',
+      RW: 'RWF',
+      ET: 'ETB',
+      ES: 'EUR',
+      IT: 'EUR',
+      PT: 'EUR',
+      TR: 'TRY',
+      AE: 'AED',
+    };
+
+    for (const [code, expectedCur] of Object.entries(lot2Expectations)) {
+      const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code);
+      assert.ok(cDef, `Pays Lot 2 manquant: ${code}`);
+      assert.equal(cDef.currency, expectedCur, `Devise attendue pour ${code}: ${expectedCur}, obtenu ${cDef.currency}`);
+      assert.ok(cDef.languages.length >= 2, `Langues insuffisantes pour ${code}`);
+      assert.ok(cDef.paymentMethods.length >= 2, `Moyens de paiement insuffisants pour ${code}`);
+      assert.ok(cDef.emergencyNumbers.length >= 1, `Numéros d'urgence insuffisants pour ${code}`);
+      assert.ok(cDef.protocols && cDef.protocols.visaFr.length > 10, `Protocoles visa manquants pour ${code}`);
+      assert.ok(cDef.protocols!.electricalPlugs.length > 3, `Prises électriques manquantes pour ${code}`);
+      assert.ok(cDef.protocols!.seasonsFr.length > 10, `Saisons manquantes pour ${code}`);
+      assert.ok(cDef.protocols!.securityFr.length > 10, `Sécurité manquante pour ${code}`);
+
+      const items = ALL_PUBLIC_DIRECTORIES.filter((it) => it.countryCode === code);
+      const validCityIds = new Set(cDef.cities.map((ct) => ct.id));
+      const acc = items.filter((it) => it.category === 'accommodation');
+      const resto = items.filter((it) => it.category === 'restaurant');
+      const transp = items.filter((it) => it.category === 'transport');
+      const sites = items.filter((it) => it.category === 'site');
+      const wellness = items.filter((it) => it.category === 'wellness');
+      const shopping = items.filter((it) => it.category === 'shopping');
+      const trans = items.filter((it) => it.category === 'translation');
+
+      assert.ok(acc.length >= 4, `${code} Lot 2 doit avoir >=4 hébergements`);
+      assert.ok(acc.some((it) => it.standing === 'economique'), `${code} doit inclure un hébergement économique`);
+      assert.ok(acc.some((it) => it.standing === 'residence_meublee'), `${code} doit inclure une résidence meublée / appart-hôtel`);
+      assert.ok(resto.length >= 2, `${code} Lot 2 doit avoir >=2 restaurants / spécialités`);
+      assert.ok(transp.length >= 3, `${code} Lot 2 doit avoir >=3 transports`);
+      assert.ok(sites.length >= 3, `${code} Lot 2 doit avoir >=3 sites`);
+      assert.ok(wellness.length >= 1, `${code} Lot 2 doit avoir >=1 loisir/bien-être`);
+      assert.ok(shopping.length >= 1, `${code} Lot 2 doit avoir >=1 artisanat/shopping`);
+      assert.ok(trans.length >= 1, `${code} Lot 2 doit avoir >=1 guide/interprète`);
+
+      for (const it of items) {
+        assert.ok(validCityIds.has(it.cityId), `Ville invalide ${it.cityId} sur ${it.id} (${code})`);
+        assert.equal(it.currency, expectedCur, `Devise incohérente sur ${it.id}: ${it.currency} vs ${expectedCur}`);
+        const img = resolveItemEditorialImage(it);
+        if (!it.customPhotoUrl) {
+          assert.equal(img.indicator, 'photo_a_ajouter');
+          assert.equal(img.src, '');
+        }
+        const blob = [it.title, it.address, it.description, it.priceRangeNote || '', it.verificationNote || ''].join(' ');
+        assert.equal(beninLeakRegex.test(blob), false, `Contamination Bénin/FCFA détectée sur ${it.id}`);
+        if (it.verificationStatus === 'to_confirm') {
+          assert.equal(it.priceAmount, 0, `${it.id} (to_confirm) ne doit pas afficher un prix arbitraire > 0`);
+          assert.equal(it.priceKnown, false, `${it.id} (to_confirm) doit avoir priceKnown: false`);
+        }
+      }
+    }
+
+    // 48c. Country selector switching across ALL 20 countries (10 Lot 1 + 10 Lot 2) via Assistant & Quote API
+    const all20Codes = [...lot1Codes, ...Object.keys(lot2Expectations)];
+    const prevSim = simulateHumanFallback;
+    simulateHumanFallback = true;
+    try {
+      for (let i = 0; i < all20Codes.length; i += 1) {
+        const testCode = all20Codes[i];
+        const cDef = COUNTRIES_REGISTRY.find((c) => c.code === testCode)!;
+        const assistantRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-forwarded-for': `198.51.100.${160 + i}`,
+          },
+          body: JSON.stringify({
+            message: 'Bonjour, quelles villes et quel budget prévoir ?',
+            countryCode: testCode,
+            locale: 'fr',
+          }),
+        });
+        assert.equal(assistantRes.status, 200, `Assistant HTTP 200 attendu pour ${testCode}`);
+        const assistantJson: any = await assistantRes.json();
+        assert.equal(assistantJson.countryCode, testCode);
+        assert.equal(beninLeakRegex.test(assistantJson.reply), false, `Réponse Assistant ${testCode} contaminée: ${assistantJson.reply}`);
+        assert.ok(assistantJson.reply.includes(cDef.currency) || assistantJson.reply.includes(cDef.nameFr));
+
+        // Verify at least one service per country quotes cleanly on /api/amaro/finance/quote
+        const sampleItem = ALL_PUBLIC_DIRECTORIES.find((it) => it.countryCode === testCode);
+        assert.ok(sampleItem, `Catalogue non vide attendu pour ${testCode}`);
+        store.settings.set(testCode, {
+          countryCode: testCode,
+          commissionPercent: 10,
+          partnerMarginPercent: 10,
+          directoryMarginPercent: 6,
+          serviceFeeFlat: 0,
+          taxPercent: 0,
+          currency: cDef.currency,
+        });
+        const qRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serviceId: sampleItem.id,
+            participants: 1,
+          }),
+        });
+        assert.equal(qRes.status, 200, `Quote HTTP 200 attendu pour ${testCode} (${sampleItem.id})`);
+        const qJson: any = await qRes.json();
+        assert.equal(qJson.sourceCurrency, cDef.currency);
+      }
+    } finally {
+      simulateHumanFallback = prevSim;
+    }
   });
 });
 

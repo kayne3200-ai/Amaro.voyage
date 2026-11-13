@@ -1,6 +1,7 @@
 import type {
   CatalogueItem,
   CountryDefinition,
+  PhotoIndicatorType,
   ValidationMatrixRow,
 } from '../types/amaro';
 import { BENIN_ACCOMMODATIONS_DIRECTORY } from './beninAccommodations';
@@ -44,6 +45,15 @@ import {
   TOP_AMERICAS_PART2_COUNTRIES_DEFS,
   TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
 } from './americasTopCountriesPart2';
+import {
+  enhanceLot1CountryDef,
+  NIGERIA_COUNTRY_DEF,
+} from './lot1ProtocolsAndCities';
+import { LOT1_CATALOGUE_A } from './lot1CountriesCatalogueA';
+import { LOT1_CATALOGUE_B } from './lot1CountriesCatalogueB';
+import { enhanceLot2CountryDef } from './lot2ProtocolsAndCities';
+import { LOT2_CATALOGUE_A } from './lot2CountriesCatalogueA';
+import { LOT2_CATALOGUE_B } from './lot2CountriesCatalogueB';
 
 const cotonouCoastImg = new URL('../assets/images/benin_cotonou_coastline_1793469936805.jpg', import.meta.url).href;
 const calaviLagoonImg = new URL('../assets/images/benin_calavi_lagoon_1793469937987.jpg', import.meta.url).href;
@@ -71,7 +81,7 @@ const pendjariSafariFauneImg = new URL('../assets/images/pendjari_safari_faune_1
 const guideCultureBeninImg = new URL('../assets/images/guide_culture_benin_1793965188977.jpg', import.meta.url).href;
 const pirogueLacNokoueImg = new URL('../assets/images/pirogue_lac_nokoue_1793965204380.jpg', import.meta.url).href;
 
-export type PhotoIndicatorType = 'propre_etablissement' | 'illustration' | 'a_verifier';
+export type { PhotoIndicatorType };
 
 export interface EditorialImageMeta {
   src: string;
@@ -317,6 +327,9 @@ export function resolveItemEditorialImage(
   }
 
   const baseResolved = resolveItemEditorialImageBase(item);
+  if (baseResolved.indicator === 'photo_a_ajouter' || !baseResolved.src) {
+    return baseResolved;
+  }
   if (item?.photoIndicator) {
     return { ...baseResolved, indicator: item.photoIndicator };
   }
@@ -326,6 +339,20 @@ export function resolveItemEditorialImage(
 function resolveItemEditorialImageBase(
   item: Partial<CatalogueItem> | null | undefined
 ): EditorialImageMeta {
+  // RÈGLE STRICTE DE NON-CONTAMINATION : Pour tout pays hors Bénin,
+  // ne JAMAIS réutiliser les 13 photos béninoises.
+  // Si aucune photo certifiée n'est fournie, renvoyer un statut propre "photo_a_ajouter".
+  if (item?.countryCode && item.countryCode !== 'BJ') {
+    return {
+      key: 'photo_a_ajouter',
+      src: '',
+      alt: item.title ? `Photo de ${item.title} à ajouter` : 'Photo à ajouter',
+      license: 'En attente',
+      sourceNote: 'Emplacement réservé — cliché authentique du lieu à ajouter',
+      author: 'AMARO',
+      indicator: 'photo_a_ajouter',
+    };
+  }
 
   const cat = item?.category;
   const title = (item?.title || '').toLowerCase();
@@ -439,20 +466,19 @@ function resolveItemEditorialImageBase(
     return EDITORIAL_IMAGES[item.imageKey];
   }
 
-  // Fallback élégant par ville (Bénin, Côte d'Ivoire, Sénégal, Togo, Ghana, etc.)
-  if (city === 'ouidah' || city === 'grand-bassam' || city === 'goree' || city === 'cape-coast') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
-  if (city === 'portonovo' || city === 'abidjan' || city === 'dakar' || city === 'lome' || city === 'accra' || city === 'douala' || city === 'casablanca' || city === 'nice') return EDITORIAL_IMAGES.cotonou_coast;
-  if (city === 'yamoussoukro' || city === 'le-caire' || city === 'paris') return EDITORIAL_IMAGES.monument_amazone_cotonou;
+  // Fallback par ville du Bénin uniquement (les autres pays utilisent photo_a_ajouter sans image béninoise)
+  if (city === 'ouidah') return EDITORIAL_IMAGES.porte_non_retour_ouidah;
+  if (city === 'porto-novo' || city === 'cotonou') return EDITORIAL_IMAGES.cotonou_coast;
   if (city === 'abomey' || city === 'bohicon') return EDITORIAL_IMAGES.abomey_royal;
-  if (city === 'grandpopo' || city === 'assinie' || city === 'grand-bereby' || city === 'sassandra' || city === 'saly' || city === 'cap-skirring' || city === 'kribi' || city === 'djerba' || city === 'pointe-noire') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
-  if (city === 'natitingou' || city === 'man' || city === 'kpalime' || city === 'kara' || city === 'agadez' || city === 'djenne' || city === 'fes') return EDITORIAL_IMAGES.atacora_tata;
-  if (city === 'parakou' || city === 'korhogo' || city === 'bouake' || city === 'kumasi' || city === 'ouagadougou' || city === 'bobo-dioulasso') return EDITORIAL_IMAGES.parakou_heritage;
-  if (city === 'niamey' || city === 'bamako' || city === 'brazzaville' || city === 'kinshasa') return EDITORIAL_IMAGES.calavi_lagoon;
+  if (city === 'grand-popo' || city === 'possotome') return EDITORIAL_IMAGES.casadelpapa_ouidah_beach;
+  if (city === 'natitingou' || city === 'boukoumbe' || city === 'tanguieta') return EDITORIAL_IMAGES.atacora_tata;
+  if (city === 'parakou' || city === 'nikki' || city === 'kandi' || city === 'djougou') return EDITORIAL_IMAGES.parakou_heritage;
+  if (city === 'abomey-calavi' || city === 'ganvie') return EDITORIAL_IMAGES.calavi_lagoon;
 
   return EDITORIAL_IMAGES.monument_amazone_cotonou;
 }
 
-export const COUNTRIES_REGISTRY: CountryDefinition[] = [
+const RAW_COUNTRIES_REGISTRY: CountryDefinition[] = [
   {
     code: 'BJ',
     nameFr: 'Bénin',
@@ -714,6 +740,7 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
     ],
   },
   COTE_DIVOIRE_COUNTRY_DEF,
+  NIGERIA_COUNTRY_DEF,
   ...EXTENDED_COUNTRIES_DEFS,
   ...TOP_AFRICA_COUNTRIES_DEFS,
   ...TOP_EUROPE_COUNTRIES_DEFS,
@@ -723,6 +750,10 @@ export const COUNTRIES_REGISTRY: CountryDefinition[] = [
   ...TOP_AMERICAS_COUNTRIES_DEFS,
   ...TOP_AMERICAS_PART2_COUNTRIES_DEFS,
 ];
+
+export const COUNTRIES_REGISTRY: CountryDefinition[] = RAW_COUNTRIES_REGISTRY.map((country) =>
+  enhanceLot2CountryDef(enhanceLot1CountryDef(country))
+);
 
 // Unified Real Public Directory of Benin (175 real documented entries: 110 Accommodations + 21 Heritage/Natural Sites + 44 Transports/Linguistic/Complementary Services [172 third-party establishments + 3 AMARO human assistance offers])
 export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
@@ -740,6 +771,10 @@ export { TOP_ASIA_PUBLIC_DIRECTORY } from './asiaTopCountries';
 export { TOP_ASIA_PART2_PUBLIC_DIRECTORY } from './asiaTopCountriesPart2';
 export { TOP_AMERICAS_PUBLIC_DIRECTORY } from './americasTopCountries';
 export { TOP_AMERICAS_PART2_PUBLIC_DIRECTORY } from './americasTopCountriesPart2';
+export { LOT1_CATALOGUE_A } from './lot1CountriesCatalogueA';
+export { LOT1_CATALOGUE_B } from './lot1CountriesCatalogueB';
+export { LOT2_CATALOGUE_A } from './lot2CountriesCatalogueA';
+export { LOT2_CATALOGUE_B } from './lot2CountriesCatalogueB';
 
 export const ALL_PUBLIC_DIRECTORIES: CatalogueItem[] = [
   ...BENIN_PUBLIC_DIRECTORY,
@@ -752,6 +787,10 @@ export const ALL_PUBLIC_DIRECTORIES: CatalogueItem[] = [
   ...TOP_ASIA_PART2_PUBLIC_DIRECTORY,
   ...TOP_AMERICAS_PUBLIC_DIRECTORY,
   ...TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
+  ...LOT1_CATALOGUE_A,
+  ...LOT1_CATALOGUE_B,
+  ...LOT2_CATALOGUE_A,
+  ...LOT2_CATALOGUE_B,
 ];
 
 // Clearly marked Demonstration / Test entries (kept separate and never presented as real partners)

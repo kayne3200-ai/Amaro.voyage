@@ -935,8 +935,8 @@ export function WorkspacesAdminView({
     setAdmTitle(item.title);
     setAdmCategory(item.category);
     setAdmCity(item.cityId);
-    setAdmAddress(item.address);
-    setAdmDesc(item.description);
+    setAdmAddress(item.address || '');
+    setAdmDesc(item.description || '');
     setAdmPrice(item.priceAmount);
     setAdmPriceKnown(item.priceKnown !== false);
     setAdmDuration(item.durationMinutes);
@@ -944,7 +944,7 @@ export function WorkspacesAdminView({
     setAdmOrigin(item.dataOrigin);
     setAdmVerif(item.verificationStatus || 'verified');
     setAdmStatus(item.status);
-    setAdmImgKey(item.imageKey);
+    setAdmImgKey(item.imageKey || '');
     setAdmCustomPhotoUrl(item.customPhotoUrl || '');
     setAdmPhotoVerified(Boolean(item.photoVerified));
     setAdmSourceName(item.sourceName || '');

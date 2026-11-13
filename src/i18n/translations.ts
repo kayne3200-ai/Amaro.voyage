@@ -57,20 +57,20 @@ export const TRANSLATIONS: Record<
       signOut: 'Déconnexion',
     },
     hero: {
-      kicker: 'Compagnon Universel de Voyage · Écosystème Touristique National du Bénin',
-      title: 'Explorez le Bénin, organisez votre itinéraire et vivez votre carnet de voyage.',
+      kicker: 'Compagnon Universel de Voyage · Écosystème Touristique Mondial',
+      title: 'Explorez chaque pays, organisez votre itinéraire et vivez votre carnet de voyage.',
       subtitle:
-        'Découvrez gratuitement les 12 départements du Bénin, plus de 100 hébergements réels recensés du littoral à la Pendjari, les sites patrimoniaux UNESCO, les transports nationaux, et coordonnez tout votre séjour dans un espace personnel permanent.',
+        'Découvrez gratuitement des milliers d’hébergements réels vérifiés, restaurants du terroir, transports officiels, sites patrimoniaux et services locaux, et coordonnez tout votre séjour dans un espace personnel permanent.',
       primaryCta: 'Créer mon voyage',
-      secondaryCta: 'Explorer le Bénin (Gratuit)',
+      secondaryCta: 'Guide & Formalités du Pays',
       catalogueCta: 'Parcourir le catalogue',
       freeNote:
-        'Encyclopédie du Bénin, catalogue national, agenda Journey Brain, carnet électronique et urgences 100 % gratuits.',
+        'Guides culturels, répertoires nationaux vérifiés, agenda Journey Brain, carnet électronique et numéros d’urgence 100 % gratuits.',
     },
     pillars: {
-      companionTitle: '01. Explorer le Bénin librement',
+      companionTitle: '01. Explorer chaque pays librement',
       companionDesc:
-        'Histoire, géographie, 12 départements, patrimoine royal et Vodun, parcs nationaux, gastronomie, langues et conseils culturels accessibles sans création de compte.',
+        'Histoire, géographie, territoires locaux, patrimoine culturel, gastronomie du terroir, langues et conseils de savoir-vivre accessibles sans création de compte.',
       brainTitle: '02. Dossier & Carnet Électronique',
       brainDesc:
         'Retrouvez votre voyage en cours, cochez vos étapes réalisées, ajoutez vos souvenirs personnels, évitez les conflits d’horaires ou de transporteurs et exportez votre carnet en PDF.',
@@ -112,7 +112,7 @@ export const TRANSLATIONS: Record<
   en: {
     nav: {
       explorer: 'Home',
-      discoverBenin: 'Benin Guide & e-Visa',
+      discoverBenin: 'Country Guide & Formalities',
       journey: 'My Journey',
       assistant: 'Assistant',
       rescue: 'Rescue',
@@ -121,20 +121,20 @@ export const TRANSLATIONS: Record<
       signOut: 'Sign Out',
     },
     hero: {
-      kicker: 'Universal Travel Companion · National Tourism Ecosystem of Benin',
-      title: 'Explore Benin, coordinate your itinerary, and keep your digital travel logbook.',
+      kicker: 'Universal Travel Companion · Global Tourism Ecosystem',
+      title: 'Explore every country, coordinate your itinerary, and keep your digital travel logbook.',
       subtitle:
-        'Freely discover Benin’s 12 departments, 100+ real accommodations from the Atlantic coast to Pendjari National Park, UNESCO heritage sites, national transport operators, and manage your trip in one permanent personal space.',
+        'Freely discover thousands of verified real accommodations, local gastronomy, official transport, heritage landmarks, and coordinate your trip in one permanent personal space.',
       primaryCta: 'Create my journey',
-      secondaryCta: 'Explore Benin (Free)',
+      secondaryCta: 'Country Guide & Entry',
       catalogueCta: 'Browse directory',
       freeNote:
-        'Benin cultural encyclopedia, national directory, Journey Brain planner, digital logbook, and emergency guide are 100% free.',
+        'Cultural guides, verified national directories, Journey Brain planner, digital logbook, and emergency contacts are 100% free.',
     },
     pillars: {
-      companionTitle: '01. Freely Explore Benin',
+      companionTitle: '01. Freely Explore Each Territory',
       companionDesc:
-        'History, geography, 12 departments, royal & Vodun heritage, national parks, cuisine, languages, and cultural etiquette accessible without sign-in.',
+        'History, geography, local provinces, royal & living heritage, national parks, authentic cuisine, languages, and cultural etiquette accessible without sign-in.',
       brainTitle: '02. Permanent Folder & Digital Logbook',
       brainDesc:
         'Resume your active journey automatically, check off completed milestones, write personal memories, prevent schedule/transport conflicts, and export a souvenir PDF.',

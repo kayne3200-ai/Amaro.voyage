@@ -39,8 +39,6 @@ import {
   IdentityVerificationModal,
 } from './IdentityVerificationModal';
 
-const BENIN_CITIES = COUNTRIES_REGISTRY.find((c) => c.code === 'BJ')?.cities || [];
-const CI_CITIES = COUNTRIES_REGISTRY.find((c) => c.code === 'CI')?.cities || [];
 const ALL_CITIES = COUNTRIES_REGISTRY.flatMap((c) => c.cities);
 const CATEGORY_LIST: ServiceCategory[] = [
   'accommodation',
@@ -124,6 +122,7 @@ interface PromoteServicesViewProps {
     scheduledDate?: string;
     scheduledTime?: string;
   }) => Promise<void>;
+  selectedCountryCode?: string;
 }
 
 export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
@@ -147,12 +146,20 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   onSaveProviderProfile,
   onCreateOrUpdateProviderService,
   onProviderRespondReservation,
+  selectedCountryCode = 'BJ',
 }) => {
+  const currentCountry = React.useMemo(() => {
+    return (
+      COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY[0]
+    );
+  }, [selectedCountryCode]);
+
   const t = TRANSLATIONS.fr;
   const [businessName, setBusinessName] = useState('');
   const [category, setCategory] = useState<ServiceCategory>('accommodation');
-  const [cityId, setCityId] = useState<string>('cotonou');
-  const [publicZone, setPublicZone] = useState('Cotonou');
+  const [cityId, setCityId] = useState<string>(() => currentCountry.cities[0]?.id || '');
+  const [publicZone, setPublicZone] = useState(() => currentCountry.cities[0]?.name || '');
   const [descriptionFr, setDescriptionFr] = useState('');
   const [phone, setPhone] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
@@ -166,7 +173,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   const [editingServiceId, setEditingServiceId] = useState<string>('');
   const [srvTitle, setSrvTitle] = useState('');
   const [srvCategory, setSrvCategory] = useState<ServiceCategory>('accommodation');
-  const [srvCity, setSrvCity] = useState<string>('cotonou');
+  const [srvCity, setSrvCity] = useState<string>(() => currentCountry.cities[0]?.id || '');
   const [srvAddress, setSrvAddress] = useState('');
   const [srvPrice, setSrvPrice] = useState<number>(25000);
   const [srvCapacity, setSrvCapacity] = useState<number>(2);
@@ -188,7 +195,9 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   const [offerDesc, setOfferDesc] = useState('');
   const [offerPriceState, setOfferPriceState] = useState<OfferPriceState>('displayed_price');
   const [offerPriceAmount, setOfferPriceAmount] = useState<number>(35000);
-  const [offerCurrency, setOfferCurrency] = useState<CurrencyCode>('XOF');
+  const [offerCurrency, setOfferCurrency] = useState<CurrencyCode>(
+    () => (currentCountry.currency as CurrencyCode) || 'EUR'
+  );
   const [offerUnit, setOfferUnit] = useState('par nuit');
   const [offerCapacity, setOfferCapacity] = useState<number>(2);
   const [offerBedsOrCondition, setOfferBedsOrCondition] = useState('');
@@ -199,12 +208,14 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   // Commercial & Payout Private Profile state for registered providers
   const [editBusinessName, setEditBusinessName] = useState('');
   const [editCategory, setEditCategory] = useState<ServiceCategory>('accommodation');
-  const [editCountryCode, setEditCountryCode] = useState<string>('BJ');
-  const [editCityId, setEditCityId] = useState<string>('cotonou');
+  const [editCountryCode, setEditCountryCode] = useState<string>(() => currentCountry.code);
+  const [editCityId, setEditCityId] = useState<string>(() => currentCountry.cities[0]?.id || '');
   const [editDescription, setEditDescription] = useState('');
   const [editContactEmail, setEditContactEmail] = useState('');
   const [editContactPhone, setEditContactPhone] = useState('');
-  const [editPayoutChannel, setEditPayoutChannel] = useState('MTN MoMo Bénin');
+  const [editPayoutChannel, setEditPayoutChannel] = useState(
+    () => currentCountry.paymentMethods[0] || 'Mobile Money / Virement bancaire'
+  );
   const [editRegistrationRef, setEditRegistrationRef] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -212,19 +223,23 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
     if (myProvider) {
       setEditBusinessName(myProvider.businessName || '');
       setEditCategory(myProvider.category || 'accommodation');
-      setEditCountryCode(myProvider.countryCode || 'BJ');
-      setEditCityId(myProvider.cityId || 'cotonou');
+      setEditCountryCode(myProvider.countryCode || currentCountry.code);
+      setEditCityId(myProvider.cityId || currentCountry.cities[0]?.id || '');
       setEditDescription(myProvider.description || '');
     }
     if (myProviderPrivate) {
       setEditContactEmail(myProviderPrivate.contactEmail || currentUserEmail || '');
       setEditContactPhone(myProviderPrivate.contactPhone || '');
-      setEditPayoutChannel(myProviderPrivate.payoutChannel || 'MTN MoMo Bénin');
+      setEditPayoutChannel(
+        myProviderPrivate.payoutChannel ||
+          currentCountry.paymentMethods[0] ||
+          'Mobile Money / Virement bancaire'
+      );
       setEditRegistrationRef(myProviderPrivate.registrationRef || '');
     } else if (currentUserEmail) {
       setEditContactEmail(currentUserEmail);
     }
-  }, [myProvider, myProviderPrivate, currentUserEmail]);
+  }, [myProvider, myProviderPrivate, currentUserEmail, currentCountry]);
 
   const conventionDoc = platformContentMap['convention_prestataire'];
 
@@ -278,7 +293,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
     setSrvPrice(srv.priceAmount);
     setSrvCapacity(srv.capacity);
     setSrvDuration(srv.durationMinutes);
-    setSrvDesc(srv.description);
+    setSrvDesc(srv.description || '');
     setBlockedDatesText((srv.blockedDates || []).join(', '));
   };
 
@@ -352,7 +367,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
               Cet espace est l&apos;unique porte d&apos;entrée officielle pour devenir{' '}
-              <strong className="text-white">Partenaire AMARO</strong> au Bénin (hébergement,
+              <strong className="text-white">Partenaire AMARO</strong> en {currentCountry.nameFr} (hébergement,
               transport, guide, restauration, site culturel, artisanat ou bien-être). Aucune fiche
               n&apos;est publiée comme partenaire sans acceptation de la convention et validation par
               l&apos;administrateur.
@@ -453,20 +468,15 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                   }}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
                 >
-                  <optgroup label="Bénin 🇧🇯">
-                    {BENIN_CITIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Côte d’Ivoire 🇨🇮">
-                    {CI_CITIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </optgroup>
+                  {COUNTRIES_REGISTRY.filter((c) => c.cities.length > 0).map((c) => (
+                    <optgroup key={c.code} label={`${c.nameFr} (${c.code})`}>
+                      {c.cities.map((ct) => (
+                        <option key={ct.id} value={ct.id}>
+                          {ct.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
               </div>
 
@@ -1024,20 +1034,15 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                   onChange={(e) => setSrvCity(e.target.value)}
                   className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs"
                 >
-                  <optgroup label="Bénin 🇧🇯">
-                    {BENIN_CITIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Côte d’Ivoire 🇨🇮">
-                    {CI_CITIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </optgroup>
+                  {COUNTRIES_REGISTRY.filter((c) => c.cities.length > 0).map((c) => (
+                    <optgroup key={c.code} label={`${c.nameFr} (${c.code})`}>
+                      {c.cities.map((ct) => (
+                        <option key={ct.id} value={ct.id}>
+                          {ct.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
                 <input
                   type="text"
@@ -1523,7 +1528,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                       const nextCode = e.target.value;
                       setEditCountryCode(nextCode);
                       const targetC = COUNTRIES_REGISTRY.find((c) => c.code === nextCode);
-                      const defaultCity = targetC?.cities[0]?.id || 'cotonou';
+                      const defaultCity = targetC?.cities[0]?.id || '';
                       setEditCityId(defaultCity);
                     }}
                     className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold"
@@ -1539,7 +1544,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                     onChange={(e) => setEditCityId(e.target.value)}
                     className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
                   >
-                    {(COUNTRIES_REGISTRY.find((c) => c.code === editCountryCode)?.cities || BENIN_CITIES).map((c) => (
+                    {(COUNTRIES_REGISTRY.find((c) => c.code === editCountryCode)?.cities || []).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>

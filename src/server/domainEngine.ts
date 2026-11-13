@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type {
   CurrencyCode,
   PartnerActivationLevel,
+  PhotoIndicatorType,
   ProviderOfferDoc,
   ServiceCategory,
 } from '../types/amaro';
@@ -13,6 +14,10 @@ import {
 import { COTE_DIVOIRE_PUBLIC_DIRECTORY } from '../data/coteDivoireRegistry';
 import {
   EXTENDED_PUBLIC_DIRECTORY,
+  LOT1_CATALOGUE_A,
+  LOT1_CATALOGUE_B,
+  LOT2_CATALOGUE_A,
+  LOT2_CATALOGUE_B,
   TOP_AFRICA_PUBLIC_DIRECTORY,
   TOP_EUROPE_PUBLIC_DIRECTORY,
   TOP_EUROPE_PART2_PUBLIC_DIRECTORY,
@@ -21,6 +26,7 @@ import {
   TOP_AMERICAS_PUBLIC_DIRECTORY,
   TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
 } from '../data/amaroRegistry';
+import { INDICATIVE_RATES_PER_EUR } from '../lib/offerEngine';
 
 export const BCEAO_EUR_TO_XOF = 655.957;
 
@@ -36,7 +42,7 @@ export interface ServerServiceRecord {
   priceAmount: number;
   priceKnown?: boolean;
   priceRangeNote?: string;
-  currency: CurrencyCode;
+  currency: CurrencyCode | string;
   durationMinutes: number;
   capacity: number;
   status: 'draft' | 'published' | 'archived';
@@ -91,6 +97,7 @@ export interface ServerSystemSetting {
   countryCode: string;
   commissionPercent: number;
   serviceFeeFlat: number;
+  serviceFeeCap?: number;
   taxPercent: number;
   currency: CurrencyCode;
   partnerCommissionPercent?: number;
@@ -128,7 +135,7 @@ export interface ServerSystemSetting {
   photoRegistryOverrides?: Record<
     string,
     {
-      indicator?: 'propre_etablissement' | 'illustration' | 'a_verifier';
+      indicator?: PhotoIndicatorType;
       sourceAndLicense?: string;
     }
   >;
@@ -281,6 +288,10 @@ const SERVER_BENIN_PUBLIC_DIRECTORY = [
   ...TOP_ASIA_PART2_PUBLIC_DIRECTORY,
   ...TOP_AMERICAS_PUBLIC_DIRECTORY,
   ...TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
+  ...LOT1_CATALOGUE_A,
+  ...LOT1_CATALOGUE_B,
+  ...LOT2_CATALOGUE_A,
+  ...LOT2_CATALOGUE_B,
 ];
 
 const builtDirectoryServices: Record<string, ServerServiceRecord> = {
@@ -365,7 +376,8 @@ export function formatMinutesHhMm(totalMinutes: number): string {
 }
 
 export function roundCurrencyAmount(val: number, cur: CurrencyCode): number {
-  return cur === 'XOF' ? Math.round(val) : Math.round(val * 100) / 100;
+  const zeroDecimal = new Set(['XOF', 'XAF', 'JPY', 'KRW', 'VND', 'NGN', 'CLP', 'COP', 'PYG', 'IDR', 'UGX', 'TZS', 'RWF', 'MGA', 'GNF']);
+  return zeroDecimal.has(String(cur).toUpperCase()) ? Math.round(val) : Math.round(val * 100) / 100;
 }
 
 export function convertCurrencyAmount(
@@ -375,8 +387,14 @@ export function convertCurrencyAmount(
   rates: Record<'EUR' | 'XOF' | 'USD', number>
 ): number {
   if (from === to) return roundCurrencyAmount(amount, to);
-  const inEur = amount / rates[from];
-  const converted = inEur * rates[to];
+  const merged: Record<string, number> = {
+    ...INDICATIVE_RATES_PER_EUR,
+    ...rates,
+  };
+  const fromRate = merged[String(from).toUpperCase()] || 1;
+  const toRate = merged[String(to).toUpperCase()] || 1;
+  const inEur = amount / fromRate;
+  const converted = inEur * toRate;
   return roundCurrencyAmount(converted, to);
 }
 
@@ -423,7 +441,12 @@ export function computeAuthoritativeQuote(params: {
   const providerPrice = roundCurrencyAmount(rawSubtotal, currency);
   const rawCommission =
     (providerPrice * effectiveMarginPercent) / 100 + setting.serviceFeeFlat;
-  const amaroFee = roundCurrencyAmount(rawCommission, currency);
+  const capAmount = typeof setting.serviceFeeCap === 'number' ? setting.serviceFeeCap : 4000;
+  const cappedCommission =
+    circuitType === 'circuit_a_directory'
+      ? Math.min(capAmount, rawCommission)
+      : rawCommission;
+  const amaroFee = roundCurrencyAmount(cappedCommission, currency);
   const rawTax = ((providerPrice + amaroFee) * setting.taxPercent) / 100;
   const taxAmount = roundCurrencyAmount(rawTax, currency);
   const totalAmount = roundCurrencyAmount(providerPrice + amaroFee + taxAmount, currency);

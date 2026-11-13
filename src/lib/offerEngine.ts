@@ -417,26 +417,121 @@ export interface ValidatedOfferSelectionResult {
   allPricesOnRequest: boolean;
 }
 
+export const INDICATIVE_RATES_PER_EUR: Record<string, number> = {
+  EUR: 1,
+  XOF: 655.957,
+  XAF: 655.957,
+  USD: 1.08,
+  GBP: 0.85,
+  CHF: 0.96,
+  CAD: 1.48,
+  MAD: 10.8,
+  TND: 3.35,
+  EGP: 52.5,
+  ZAR: 19.5,
+  GHS: 16.8,
+  NGN: 1750,
+  KES: 140,
+  TZS: 2850,
+  RWF: 1420,
+  MUR: 50.2,
+  MGA: 4900,
+  DZD: 145,
+  ETB: 130,
+  NAD: 19.5,
+  BWP: 14.8,
+  ZMW: 28.5,
+  UGX: 4000,
+  AOA: 980,
+  SCR: 14.8,
+  CVE: 110.265,
+  JPY: 165,
+  CNY: 7.8,
+  THB: 38.5,
+  AED: 3.97,
+  INR: 90.5,
+  IDR: 17000,
+  VND: 27300,
+  SGD: 1.45,
+  KRW: 1490,
+  MYR: 4.8,
+  SAR: 4.05,
+  QAR: 3.93,
+  OMR: 0.42,
+  JOD: 0.77,
+  TRY: 36.5,
+  PLN: 4.32,
+  SEK: 11.4,
+  NOK: 11.7,
+  DKK: 7.46,
+  CZK: 25.2,
+  HUF: 398,
+  RON: 4.97,
+  BGN: 1.96,
+  ISK: 149,
+  MXN: 21.5,
+  BRL: 6.1,
+  ARS: 1050,
+  COP: 4600,
+  PEN: 4.05,
+  CLP: 1030,
+  CRC: 555,
+  DOP: 65,
+  CUP: 26,
+  JMD: 170,
+  BSD: 1.08,
+  UYU: 44.5,
+  GTQ: 8.35,
+  BOB: 7.45,
+  PYG: 8300,
+  BBD: 2.16,
+  TTD: 7.3,
+  XCD: 2.92,
+  HNL: 27.1,
+  NIO: 39.8,
+  BZD: 2.16,
+  GYD: 226,
+  SRD: 38.5,
+  ALL: 99,
+};
+
+export function convertCurrencyIndicative(
+  amount: number,
+  fromCurRaw: string,
+  toCurRaw: string,
+  liveRates?: Partial<Record<string, number>>
+): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const from = fromCurRaw.trim().toUpperCase();
+  const to = toCurRaw.trim().toUpperCase();
+  const zeroDecimal = new Set(['XOF', 'XAF', 'JPY', 'KRW', 'VND', 'NGN', 'CLP', 'COP', 'PYG', 'IDR', 'UGX', 'TZS', 'RWF', 'MGA', 'GNF']);
+  if (from === to) {
+    return zeroDecimal.has(to) ? Math.round(amount) : Math.round(amount * 100) / 100;
+  }
+  const mergedRates: Record<string, number> = {
+    ...INDICATIVE_RATES_PER_EUR,
+  };
+  if (liveRates) {
+    for (const [cur, val] of Object.entries(liveRates)) {
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        mergedRates[cur] = val;
+      }
+    }
+  }
+  const fromRate = mergedRates[from] || 1;
+  const toRate = mergedRates[to] || 1;
+  const inEur = amount / fromRate;
+  const converted = inEur * toRate;
+  return zeroDecimal.has(to) ? Math.round(converted) : Math.round(converted * 100) / 100;
+}
+
 function convertToServiceCurrency(
   amount: number,
   fromCurRaw: string,
-  toCur: CurrencyCode,
+  toCur: CurrencyCode | string,
   rates: Record<'EUR' | 'XOF' | 'USD', number>
 ): number {
-  if (amount <= 0) return 0;
-  const upper = fromCurRaw.trim().toUpperCase();
-  const normalizedFrom: 'EUR' | 'XOF' | 'USD' =
-    upper === 'EUR' || upper === '€'
-      ? 'EUR'
-      : upper === 'USD' || upper === '$'
-      ? 'USD'
-      : 'XOF';
-  if (normalizedFrom === toCur) {
-    return toCur === 'XOF' ? Math.round(amount) : Math.round(amount * 100) / 100;
-  }
-  const inEur = amount / (rates[normalizedFrom] || 1);
-  const converted = inEur * (rates[toCur] || 1);
-  return toCur === 'XOF' ? Math.round(converted) : Math.round(converted * 100) / 100;
+  return convertCurrencyIndicative(amount, fromCurRaw, toCur, rates);
 }
 
 /**
@@ -447,7 +542,7 @@ function convertToServiceCurrency(
  */
 export function validateAndPriceOfferSelection(params: {
   category: ServiceCategory;
-  serviceCurrency: CurrencyCode;
+  serviceCurrency: CurrencyCode | string;
   defaultUnitCapacity: number;
   availableOffers: ProviderOfferDoc[];
   requestedLines: OfferSelectionInputLine[];
@@ -1281,7 +1376,7 @@ export function computeCategoryPaymentSchedule(params: {
   category: ServiceCategory;
   circuit: 'A' | 'B';
   providerPrice: number;
-  currency?: CurrencyCode;
+  currency?: CurrencyCode | string;
   restaurantBookingType?: 'table_simple' | 'menu_fixe';
   fixedMenuPrice?: number;
 }): CategoryPaymentSchedule {
