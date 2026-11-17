@@ -55,8 +55,13 @@ import {
   shouldShowIllustrationBadge,
 } from '../src/data/amaroRegistry';
 import {
+  COTE_DIVOIRE_COUNTRY_DEF,
   COTE_DIVOIRE_PUBLIC_DIRECTORY,
 } from '../src/data/coteDivoireRegistry';
+import {
+  DEFAULT_PLATFORM_CONTENT,
+  resolveLegalDocumentBody,
+} from '../src/data/amaroGovernanceDefaults';
 import {
   EXTENDED_COUNTRIES_DEFS,
   EXTENDED_PUBLIC_DIRECTORY,
@@ -106,6 +111,8 @@ class InMemoryTestStore implements AmaroServerStore {
       status: ReservationStatus;
       paymentStatus: PaymentStatus;
       alternativeProposal?: string;
+      clientTxRef?: string;
+      paymentMethodDeclared?: string;
       updatedAtIso: string;
     }
   >();
@@ -140,7 +147,32 @@ class InMemoryTestStore implements AmaroServerStore {
     this.reset();
   }
 
-  reset() {
+  unlockCountriesForTest(codes: string[]) {
+    const existing = this.settings.get('BJ') || {
+      countryCode: 'BJ',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 5,
+      serviceFeeFlat: 1_000,
+      taxPercent: 18,
+      currency: 'XOF' as const,
+      dossierFeeXof: 20_000,
+      maxPendingPaymentFolders: 1,
+      abandonmentRiskThreshold: 3,
+      vaultKeyConfirmedByOwner: true,
+      financialRetentionDuration: 'à renseigner par le propriétaire',
+    };
+    const nextMap = { ...(existing.countryOperationalStates || {}) };
+    for (const c of codes) {
+      nextMap[String(c).toUpperCase().trim()] = 'ouvert';
+    }
+    this.settings.set('BJ', {
+      ...existing,
+      countryOperationalStates: nextMap,
+    });
+  }
+
+  reset(unlockedCountries: string[] = []) {
     this.folders.clear();
     this.services.clear();
     this.pilotStocks.clear();
@@ -289,6 +321,10 @@ class InMemoryTestStore implements AmaroServerStore {
       countryCode: 'BJ',
       currency: 'XOF',
     });
+
+    if (unlockedCountries.length > 0) {
+      this.unlockCountriesForTest(unlockedCountries);
+    }
   }
 
   async isRegisteredAdmin(uid: string): Promise<boolean> {
@@ -315,12 +351,35 @@ class InMemoryTestStore implements AmaroServerStore {
     return (
       this.settings.get(countryCode) || {
         countryCode,
-        commissionPercent: 0,
-        serviceFeeFlat: 0,
+        commissionPercent: 10,
+        partnerMarginPercent: 10,
+        directoryMarginPercent: 6,
+        serviceFeeFlat: 500,
+        serviceFeeCap: 4000,
+        amaroFeePercent: 6,
+        amaroFeeFixed: 500,
+        amaroFeeCap: 4000,
+        amaroFeeRounding: 100,
         taxPercent: 0,
+        dossierFeeXof: 20_000,
         currency: 'XOF',
       }
     );
+  }
+
+  async updateSystemSetting(
+    patch: Partial<ServerSystemSetting> & { countryCode?: string; updatedBy?: string },
+    _rawIdToken?: string
+  ): Promise<ServerSystemSetting> {
+    const code = (patch.countryCode || 'BJ').toUpperCase().trim();
+    const existing = await this.getSystemSetting(code);
+    const merged: ServerSystemSetting = {
+      ...existing,
+      ...patch,
+      countryCode: code,
+    };
+    this.settings.set(code, merged);
+    return merged;
   }
 
   async getJourneyFolder(folderId: string): Promise<ServerFolderRecord | null> {
@@ -375,6 +434,8 @@ class InMemoryTestStore implements AmaroServerStore {
       isPartialAcceptance: (r as any).isPartialAcceptance,
       requestedUnitsTotal: r.requestedUnitsTotal,
       acceptedUnitsTotal: (r as any).acceptedUnitsTotal,
+      clientTxRef: r.clientTxRef,
+      paymentMethodDeclared: r.paymentMethodDeclared,
       updatedAtIso: r.updatedAtIso,
     };
   }
@@ -407,6 +468,8 @@ class InMemoryTestStore implements AmaroServerStore {
     isPartialAcceptance?: boolean;
     requestedUnitsTotal?: number;
     acceptedUnitsTotal?: number;
+    clientTxRef?: string;
+    paymentMethodDeclared?: string;
     folderIdToMarkPartiallyConfirmed?: string;
     releaseStock?: {
       stockId: string;
@@ -472,6 +535,10 @@ class InMemoryTestStore implements AmaroServerStore {
         : {}),
       ...(params.acceptedUnitsTotal !== undefined
         ? { acceptedUnitsTotal: params.acceptedUnitsTotal }
+        : {}),
+      ...(params.clientTxRef ? { clientTxRef: params.clientTxRef } : {}),
+      ...(params.paymentMethodDeclared
+        ? { paymentMethodDeclared: params.paymentMethodDeclared }
         : {}),
       ...(params.releaseStock ? { allocatedUnits: 0 } : {}),
       updatedAtIso: new Date().toISOString(),
@@ -1377,7 +1444,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('3. Prix, commission ou montant total modifiés dans le navigateur sont rejetés (400) sur /quote et /reservations', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Attempt to force providerPrice = 100 XOF instead of official 50 000 XOF on quote
     const quoteTamper = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
@@ -1413,7 +1480,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('4. Service non publié (draft), inexistant, hors capacité ou sur dossier d’autrui ne peut pas être réservé', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Draft service -> 409
     const draftRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -1469,7 +1536,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('5. Conflits d’agenda Journey Brain (chevauchement horaire, changement de ville > 1 visite, double hébergement) bloquent la réservation (409)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Book 1st site visit in Cotonou at 09:00 (duration 120m -> 09:00-11:00)
     const firstSite = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -1527,7 +1594,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('6. Demande valide calcule les montants exacts côté serveur, enregistre pricingSnapshot et bloque toute double soumission concurrente (409)', async () => {
-    store.reset();
+    store.reset(['BJ']);
     store.artificialCommitDelayMs = 40;
 
     const payload = {
@@ -1669,7 +1736,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('8. Règle Transporteur Unique par séjour : autorise 2 véhicules chez le MÊME prestataire (201) mais bloque un second prestataire transport différent (409)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 1st vehicle with Avis Bénin (providerId: dir-trans-avis-benin) on Day 1
     const v1 = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -1726,7 +1793,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('9. Répertoire Bénin réel (168 fiches) : tarification honnête côté serveur pour les fiches chiffrées et pour les hôtels « Tarif sur demande » (priceKnown=false)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Known tariff site: Temple des Pythons de Ouidah (site-ouidah-temple-des-pythons)
     const quoteKnown = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
@@ -1760,14 +1827,15 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(resUnknownPrice.status, 201);
     const unknownBody: any = await resUnknownPrice.json();
     assert.equal(unknownBody.breakdown.providerPrice, 0);
-    assert.equal(unknownBody.breakdown.totalAmount, 1_180);
+    assert.equal(unknownBody.breakdown.amaroFee, 0);
+    assert.equal(unknownBody.breakdown.totalAmount, 0);
     const snap = JSON.parse(unknownBody.pricingSnapshot);
     assert.equal(snap.priceKnown, false);
     assert.equal(snap.verifiedByServer, true);
   });
 
   it('10. Programme AMARO PARTNERS : bloque l’auto-parrainage (400) et crée un suivi affilié strictement « pending » (jamais payable sans règlement client + prestataire)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 10a. Self-referral attempt by traveler-uid-1 using their own partner code -> 400
     const selfRefRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -1840,7 +1908,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('11. Vérification d’identité voyageur : rejette absence de consentement, rejette faux fichiers/SVG/scripts, impose recto+verso CNI, chiffre en AES-256-GCM et bloque la transmission externe sur le répertoire public', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Valid 1x1 PNG binary (real magic bytes: 89 50 4E 47 0D 0A 1A 0A ...)
     const VALID_PNG_DATA_URL =
@@ -1997,7 +2065,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('12. Isolation stricte des pièces d’identité : 200 prestataire autorisé, 403 autre prestataire, 403 lecture image Admin, gouvernance Admin active et purge immédiate au retrait du consentement (410)', async () => {
-    store.reset();
+    store.reset(['BJ']);
     const VALID_PNG_DATA_URL =
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -2147,6 +2215,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('13. Assistant AMARO conversationnel naturel : comprend salutations, abréviations, suivi multi-tours (« Ouidah » -> « Un hôtel » -> « Combien ? ») sur les 172 vraies fiches et reformule poliment un message incompréhensible', async () => {
+    store.reset(['BJ']);
     simulateHumanFallback = true;
     try {
       // 13a. Casual greeting / abbreviation ("bjr") -> warm human reply, zero technical jargon
@@ -2158,6 +2227,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
         },
         body: JSON.stringify({
           message: 'bjr',
+          countryCode: 'BJ',
           locale: 'fr',
           history: [],
         }),
@@ -2175,6 +2245,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
         },
         body: JSON.stringify({
           message: 'Combien ?',
+          countryCode: 'BJ',
           locale: 'fr',
           history: [
             { role: 'user', content: 'ouida' },
@@ -2212,6 +2283,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
         },
         body: JSON.stringify({
           message: '???',
+          countryCode: 'BJ',
           locale: 'fr',
           history: [],
         }),
@@ -2225,7 +2297,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('14. R1 & Journey Brain : règle stricte des visites (1 visite max en plus du trajet un jour de changement de ville, 2 visites max par jour dans une même ville) et compatibilité VTC urbain ponctuel (Yango/Gozem) en parallèle du loueur principal', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 14a. Relocation day: transport in Cotonou + hotel check-in in Ouidah -> ALLOWED (valid=true), but adding a tourist site visit on that relocation day -> BLOCKED (valid=false)
     const relocationOkRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
@@ -2471,7 +2543,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('15. Transitions serveur contrôlées, verrouillage strict du Reçu Électronique avant paiement confirmé (409 -> 200) et offre optionnelle AMARO Assistance Personnalisée', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Create a verified partner hotel reservation
     const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -2603,7 +2675,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('16. Partenaires pilotes — Niveau A bloque la réservation en ligne (409) et une offre Niveau C sans convention signée ou avec stock expiré replie honnêtement vers Niveau B (pending_provider)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Seed Level A (consultable & planifiable only)
     store.services.set('srv-pilot-ouidah-level-a', {
@@ -2755,7 +2827,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('17. Partenaires pilotes — Niveau C confirme immédiatement sur stock valide, applique le tarif contractuel, bloque toute double réservation (409) et libère le stock après annulation', async () => {
-    store.reset();
+    store.reset(['BJ']);
     store.folders.set('folder-traveler-2', {
       id: 'folder-traveler-2',
       ownerId: 'other-provider-uid',
@@ -2901,7 +2973,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('18. Suivi honnête des transmissions et relances Niveau B (prepared -> sent -> relance -> expired) protégé par RBAC Admin', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     store.services.set('srv-pilot-cotonou-level-b', {
       id: 'srv-pilot-cotonou-level-b',
@@ -3018,7 +3090,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('19. Bloc 2 — Entrée gratuite (brouillon itinéraire sans compte) puis verrouillage strict par Frais de dossier déductibles 20 000 FCFA (402 -> déclaration Mobile Money + CGV -> anti-doublon -> validation Admin -> 201)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 19a. Unauthenticated visitor generates a real Benin itinerary draft for free with daily "Temps libre"
     const draftRes = await fetch(`${baseUrl}/api/amaro/assistant/generate-draft`, {
@@ -3174,7 +3246,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('20. Bloc 1 — Deux circuits distincts (Circuit A 5% répertoire vs Circuit B 10% partenaire) et « Promouvoir mes services » comme unique point d’entrée prestataire', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 20a. Direct registration outside "promote_services" flow MUST be rejected (403)
     const wrongEntryRes = await fetch(`${baseUrl}/api/amaro/providers/register`, {
@@ -3242,7 +3314,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('21. Bloc 7.2 — Coffre de pièces d’identité verrouillé en mode test (403) tant que la clé dédiée n’est pas confirmée par le propriétaire', async () => {
-    store.reset();
+    store.reset(['BJ']);
     store.settings.set('BJ', {
       ...store.settings.get('BJ')!,
       vaultKeyConfirmedByOwner: false,
@@ -3290,7 +3362,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('22. Lot 1 — Vue Admin des canaux non configurés, alternatives intelligentes, recalcul Avant/Après soumis à accord explicite client et évaluation protégée des délais (24 h)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 22a. Honest notification channel status in Admin
     const notifIssuesRes = await fetch(`${baseUrl}/api/amaro/admin/notifications-issues`, {
@@ -3422,7 +3494,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('23. Précisions 2 & 3 — Séparation stricte Export Admin (7.3) vs Export Personnel Client (10.3) et Suppression de compte conforme (efface PII + coffre identité, conserve archives financières minimales)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     const VALID_PNG_DATA_URL =
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
@@ -3519,7 +3591,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('24. Recensement A6 (Test obligatoire #1) — Une fiche recensée arrive en « à valider » (jamais publiée directement) et devient visible en Circuit A avec ses offres uniquement après validation propriétaire', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Even if an import payload tries to force status: 'published', server MUST classify it as 'to_validate' with directlyPublishedCount === 0
     const importRes = await fetch(`${baseUrl}/api/amaro/admin/census/import`, {
@@ -3606,7 +3678,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('25. Recensement A4/A6 (Test obligatoire #2) — Dédoublonnage strict : une fiche déjà au catalogue est classée « mise à jour proposée » sans jamais écraser les champs existants', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Check existing catalogue sheet before import (Hôtel Maison Rouge Cotonou)
     const beforeSvc = await store.getService('acc-hotel-maison-rouge-cotonou');
@@ -3656,7 +3728,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('26. Recensement A6 (Test obligatoire #3) — Une fiche incomplète (sans adresse ou sans source datée) est stockée en « incomplete », bloquée à la publication et invisible au public', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Seed record 'cens-bj-incomplete-nikki-relais' has neighborhoodOrAddress: 'non précisé' -> status 'incomplete'
     const tryPublishIncomplete = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
@@ -3698,7 +3770,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('27. Partie B2 (Test obligatoire #4) — Un hébergement sans chambres détaillées connues affiche une seule offre générique honnête « Chambre (type à préciser auprès du prestataire) »', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 'srv-published-hotel' has no roomTypes and no custom ProviderOfferDoc
     const res = await fetch(`${baseUrl}/api/amaro/services/srv-published-hotel/offers`);
@@ -3710,7 +3782,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('28. Partie B2 (Test obligatoire #5) — Sélection multi-chambres dans le même hôtel autorisée et blocage strict si le nombre de voyageurs dépasse la capacité cumulée des chambres', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Add 2 distinct real room offers to 'srv-published-hotel' via Admin (capacity 2 each)
     await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
@@ -3802,7 +3874,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('29. Partie B2 (Test obligatoire #6) — Blocage par Amaro Journey Brain de deux hôtels différents sur la même nuit (y compris séjour multi-nuits), tout en autorisant plusieurs chambres dans le même hôtel', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // First hotel booked for 2 nights: 2026-12-15 to 2026-12-17 (covers nights of Dec 15 and Dec 16)
     const firstHotel = await fetch(`${baseUrl}/api/amaro/reservations`, {
@@ -3862,7 +3934,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('30. Partie B3 (Test obligatoire #7) — Plusieurs véhicules chez le même loueur autorisés, mais blocage d’un second prestataire de transport principal dans le même dossier (hors VTC urbain ponctuel)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Publish 'cens-bj-trans-louecars-cotonou' (3 vehicle offers: Citadine, SUV 4x4, Minibus)
     const pubLoue = await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
@@ -3944,7 +4016,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('31. Partie B6 (Test obligatoire #8) — Modification des offres par le client tant que non confirmée et gestion de la confirmation partielle (2 chambres disponibles sur 3 demandées + recalcul)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
       method: 'POST',
@@ -4033,7 +4105,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('32. Partie B5 & B6 (Test obligatoire #9) — Honnêteté stricte en Circuit A : aucun compteur d’unités inventé, mention exacte de disponibilité et mention « Estimation » sur prix à vérifier', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // Publish 'cens-bj-acc-hotel-le-prince-cotonou' (Circuit A, priceState = 'price_to_verify')
     await fetch(`${baseUrl}/api/amaro/admin/census/decision`, {
@@ -4075,7 +4147,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('33. Partie B7 (Test obligatoire #10) — Gouvernance stricte à 3 sources : blocage (403) de tout ajout/modification d’offre hors recensement validé, administrateur ou prestataire conventionné titulaire', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 33a. Traveler attempts to create an offer -> 403 Forbidden
     const travAttempt = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
@@ -4168,7 +4240,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('34. R1 — Paramètres dynamiques Journey Brain modifiables par l’administrateur (maxVisitsCityChangeDay et maxVisitsSameCityDay, valeurs par défaut 1 et 2)', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 34a. Verify default behavior: 1 visit allowed on transfer day, 2nd blocked
     const defaultTransferVisitRes = await fetch(`${baseUrl}/api/amaro/brain/validate`, {
@@ -4301,7 +4373,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('36. R5 — Assistant IA : proposition spontanée exacte, génération directe sur « oui », modification du brouillon et streaming SSE', async () => {
-    store.reset();
+    store.reset(['BJ']);
     const testHeaders = {
       'Content-Type': 'application/json',
       'x-forwarded-for': '198.51.100.136',
@@ -4408,7 +4480,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
   });
 
   it('38. C3 — Flux de l’argent : rejet strict (409) de tout paiement client avant acceptation formelle du prestataire ou de la coordination', async () => {
-    store.reset();
+    store.reset(['BJ']);
 
     // 38a. Create a reservation in 'pending_provider' status
     const testResId = 'res-c3-early-payment';
@@ -4501,21 +4573,132 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(50000 + fee50k, 53500);
   });
 
-  it('39b. C2 — Règle de calcul Circuit A : 6% + 500f, plafond 4 000f, arrondi aux 100f supérieurs', async () => {
-    // Hotel 60.000f -> 6% = 3600 + 500 = 4100 -> capped at 4000f -> total 64.000f
-    const res60kFee = calculateCircuitAFee(60000);
-    assert.equal(res60kFee, 4000);
-    assert.equal(60000 + res60kFee, 64000);
+  it('39b. C2 — Formule unique Circuit A (simulateur et serveur) : 6% + 500f, plafond 4 000f, arrondi au 100f supérieur sur 4 cas exacts', async () => {
+    store.reset();
+    store.settings.set('CI', {
+      countryCode: 'CI',
+      commissionPercent: 10,
+      partnerMarginPercent: 10,
+      directoryMarginPercent: 6,
+      serviceFeeFlat: 500,
+      serviceFeeCap: 4000,
+      amaroFeePercent: 6,
+      amaroFeeFixed: 500,
+      amaroFeeCap: 4000,
+      amaroFeeRounding: 100,
+      taxPercent: 0,
+      currency: 'XOF',
+    });
 
-    // Transport 12.000f -> 12.000f + 1.200f = 13.200f affiché (exemple explicite propriétaire)
-    const res12kFee = calculateCircuitAFee(12000);
-    assert.equal(res12kFee, 1200);
-    assert.equal(12000 + res12kFee, 13200);
+    store.services.set('ci-test-suite-100k', {
+      id: 'ci-test-suite-100k',
+      providerId: 'dir-ci-test-100k',
+      ownerId: 'manual_concierge',
+      title: 'Circuit CI Test 100k',
+      category: 'accommodation',
+      countryCode: 'CI',
+      cityId: 'abidjan',
+      priceAmount: 100_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 1440,
+      capacity: 4,
+      status: 'published',
+      dataOrigin: 'public_directory',
+    });
 
-    // Guide 25.000f -> 6% = 1500 + 500 = 2000f -> 25.000f + 2.000f = 27.000f affiché
-    const res25kFee = calculateCircuitAFee(25000);
-    assert.equal(res25kFee, 2000);
-    assert.equal(25000 + res25kFee, 27000);
+    const cases = [
+      {
+        serviceId: 'ci-site-basilique-paix-yakro', // 5 000 FCFA
+        participants: 1,
+        providerPrice: 5000,
+        expectedFee: 800,
+        expectedTotal: 5800,
+      },
+      {
+        serviceId: 'ci-srv-resto-chez-ambroise-marcory', // 12 000 FCFA
+        participants: 1,
+        providerPrice: 12000,
+        expectedFee: 1300,
+        expectedTotal: 13300,
+      },
+      {
+        serviceId: 'ci-srv-transfert-aeroport-fhb', // 25 000 FCFA
+        participants: 1,
+        providerPrice: 25000,
+        expectedFee: 2000,
+        expectedTotal: 27000,
+      },
+      {
+        serviceId: 'ci-test-suite-100k', // 100 000 FCFA
+        participants: 1,
+        providerPrice: 100000,
+        expectedFee: 4000,
+        expectedTotal: 104000,
+      },
+    ];
+
+    for (const c of cases) {
+      // 1. Simulateur / client helper
+      const simFee = calculateCircuitAFee(c.providerPrice);
+      assert.equal(simFee, c.expectedFee, `Simulateur ${c.providerPrice} -> frais ${c.expectedFee}`);
+      assert.equal(c.providerPrice + simFee, c.expectedTotal);
+
+      // 2. Quote serveur sur fiche Côte d'Ivoire Circuit A
+      const quoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceId: c.serviceId,
+          participants: c.participants,
+        }),
+      });
+      assert.equal(quoteRes.status, 200);
+      const quoteJson: any = await quoteRes.json();
+      assert.equal(quoteJson.circuitType, 'circuit_a_directory');
+      assert.equal(quoteJson.breakdown.providerPrice, c.providerPrice);
+      assert.equal(quoteJson.breakdown.amaroFee, c.expectedFee, `Serveur ${c.providerPrice} -> frais ${c.expectedFee}`);
+      assert.equal(quoteJson.breakdown.totalAmount, c.expectedTotal, `Serveur ${c.providerPrice} -> total ${c.expectedTotal}`);
+    }
+
+    // 3. Toutes les fiches CI sont exclusivement Circuit A ('public_directory')
+    assert.ok(COTE_DIVOIRE_PUBLIC_DIRECTORY.length >= 25);
+    for (const ciItem of COTE_DIVOIRE_PUBLIC_DIRECTORY) {
+      assert.equal(ciItem.dataOrigin, 'public_directory', `Fiche CI ${ciItem.id} doit être en Circuit A (public_directory)`);
+    }
+
+    // 4. Route declare-fee lit le pays du dossier (CI), jamais BJ en dur
+    store.folders.set('folder-ci-custom-fee', {
+      id: 'folder-ci-custom-fee',
+      ownerId: 'traveler-uid-1',
+      status: 'draft',
+      dossierFeeStatus: 'pending',
+      dossierFeeAmountXof: 25_000,
+      countryCode: 'CI',
+      currency: 'XOF',
+    });
+    store.settings.set('CI', {
+      ...store.settings.get('CI')!,
+      dossierFeeXof: 25_000,
+      dossierVerificationHours: 12,
+    });
+    const ciDeclareRes = await fetch(`${baseUrl}/api/amaro/folders/folder-ci-custom-fee/declare-fee`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        transactionRef: 'WAVE-CI-554433',
+        payerName: 'Aya Voyageuse',
+        payerPhone: '+2250700000000',
+        termsAccepted: true,
+      }),
+    });
+    assert.equal(ciDeclareRes.status, 200);
+    const ciDeclareJson: any = await ciDeclareRes.json();
+    assert.equal(ciDeclareJson.deductibleAmountXof, 25_000);
+    assert.equal(ciDeclareJson.verificationHours, 12);
   });
 
   it('40. C2 — Simulateur de frais de service Amaro en lecture seule pour 20k, 50k, 100k et 300k FCFA', async () => {
@@ -4577,14 +4760,16 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     }
   });
 
-  it('42. C5 — Interrupteur par pays : 193 États membres de l’ONU et blocage serveur HTTP 403 « Pas encore disponible » sur pays non ouvert', async () => {
+  it('42. C5 — Interrupteur par pays : 193 États membres de l’ONU, seule la Côte d’Ivoire ouverte et blocage serveur HTTP 403 sur tous les autres pays (dont Bénin)', async () => {
+    store.reset();
+
     // 42a. Exactly 193 UN member states registered
     assert.equal(UN_COUNTRIES_REGISTRY.length, 193);
 
-    // 42b. Verify initial states: CI is 'ouvert_admin_seulement', BJ/SN/TG are 'bientot', 189 others are 'cache'
+    // 42b. Verify initial states: ONLY CI is 'ouvert', and ALL 192 others (including BJ, SN, TG, GH, FR) are 'bientot' (En préparation)
     const ci = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'CI');
     assert.ok(ci);
-    assert.equal(ci.initialState, 'ouvert_admin_seulement');
+    assert.equal(ci.initialState, 'ouvert');
 
     const bj = UN_COUNTRIES_REGISTRY.find((c: any) => c.code === 'BJ');
     assert.ok(bj);
@@ -4598,21 +4783,22 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.ok(tg);
     assert.equal(tg.initialState, 'bientot');
 
-    const hiddenCount = UN_COUNTRIES_REGISTRY.filter((c: any) => c.initialState === 'cache').length;
-    assert.equal(hiddenCount, 189);
+    const prepCount = UN_COUNTRIES_REGISTRY.filter((c: any) => c.initialState === 'bientot').length;
+    assert.equal(prepCount, 192);
 
-    // 42c. Server refuses public access with 403 on non-open countries
-    const resForbidden = await fetch(`${baseUrl}/api/amaro/countries/GH/data`);
-    assert.equal(resForbidden.status, 403);
-    const forbiddenJson: any = await resForbidden.json();
-    assert.equal(forbiddenJson.error, 'Pas encore disponible');
-
-    const resSenegal = await fetch(`${baseUrl}/api/amaro/countries/SN/data`);
-    assert.equal(resSenegal.status, 403);
+    // 42c. Server refuses public access with 403 on all closed countries including BJ, GH, SN, FR, MA
+    for (const closedCode of ['BJ', 'GH', 'SN', 'FR', 'MA']) {
+      const resForbidden = await fetch(`${baseUrl}/api/amaro/countries/${closedCode}/data`);
+      assert.equal(resForbidden.status, 403, `Attendu HTTP 403 pour ${closedCode}`);
+      const forbiddenJson: any = await resForbidden.json();
+      assert.match(forbiddenJson.error, /préparation|Pas encore disponible/i);
+    }
   });
 
   it('43. C5 & C4 — Non-contamination stricte pour la Côte d’Ivoire et registre unique des numéros d’urgence', async () => {
-    // 43a. Admin requests Côte d'Ivoire data
+    store.reset();
+
+    // 43a. Public & Admin access to Côte d'Ivoire data returns enriched CI directory with zero Benin leak
     const ciRes = await fetch(`${baseUrl}/api/amaro/countries/CI/data`, {
       headers: {
         Authorization: 'Bearer valid-admin-owner-jwt',
@@ -4624,11 +4810,14 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     // Verify non-contamination: country is CI, zero Benin catalogue sheets
     assert.equal(ciData.countryCode, 'CI');
     assert.match(ciData.countryName, /Côte d['’]Ivoire/);
-    assert.deepEqual(ciData.services, []);
+    assert.ok(Array.isArray(ciData.services) && ciData.services.length >= 25, 'Catalogue Côte d’Ivoire enrichi attendu (>=25 fiches)');
+    for (const srv of ciData.services) {
+      assert.equal(srv.countryCode, 'CI', `Fiche ${srv.id} doit appartenir à CI`);
+    }
 
     // 43b. Verify non-contamination of emergency numbers: no Benin numbers in CI
     const ciNumbers = ciData.emergencyNumbers;
-    assert.ok(Array.isArray(ciNumbers));
+    assert.ok(Array.isArray(ciNumbers) && ciNumbers.length >= 3);
     for (const num of ciNumbers) {
       assert.notEqual(num.number, '117'); // Benin Police Secours
       assert.notEqual(num.number, '118'); // Benin Sapeurs-Pompiers
@@ -4724,8 +4913,10 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       assert.ok(expectedCodes.includes(item.countryCode), `Le pays ${item.countryCode} doit faire partie des pays supportés`);
     }
 
-    // 45c. Server-authoritative quote calculation for an extended country (e.g. Sénégal Terrou-Bi or Gorée)
+    // 45c. Server-authoritative quote calculation for an extended country (fixture unlocked strictly for legacy test 45)
+    store.unlockCountriesForTest(['SN']);
     store.settings.set('SN', {
+      ...(store.settings.get('SN') || {}),
       countryCode: 'SN',
       commissionPercent: 10,
       partnerMarginPercent: 10,
@@ -4747,8 +4938,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(snQuoteRes.status, 200);
     const snQuoteJson: any = await snQuoteRes.json();
     assert.equal(snQuoteJson.breakdown.providerPrice, 3000);
-    assert.equal(snQuoteJson.breakdown.amaroFee, 680); // 3000 * 0.06 + 500 = 680
-    assert.equal(snQuoteJson.breakdown.totalAmount, 3680);
+    assert.equal(snQuoteJson.breakdown.amaroFee, 700); // 3000 * 0.06 + 500 = 680 -> arrondi 100 sup = 700
+    assert.equal(snQuoteJson.breakdown.totalAmount, 3700);
   });
 
   it('46. Recensement Mondial Amaro — 30 pays d’Afrique, 30 pays d’Europe, 30 pays d’Asie, 30 pays d’Amérique avec structure complète et intégrité stricte', async () => {
@@ -4807,7 +4998,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       assert.equal(item.status, 'published', `L’item ${item.id} doit être au statut published`);
     }
 
-    // 46c. Server-authoritative quote calculation for an Asian destination (Japan)
+    // 46c. Server-authoritative quote calculation for an Asian destination (Japan fixture unlocked for legacy test 46)
+    store.unlockCountriesForTest(['JP', 'US']);
     store.settings.set('JP', {
       countryCode: 'JP',
       commissionPercent: 10,
@@ -4857,8 +5049,8 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(usQuoteRes.status, 200);
     const usQuoteJson: any = await usQuoteRes.json();
     assert.equal(usQuoteJson.breakdown.providerPrice, 38000);
-    assert.equal(usQuoteJson.breakdown.amaroFee, 2780); // 38000 * 0.06 + 500 = 2780
-    assert.equal(usQuoteJson.breakdown.totalAmount, 40780);
+    assert.equal(usQuoteJson.breakdown.amaroFee, 2800); // 38000 * 0.06 + 500 = 2780 -> arrondi 100 sup = 2800
+    assert.equal(usQuoteJson.breakdown.totalAmount, 40800);
   });
 
   it('47. Partie A & Lot 1 (10 pays) — Isolation stricte sans contamination du Bénin, emplacement photo_a_ajouter et complétude des 10 pays', async () => {
@@ -4922,6 +5114,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     }
 
     // 47d. Isolation serveur Amaro Assistant par countryCode (ex: Maroc & France ne doivent jamais citer Cotonou ou FCFA)
+    store.unlockCountriesForTest(['MA', 'FR']);
     const prevSim = simulateHumanFallback;
     simulateHumanFallback = true;
     try {
@@ -5046,8 +5239,9 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       }
     }
 
-    // 48c. Country selector switching across ALL 20 countries (10 Lot 1 + 10 Lot 2) via Assistant & Quote API
+    // 48c. Country selector switching across ALL 20 countries (fixture unlocked strictly for legacy test 48)
     const all20Codes = [...lot1Codes, ...Object.keys(lot2Expectations)];
+    store.unlockCountriesForTest(all20Codes);
     const prevSim = simulateHumanFallback;
     simulateHumanFallback = true;
     try {
@@ -5080,7 +5274,7 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
           commissionPercent: 10,
           partnerMarginPercent: 10,
           directoryMarginPercent: 6,
-          serviceFeeFlat: 0,
+          serviceFeeFlat: 500,
           taxPercent: 0,
           currency: cDef.currency,
         });
@@ -5100,6 +5294,549 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
       simulateHumanFallback = prevSim;
     }
   });
+
+  it('49. Stratégie Ouverture Pays par Pays (Côte d’Ivoire seule ouverte) — Verrouillage global 192 pays (dont Bénin), CI approfondie (10 pôles, zéro contamination), et interrupteur admin 1-clic', async () => {
+    store.reset();
+    const beninLeakRegex = /\b(cotonou|ouidah|abomey|porto-novo|ganvie|grand-popo|natitingou|parakou|pendjari|benin|bénin|fcfa)\b/i;
+
+    // 49a. Public /api/amaro/country-states lists 193 UN countries: ONLY CI is 'ouvert', all 192 others (including BJ) are 'bientot'
+    const statesRes = await fetch(`${baseUrl}/api/amaro/country-states`);
+    assert.equal(statesRes.status, 200);
+    const statesJson: any = await statesRes.json();
+    assert.equal(statesJson.total, 193);
+    assert.equal(statesJson.openCount, 1);
+    const openCodes = statesJson.countries.filter((c: any) => c.state === 'ouvert').map((c: any) => c.code).sort();
+    assert.deepEqual(openCodes, ['CI']);
+    const prepOnes = statesJson.countries.filter((c: any) => c.state === 'bientot');
+    assert.equal(prepOnes.length, 192);
+
+    // 49b. Server strictly blocks direct access (HTTP 403) on ALL closed countries (BJ, FR, JP, MA, SN) across data, quote, reservation, assistant, draft, and rescue
+    for (const lockedCode of ['BJ', 'FR', 'JP', 'MA', 'SN']) {
+      const dataRes = await fetch(`${baseUrl}/api/amaro/countries/${lockedCode}/data`);
+      assert.equal(dataRes.status, 403, `GET /countries/${lockedCode}/data doit renvoyer 403`);
+
+      const assistRes = await fetch(`${baseUrl}/api/amaro/assistant`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': `203.0.113.${lockedCode.charCodeAt(0)}`,
+        },
+        body: JSON.stringify({
+          message: 'Bonjour, propose moi un séjour',
+          countryCode: lockedCode,
+          locale: 'fr',
+        }),
+      });
+      assert.equal(assistRes.status, 403, `POST /assistant (${lockedCode}) doit renvoyer 403`);
+
+      const draftRes = await fetch(`${baseUrl}/api/amaro/assistant/generate-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countryCode: lockedCode, daysCount: 3 }),
+      });
+      assert.equal(draftRes.status, 403, `POST /assistant/generate-draft (${lockedCode}) doit renvoyer 403`);
+
+      const rescueRes = await fetch(`${baseUrl}/api/amaro/rescue/incident`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countryCode: lockedCode, cityId: 'paris', category: 'accommodation' }),
+      });
+      assert.equal(rescueRes.status, 403, `POST /rescue/incident (${lockedCode}) doit renvoyer 403`);
+    }
+
+    // Closed-country quote & reservation for Morocco service must also return 403
+    const lockedQuoteRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: 'ma-lot1-acc-royal-mansour-marrakech', participants: 1 }),
+    });
+    assert.equal(lockedQuoteRes.status, 403);
+
+    const lockedBookingRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: 'ma-lot1-acc-royal-mansour-marrakech',
+        folderId: 'folder-traveler-1',
+        scheduledDate: '2026-12-10',
+        scheduledTime: '14:00',
+        participants: 1,
+      }),
+    });
+    assert.equal(lockedBookingRes.status, 403);
+
+    // 49c. Benin data remains preserved internally when toggled open, while Côte d'Ivoire (CI) serves HTTP 200 publicly
+    assert.ok(BENIN_PUBLIC_DIRECTORY.length > 0, 'Les données du Bénin restent conservées');
+
+    const ciDataRes = await fetch(`${baseUrl}/api/amaro/countries/CI/data`);
+    assert.equal(ciDataRes.status, 200);
+    const ciData: any = await ciDataRes.json();
+    assert.equal(ciData.countryCode, 'CI');
+    assert.equal(ciData.currency, 'XOF');
+
+    const ciServices: any[] = ciData.services;
+    const expectedCities = [
+      'abidjan',
+      'yamoussoukro',
+      'grand-bassam',
+      'assinie',
+      'san-pedro',
+      'bouake',
+      'korhogo',
+      'man',
+      'grand-bereby',
+      'sassandra',
+    ];
+    for (const cid of expectedCities) {
+      assert.ok(
+        ciServices.some((s) => s.cityId === cid),
+        `Côte d'Ivoire doit couvrir la ville/région ${cid}`
+      );
+    }
+
+    const seenCiIds = new Set<string>();
+    const seenCiTitleCity = new Set<string>();
+    for (const item of ciServices) {
+      assert.equal(item.countryCode, 'CI');
+      assert.equal(item.currency, 'XOF');
+      assert.ok(!seenCiIds.has(item.id), `Doublon ID CI: ${item.id}`);
+      seenCiIds.add(item.id);
+      const tcKey = `${String(item.title).toLowerCase()}__${item.cityId}`;
+      assert.ok(!seenCiTitleCity.has(tcKey), `Doublon titre+ville CI: ${tcKey}`);
+      seenCiTitleCity.add(tcKey);
+
+      const blob = [item.title, item.address, item.description, item.priceRangeNote || '', item.verificationNote || ''].join(' ');
+      assert.equal(beninLeakRegex.test(blob), false, `Contamination Bénin/FCFA détectée sur CI (${item.id})`);
+      const img = resolveItemEditorialImage(item);
+      if (!item.customPhotoUrl) {
+        assert.equal(img.indicator, 'photo_a_ajouter');
+        assert.equal(img.src, '');
+      }
+    }
+
+    assert.ok(ciServices.some((s) => s.category === 'accommodation' && s.standing === 'economique'));
+    assert.ok(ciServices.some((s) => s.category === 'accommodation' && s.standing === 'residence_meublee'));
+    assert.ok(ciServices.some((s) => s.category === 'restaurant'));
+    assert.ok(ciServices.some((s) => s.category === 'transport'));
+    assert.ok(ciServices.some((s) => s.category === 'site'));
+    assert.ok(ciServices.some((s) => s.category === 'wellness'));
+    assert.ok(ciServices.some((s) => s.category === 'shopping'));
+    assert.ok(ciServices.some((s) => s.category === 'translation'));
+
+    // CI rescue returns CI emergency numbers (170, 180, 185) and CI alternatives
+    const ciRescueRes = await fetch(`${baseUrl}/api/amaro/rescue/incident`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: 'CI', cityId: 'abidjan', category: 'accommodation' }),
+    });
+    assert.equal(ciRescueRes.status, 200);
+    const ciRescueJson: any = await ciRescueRes.json();
+    assert.equal(ciRescueJson.countryCode, 'CI');
+    assert.ok(ciRescueJson.emergencyNumbers.some((n: any) => n.number === '170'));
+    assert.ok(ciRescueJson.emergencyNumbers.some((n: any) => n.number === '180'));
+    assert.ok(ciRescueJson.emergencyNumbers.some((n: any) => n.number === '185'));
+    assert.equal(beninLeakRegex.test(ciRescueJson.guidance), false);
+
+    // 49d. 1-click Admin toggle (/api/amaro/admin/country-state): non-admin gets 403, admin can open SN & close SN cleanly
+    const nonAdminToggle = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'SN', state: 'ouvert' }),
+    });
+    assert.equal(nonAdminToggle.status, 403);
+
+    const openSnRes = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'SN', state: 'ouvert' }),
+    });
+    assert.equal(openSnRes.status, 200);
+
+    const snOpenDataRes = await fetch(`${baseUrl}/api/amaro/countries/SN/data`);
+    assert.equal(snOpenDataRes.status, 200, 'Après bascule interrupteur admin sur Ouvert, SN doit renvoyer 200');
+
+    // Toggle SN back to 'bientot' -> immediately returns 403 again
+    const closeSnRes = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'SN', state: 'bientot' }),
+    });
+    assert.equal(closeSnRes.status, 200);
+
+    const snRelockedRes = await fetch(`${baseUrl}/api/amaro/countries/SN/data`);
+    assert.equal(snRelockedRes.status, 403, 'Après re-basculement sur En préparation, SN doit redevenir 403');
+  });
+
+  it('50. LOT 3 — Textes légaux complets sans mention interne client & paiement manuel Wave/OM/MTN avec référence de transaction', async () => {
+    store.reset();
+
+    // 50a. Tous les textes légaux publics sont sans « à renseigner », sans mention « à faire valider par un juriste », ni « Document provisoire »
+    const legalSlugs = ['cgv', 'politique_annulation', 'politique_confidentialite', 'mentions_legales'];
+    for (const slug of legalSlugs) {
+      const def = DEFAULT_PLATFORM_CONTENT[slug];
+      assert.ok(def && def.body.length > 150, `Texte complet requis pour ${slug}`);
+      const renderedEmpty = resolveLegalDocumentBody(slug, def.body, null);
+      assert.equal(/à renseigner/i.test(renderedEmpty), false, `Aucun « à renseigner » toléré sur ${slug}`);
+      assert.equal(/à faire valider par un juriste/i.test(renderedEmpty), false, `Mention interne juriste interdite côté client (${slug})`);
+      assert.equal(/document provisoire/i.test(renderedEmpty), false, `Bannière provisoire interdite côté client (${slug})`);
+    }
+
+    // Politique d'annulation comporte un barème chiffré explicite
+    const cancelText = resolveLegalDocumentBody(
+      'politique_annulation',
+      DEFAULT_PLATFORM_CONTENT.politique_annulation.body,
+      null
+    );
+    assert.ok(cancelText.includes('100 %'));
+    assert.ok(cancelText.includes('70 %'));
+    assert.ok(cancelText.includes('50 %'));
+    assert.ok(cancelText.includes('48 heures'));
+
+    // Injection dynamique de l'identité légale saisie dans le tableau de bord
+    const renderedConfigured = resolveLegalDocumentBody(
+      'mentions_legales',
+      DEFAULT_PLATFORM_CONTENT.mentions_legales.body,
+      {
+        legalCompanyName: 'AMARO CI SARL',
+        legalRccm: 'CI-ABJ-2026-B-0001',
+        legalIfu: '2600001A',
+        legalAddress: 'Cocody, Abidjan, Côte d’Ivoire',
+        legalContact: 'bonjour@amaro-test.example',
+        financialRetentionDuration: '5 ans',
+      }
+    );
+    assert.ok(renderedConfigured.includes('AMARO CI SARL'));
+    assert.ok(renderedConfigured.includes('CI-ABJ-2026-B-0001'));
+    assert.ok(renderedConfigured.includes('2600001A'));
+
+    // 50b. Zéro mention « passerelle ... en cours » dans les modes de paiement CI
+    for (const pm of COTE_DIVOIRE_COUNTRY_DEF.paymentMethods) {
+      assert.equal(/passerelle/i.test(pm), false, `Mention anxiogène passerelle interdite: ${pm}`);
+    }
+
+    // 50c. Flux paiement manuel client -> référence transaction -> admin validation
+    const targetResId = 'res-lot3-momo';
+    store.reservations.set(targetResId, {
+      reservationId: targetResId,
+      itemId: 'slot-lot3-momo',
+      notificationId: null,
+      folderId: 'folder-ci-lot3',
+      clientId: 'traveler-uid-1',
+      providerId: 'dir-ci-abj-pullman',
+      providerOwnerId: 'manual_concierge',
+      serviceId: 'ci-abj-pullman-plateau',
+      serviceTitle: 'Pullman Abidjan Plateau',
+      category: 'accommodation',
+      cityId: 'abidjan',
+      scheduledDate: '2026-12-10',
+      scheduledTime: '14:00',
+      computedEndTime: '11:00',
+      durationMinutes: 1260,
+      participants: 2,
+      providerPrice: 120000,
+      amaroFee: 4000,
+      taxAmount: 0,
+      totalAmount: 124000,
+      currency: 'XOF',
+      status: 'accepted',
+      paymentStatus: 'unpaid',
+      pricingSnapshot: '{}',
+      alternativeProposal: '',
+      updatedAtIso: new Date().toISOString(),
+    });
+
+    const declarePayRes = await fetch(`${baseUrl}/api/amaro/reservations/${targetResId}/transition`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'client_initiate_payment',
+        paymentMethod: 'Wave',
+        transactionRef: 'WAVE-CI-2026-9988',
+      }),
+    });
+    assert.equal(declarePayRes.status, 200);
+    const declarePayJson: any = await declarePayRes.json();
+    assert.equal(declarePayJson.paymentStatus, 'initiated');
+    assert.equal(declarePayJson.clientTxRef, 'WAVE-CI-2026-9988');
+    assert.equal(declarePayJson.paymentMethodDeclared, 'Wave');
+
+    const storedRes = store.reservations.get(targetResId)!;
+    assert.equal(storedRes.clientTxRef, 'WAVE-CI-2026-9988');
+    assert.equal(storedRes.paymentMethodDeclared, 'Wave');
+
+    // Admin valide le paiement après vérification
+    const adminConfirmRes = await fetch(`${baseUrl}/api/amaro/reservations/${targetResId}/transition`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'admin_confirm_payment',
+      }),
+    });
+    assert.equal(adminConfirmRes.status, 200);
+    const adminConfirmJson: any = await adminConfirmRes.json();
+    assert.equal(adminConfirmJson.paymentStatus, 'succeeded');
+    assert.equal(adminConfirmJson.status, 'confirmed');
+  });
+
+  it('51. LOT 4 & 5 — Photos uniques et vérifiées sur la Côte d’Ivoire (0 doublon, photoSource enregistré, 10 villes, 0 verified_partner)', () => {
+    const ciListings = ALL_PUBLIC_DIRECTORIES.filter((item) => item.countryCode === 'CI');
+    assert.ok(ciListings.length >= 60, `Attendu >= 60 fiches CI après LOT 5, reçu ${ciListings.length}`);
+
+    const vpItems = ciListings.filter((item) => item.dataOrigin === 'verified_partner');
+    assert.equal(vpItems.length, 0, `Fiches verified_partner interdites en CI : ${vpItems.map((x) => x.id).join(', ')}`);
+
+    const usedUrls = new Map<string, string>();
+    for (const item of ALL_PUBLIC_DIRECTORIES) {
+      if (item.customPhotoUrl) {
+        const prevId = usedUrls.get(item.customPhotoUrl);
+        assert.equal(
+          prevId,
+          undefined,
+          `Photo partagée détectée : ${item.customPhotoUrl} utilisée par ${prevId} et ${item.id}`
+        );
+        usedUrls.set(item.customPhotoUrl, item.id);
+      }
+    }
+
+    let withPhotoCount = 0;
+    let withoutPhotoCount = 0;
+    for (const item of ciListings) {
+      const resolved = resolveItemEditorialImage(item);
+      if (item.customPhotoUrl) {
+        withPhotoCount += 1;
+        assert.ok(item.customPhotoUrl.startsWith('https://'), `URL photo invalide sur ${item.id}`);
+        assert.ok(
+          item.photoSource && item.photoSource.startsWith('https://'),
+          `Lien source (photoSource) manquant sur ${item.id}`
+        );
+        assert.ok(item.imageLicense && item.imageLicense.length > 3, `Licence manquante sur ${item.id}`);
+        assert.equal(resolved.src, item.customPhotoUrl);
+        assert.notEqual(resolved.indicator, 'photo_a_ajouter');
+      } else {
+        withoutPhotoCount += 1;
+        assert.equal(resolved.indicator, 'photo_a_ajouter', `Attendu photo_a_ajouter sur ${item.id}`);
+        assert.equal(resolved.src, '');
+      }
+    }
+
+    assert.ok(withPhotoCount >= 24, `Attendu >= 24 fiches CI avec photo, reçu ${withPhotoCount}`);
+    assert.ok(withoutPhotoCount >= 1, 'Attendu des fiches honnêtes en photo_a_ajouter');
+
+    const requiredCities = [
+      'abidjan',
+      'yamoussoukro',
+      'grand-bassam',
+      'assinie',
+      'san-pedro',
+      'bouake',
+      'korhogo',
+      'man',
+      'grand-bereby',
+      'sassandra',
+    ];
+    for (const cityId of requiredCities) {
+      assert.ok(
+        ciListings.some((item) => item.cityId === cityId),
+        `Aucune fiche CI trouvée pour la ville ${cityId}`
+      );
+    }
+  });
+
+  it('52. Parité exacte Simulateur vs Serveur (Circuit A : 6% + 500, plafond 4 000, arrondi 100) + Parcours Paiement Manuel TEST et suppression', async () => {
+    store.reset(['CI']);
+
+    const referenceCases = [
+      { amount: 5_000, expectedFee: 800, expectedTotal: 5_800 },
+      { amount: 12_000, expectedFee: 1_300, expectedTotal: 13_300 },
+      { amount: 25_000, expectedFee: 2_000, expectedTotal: 27_000 },
+      { amount: 100_000, expectedFee: 4_000, expectedTotal: 104_000 },
+    ];
+
+    for (const rc of referenceCases) {
+      const feeNum = calculateCircuitAFee(rc.amount);
+      assert.equal(feeNum, rc.expectedFee, `calculateCircuitAFee mismatch sur ${rc.amount}`);
+      const sim = simulateCircuitAFees([rc.amount])[0];
+      assert.equal(sim.amaroFeeXof, rc.expectedFee, `Simulateur fee mismatch sur ${rc.amount}`);
+      assert.equal(sim.totalPriceXof, rc.expectedTotal, `Simulateur total mismatch sur ${rc.amount}`);
+
+      const srvId = `ci-test-parity-${rc.amount}`;
+      store.services.set(srvId, {
+        id: srvId,
+        providerId: `prov-parity-${rc.amount}`,
+        ownerId: 'manual_concierge',
+        title: `Prestation TEST CI ${rc.amount}`,
+        category: 'site',
+        countryCode: 'CI',
+        cityId: 'abidjan',
+        address: 'Le Plateau, Abidjan, Côte d’Ivoire',
+        priceAmount: rc.amount,
+        priceKnown: true,
+        currency: 'XOF',
+        durationMinutes: 120,
+        capacity: 10,
+        status: 'published',
+        dataOrigin: 'public_directory',
+      });
+
+      const qRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceId: srvId, participants: 1 }),
+      });
+      assert.equal(qRes.status, 200);
+      const qJson: any = await qRes.json();
+      assert.equal(qJson.breakdown.providerPrice, rc.amount);
+      assert.equal(qJson.breakdown.amaroFee, rc.expectedFee, `Serveur fee mismatch sur ${rc.amount}`);
+      assert.equal(qJson.breakdown.totalAmount, rc.expectedTotal, `Serveur total mismatch sur ${rc.amount}`);
+      store.services.delete(srvId);
+    }
+
+    const testFolderId = 'TEST-folder-ci-audit';
+    store.folders.set(testFolderId, {
+      id: testFolderId,
+      ownerId: 'traveler-uid-1',
+      countryCode: 'CI',
+      title: 'Séjour TEST Abidjan',
+      status: 'planning',
+      dossierFeeStatus: 'pending',
+      currency: 'XOF',
+    });
+
+    const testServiceId = 'TEST-srv-ci-abidjan';
+    store.services.set(testServiceId, {
+      id: testServiceId,
+      providerId: 'TEST-prov-ci-abidjan',
+      ownerId: 'provider-owner-uid',
+      title: 'Visite TEST Plateau Abidjan',
+      category: 'site',
+      countryCode: 'CI',
+      cityId: 'abidjan',
+      address: 'Le Plateau, Abidjan, Côte d’Ivoire',
+      priceAmount: 12_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 120,
+      capacity: 6,
+      status: 'published',
+      dataOrigin: 'public_directory',
+    });
+
+    const feeDecl = await fetch(`${baseUrl}/api/amaro/folders/${testFolderId}/declare-fee`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        transactionRef: 'TEST-DOS-REF-001',
+        payerName: 'TEST Voyageur',
+        payerPhone: '+2250700000000',
+        termsAccepted: true,
+        termsAcceptedVersion: '1.0',
+      }),
+    });
+    assert.equal(feeDecl.status, 200);
+
+    const feeVerify = await fetch(`${baseUrl}/api/amaro/admin/folders/${testFolderId}/verify-fee`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ decision: 'approve', reason: 'Audit TEST' }),
+    });
+    assert.equal(feeVerify.status, 200);
+
+    const createRes = await fetch(`${baseUrl}/api/amaro/reservations`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        folderId: testFolderId,
+        serviceId: testServiceId,
+        scheduledDate: '2026-12-20',
+        scheduledTime: '10:00',
+        participants: 1,
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created: any = await createRes.json();
+    const resId = String(created.reservationId);
+    assert.ok(resId.length > 0);
+    assert.equal(created.breakdown.amaroFee, 1_300);
+    assert.equal(created.breakdown.totalAmount, 13_300);
+
+    const provAccept = await fetch(`${baseUrl}/api/amaro/reservations/${resId}/transition`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'provider_accept' }),
+    });
+    assert.equal(provAccept.status, 200);
+
+    const payDeclare = await fetch(`${baseUrl}/api/amaro/reservations/${resId}/transition`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'client_initiate_payment',
+        paymentMethod: 'Wave',
+        transactionRef: 'TEST-WAVE-CI-2026',
+      }),
+    });
+    assert.equal(payDeclare.status, 200);
+    const payDeclaredJson: any = await payDeclare.json();
+    assert.equal(payDeclaredJson.paymentStatus, 'initiated');
+    assert.equal(payDeclaredJson.clientTxRef, 'TEST-WAVE-CI-2026');
+
+    const adminValid = await fetch(`${baseUrl}/api/amaro/reservations/${resId}/transition`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'admin_confirm_payment' }),
+    });
+    assert.equal(adminValid.status, 200);
+    const adminValidJson: any = await adminValid.json();
+    assert.equal(adminValidJson.paymentStatus, 'succeeded');
+    assert.equal(adminValidJson.status, 'confirmed');
+
+    store.reservations.delete(resId);
+    store.folders.delete(testFolderId);
+    store.itemsByFolder.delete(testFolderId);
+    store.services.delete(testServiceId);
+    store.usedDossierTxRefs.delete('TEST-DOS-REF-001');
+
+    assert.equal(store.reservations.has(resId), false);
+    assert.equal(store.folders.has(testFolderId), false);
+    assert.equal(store.services.has(testServiceId), false);
+  });
 });
+
 
 

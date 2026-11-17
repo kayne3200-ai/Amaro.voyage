@@ -4,16 +4,14 @@ import {
   Scale,
   ShieldCheck,
   HeartHandshake,
-  AlertTriangle,
   Building2,
   Compass,
   Award,
 } from 'lucide-react';
-import type { PlatformContentDoc } from '../../types/amaro';
+import type { PlatformContentDoc, SystemSettingDoc } from '../../types/amaro';
 import {
   DEFAULT_PLATFORM_CONTENT,
-  CONVENTION_EXPECTED_CLAUSES_REMINDER,
-  OWNER_PLACEHOLDER,
+  resolveLegalDocumentBody,
 } from '../../data/amaroGovernanceDefaults';
 
 export type LegalDocKey =
@@ -27,6 +25,8 @@ export type LegalDocKey =
   | 'cgv'
   | 'cgv_client'
   | 'politique_annulation'
+  | 'politique_confidentialite'
+  | 'confidentialite'
   | 'convention_prestataire'
   | 'mentions_legales'
   | 'assurance_voyage'
@@ -41,6 +41,7 @@ type CanonicalDocId =
   | 'ce_qu_amaro_garantit'
   | 'cgv'
   | 'politique_annulation'
+  | 'politique_confidentialite'
   | 'convention_prestataire'
   | 'mentions_legales'
   | 'assurance_voyage'
@@ -52,6 +53,9 @@ export function normalizeLegalDocId(key: string): CanonicalDocId {
     case 'cgv_client':
     case 'cgv':
       return 'cgv';
+    case 'confidentialite':
+    case 'politique_confidentialite':
+      return 'politique_confidentialite';
     case 'methode_verification':
     case 'comment_amaro_verifie':
       return 'comment_amaro_verifie';
@@ -79,6 +83,7 @@ interface LegalAndCharterModalProps {
   initialDocId?: LegalDocKey | string;
   docId?: LegalDocKey | string;
   platformContentMap: Record<string, PlatformContentDoc>;
+  countrySetting?: Partial<SystemSettingDoc> | null;
   onClose: () => void;
 }
 
@@ -91,8 +96,9 @@ const DOC_TABS: Array<{
   { id: 'charte_voyage_respectueux', label: 'Charte du voyage respectueux', group: 'engagement' },
   { id: 'comment_amaro_verifie', label: 'Comment AMARO vérifie', group: 'engagement' },
   { id: 'ce_qu_amaro_garantit', label: 'Garanties & limites', group: 'engagement' },
-  { id: 'cgv', label: 'CGV Client', group: 'juridique' },
-  { id: 'politique_annulation', label: "Politique d'annulation", group: 'juridique' },
+  { id: 'cgv', label: 'Conditions générales', group: 'juridique' },
+  { id: 'politique_annulation', label: 'Remboursement & annulation', group: 'juridique' },
+  { id: 'politique_confidentialite', label: 'Confidentialité & données', group: 'juridique' },
   { id: 'convention_prestataire', label: 'Convention prestataire', group: 'juridique' },
   { id: 'mentions_legales', label: 'Mentions légales', group: 'juridique' },
   { id: 'securite_regions', label: 'Sécurité par région', group: 'securite' },
@@ -104,6 +110,7 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
   initialDocId,
   docId,
   platformContentMap,
+  countrySetting,
   onClose,
 }) => {
   const [selectedId, setSelectedId] = useState<CanonicalDocId>(() =>
@@ -117,12 +124,14 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
       slug: selectedId,
       title: selectedId,
       version: '1.0',
-      body: OWNER_PLACEHOLDER,
-      isProvisional: true,
-      ownerValidated: false,
+      body: DEFAULT_PLATFORM_CONTENT.cgv.body,
+      isProvisional: false,
+      ownerValidated: true,
       updatedBy: 'system_default',
       updatedAtIso: new Date().toISOString(),
     };
+
+  const renderedBody = resolveLegalDocumentBody(selectedId, activeDoc.body, countrySetting);
 
   let parsedPartners: Array<{ id: string; name: string; role: string; agreementReference: string }> =
     [];
@@ -148,10 +157,10 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
             <Scale className="w-5 h-5 text-amber-400 shrink-0" />
             <div>
               <h2 id="amaro-legal-modal-title" className="text-base font-bold">
-                Cadre transparent, éthique &amp; contractuel AMARO.VOYAGE
+                Informations légales, charte &amp; conditions AMARO.VOYAGE
               </h2>
-              <p className="text-[11px] text-slate-300">
-                Informations vérifiables · Zéro mention juridique ou commerciale inventée
+              <p className="text-xs text-slate-300">
+                Engagements clairs, confidentialité et règles de remboursement
               </p>
             </div>
           </div>
@@ -159,7 +168,7 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Fermer"
-            className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
           </button>
@@ -173,7 +182,7 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => setSelectedId(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors inline-flex items-center ${
                   active
                     ? 'bg-[#0B192C] text-white dark:bg-amber-600'
                     : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:border-slate-400'
@@ -191,7 +200,8 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
               {selectedId === 'charte_voyage_respectueux' || selectedId === 'vision_amaro' ? (
                 <HeartHandshake className="w-5 h-5 text-amber-600" />
               ) : selectedId === 'comment_amaro_verifie' ||
-                selectedId === 'ce_qu_amaro_garantit' ? (
+                selectedId === 'ce_qu_amaro_garantit' ||
+                selectedId === 'politique_confidentialite' ? (
                 <ShieldCheck className="w-5 h-5 text-emerald-600" />
               ) : selectedId === 'partenaires_officiels' ? (
                 <Award className="w-5 h-5 text-amber-600" />
@@ -205,38 +215,18 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
               </h3>
             </div>
 
-            {activeDoc.ownerValidated && !activeDoc.isProvisional ? (
-              <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                Validé par le propriétaire
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-50 text-amber-900 border border-amber-200">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Document provisoire à faire valider avant ouverture commerciale
-              </span>
-            )}
+            <span className="px-2.5 py-1 rounded text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Cadre officiel AMARO.VOYAGE
+            </span>
           </div>
 
           <div className="whitespace-pre-line leading-relaxed bg-slate-50 dark:bg-slate-950/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
-            {activeDoc.body || OWNER_PLACEHOLDER}
+            {renderedBody}
           </div>
-
-          {selectedId === 'convention_prestataire' && (
-            <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 space-y-2">
-              <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                Aide-mémoire des 8 clauses contractuelles prévues (à rédiger et valider par vos soins) :
-              </p>
-              <ul className="list-disc pl-5 space-y-1 text-xs text-amber-900/90 dark:text-amber-200/90">
-                {CONVENTION_EXPECTED_CLAUSES_REMINDER.map((clause) => (
-                  <li key={clause}>{clause}</li>
-                ))}
-              </ul>
-            </div>
-          )}
 
           {selectedId === 'partenaires_officiels' && parsedPartners.length === 0 && (
             <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500">
-              Aucun partenaire institutionnel, office du tourisme, compagnie d’assurance ou ONG n’est affiché tant qu’un accord réel n’a pas été enregistré par vos soins dans la Console Admin.
+              Les partenaires institutionnels ou associatifs conventionnés apparaîtront dans cette rubrique dès leur publication officielle.
             </div>
           )}
 
@@ -251,7 +241,7 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
                   <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
                     {partner.role}
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-1">
+                  <p className="text-xs text-slate-500 mt-1">
                     Accord vérifié : {partner.agreementReference}
                   </p>
                 </div>
@@ -265,7 +255,7 @@ export const LegalAndCharterModal: React.FC<LegalAndCharterModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-[#0B192C] text-white font-semibold hover:bg-slate-800"
+            className="min-h-[44px] px-4 py-2 rounded-lg bg-[#0B192C] text-white font-semibold hover:bg-slate-800"
           >
             Fermer
           </button>

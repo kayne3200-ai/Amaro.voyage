@@ -385,6 +385,8 @@ export interface ReservationDoc {
   restaurantCautionXof?: number;
   noShow?: boolean;
   refundStatus?: 'none' | 'automatic_refund_initiated' | 'refunded';
+  clientTxRef?: string;
+  paymentMethodDeclared?: string;
 }
 
 export interface CategoryPaymentSchedule {
@@ -510,15 +512,23 @@ export interface SystemSettingDoc {
   freeTimeBlocksPerDay?: number; // default 1 (9.3)
   includeDossierFeeInAffiliateBase?: boolean; // default false (5.2)
   localContributionPercent?: number; // default 0% (9.6)
-  localContributionLabel?: string; // « à renseigner par le propriétaire »
-  amaroMobileMoneyNumber?: string; // « à renseigner par le propriétaire »
-  amaroMobileMoneyHolder?: string; // « à renseigner par le propriétaire »
-  amaroWhatsappNumber?: string; // « à renseigner par le propriétaire »
+  localContributionLabel?: string;
+  amaroMobileMoneyNumber?: string;
+  amaroMobileMoneyHolder?: string;
+  amaroWhatsappNumber?: string;
   supportWhatsappNumber?: string;
-  vaultKeyConfirmedByOwner?: boolean; // default false (7.2)
-  financialRetentionDuration?: string; // « à renseigner par le propriétaire » (Précision 3)
-  termsVersion?: string; // default '1.0'
-  conventionVersion?: string; // default '1.0'
+  legalCompanyName?: string;
+  legalRccm?: string;
+  legalIfu?: string;
+  legalAddress?: string;
+  legalContact?: string;
+  waveNumber?: string;
+  orangeMoneyNumber?: string;
+  mtnMoneyNumber?: string;
+  vaultKeyConfirmedByOwner?: boolean;
+  financialRetentionDuration?: string;
+  termsVersion?: string;
+  conventionVersion?: string;
   includeDemoData?: boolean; // default false (5.8)
   exchangeRateEurToXof?: number; // default 655.957
   exchangeRateUsdToXof?: number; // default 605
@@ -1139,3 +1149,6 @@ export interface CensusListingDoc {
   }>;
   updatedAtIso: string;
 }
+
+export const PENDING_ASSISTANT_DRAFT_KEY = 'amaro_pending_assistant_draft_v1';
+

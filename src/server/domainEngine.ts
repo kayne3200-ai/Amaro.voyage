@@ -26,7 +26,11 @@ import {
   TOP_AMERICAS_PUBLIC_DIRECTORY,
   TOP_AMERICAS_PART2_PUBLIC_DIRECTORY,
 } from '../data/amaroRegistry';
-import { INDICATIVE_RATES_PER_EUR } from '../lib/offerEngine';
+import {
+  DEFAULT_CIRCUIT_A_FEE_CONFIG,
+  INDICATIVE_RATES_PER_EUR,
+  calculateCircuitAFee,
+} from '../lib/offerEngine';
 
 export const BCEAO_EUR_TO_XOF = 655.957;
 
@@ -121,6 +125,15 @@ export interface ServerSystemSetting {
   amaroMobileMoneyNumber?: string;
   amaroMobileMoneyHolder?: string;
   amaroWhatsappNumber?: string;
+  supportWhatsappNumber?: string;
+  legalCompanyName?: string;
+  legalRccm?: string;
+  legalIfu?: string;
+  legalAddress?: string;
+  legalContact?: string;
+  waveNumber?: string;
+  orangeMoneyNumber?: string;
+  mtnMoneyNumber?: string;
   vaultKeyConfirmedByOwner?: boolean;
   financialRetentionDuration?: string;
   termsVersion?: string;
@@ -343,10 +356,13 @@ export function resolveEffectiveMarginPercent(
     }
     return typeof setting.commissionPercent === 'number' ? setting.commissionPercent : 10;
   }
+  if (typeof setting.amaroFeePercent === 'number') {
+    return setting.amaroFeePercent;
+  }
   if (typeof setting.directoryMarginPercent === 'number') {
     return setting.directoryMarginPercent;
   }
-  return 5;
+  return 6;
 }
 
 export function isValidIsoDate(dateStr: string): boolean {
@@ -439,14 +455,36 @@ export function computeAuthoritativeQuote(params: {
     ? Math.max(0, Number(params.overrideProviderSubtotal || 0))
     : effectiveUnitPrice * participants;
   const providerPrice = roundCurrencyAmount(rawSubtotal, currency);
-  const rawCommission =
-    (providerPrice * effectiveMarginPercent) / 100 + setting.serviceFeeFlat;
-  const capAmount = typeof setting.serviceFeeCap === 'number' ? setting.serviceFeeCap : 4000;
-  const cappedCommission =
-    circuitType === 'circuit_a_directory'
-      ? Math.min(capAmount, rawCommission)
-      : rawCommission;
-  const amaroFee = roundCurrencyAmount(cappedCommission, currency);
+
+  let amaroFee = 0;
+  if (circuitType === 'circuit_a_directory') {
+    const fixedFee =
+      typeof setting.amaroFeeFixed === 'number'
+        ? setting.amaroFeeFixed
+        : typeof setting.serviceFeeFlat === 'number'
+        ? setting.serviceFeeFlat
+        : DEFAULT_CIRCUIT_A_FEE_CONFIG.fixedAmount;
+    const capAmount =
+      typeof setting.amaroFeeCap === 'number'
+        ? setting.amaroFeeCap
+        : typeof setting.serviceFeeCap === 'number'
+        ? setting.serviceFeeCap
+        : DEFAULT_CIRCUIT_A_FEE_CONFIG.capAmount;
+    const roundingStep =
+      typeof setting.amaroFeeRounding === 'number'
+        ? setting.amaroFeeRounding
+        : DEFAULT_CIRCUIT_A_FEE_CONFIG.roundingStep;
+    amaroFee = calculateCircuitAFee(providerPrice, {
+      percentRate: effectiveMarginPercent / 100,
+      fixedAmount: fixedFee,
+      capAmount,
+      roundingStep,
+    });
+  } else {
+    const rawCommission =
+      (providerPrice * effectiveMarginPercent) / 100 + setting.serviceFeeFlat;
+    amaroFee = roundCurrencyAmount(rawCommission, currency);
+  }
   const rawTax = ((providerPrice + amaroFee) * setting.taxPercent) / 100;
   const taxAmount = roundCurrencyAmount(rawTax, currency);
   const totalAmount = roundCurrencyAmount(providerPrice + amaroFee + taxAmount, currency);

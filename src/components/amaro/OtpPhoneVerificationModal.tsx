@@ -142,11 +142,11 @@ export function OtpPhoneVerificationModal({
                 required
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="+229 97 00 00 00"
-                className="w-full min-h-[42px] px-3 py-2 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                placeholder="+225 07 00 00 00"
+                className="w-full min-h-[44px] px-3 py-2 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
-              <span className="text-[11px] text-slate-500 block">
-                Exemple : Bénin (+229), France (+33), Côte d’Ivoire (+225), Togo (+228).
+              <span className="text-xs text-slate-500 block">
+                Exemple : Côte d’Ivoire (+225), France (+33), Ghana (+233), Sénégal (+221).
               </span>
             </div>
 
@@ -208,7 +208,7 @@ export function OtpPhoneVerificationModal({
                 {phone} ({channel === 'whatsapp' ? 'WhatsApp' : 'SMS'})
               </strong>
               {demoCode && (
-                <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-800 text-[11px] text-teal-800 dark:text-teal-300">
+                <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-800 text-xs text-teal-800 dark:text-teal-300">
                   <span>Code de démonstration immédiat : </span>
                   <button
                     type="button"

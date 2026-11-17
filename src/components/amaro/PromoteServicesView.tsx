@@ -146,11 +146,12 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
   onSaveProviderProfile,
   onCreateOrUpdateProviderService,
   onProviderRespondReservation,
-  selectedCountryCode = 'BJ',
+  selectedCountryCode = 'CI',
 }) => {
   const currentCountry = React.useMemo(() => {
     return (
       COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
       COUNTRIES_REGISTRY[0]
     );
   }, [selectedCountryCode]);
@@ -377,7 +378,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
             <button
               type="button"
               onClick={() => onOpenLegalDoc('convention_prestataire')}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold border border-white/15"
+              className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold border border-white/15"
             >
               <FileCheck2 className="w-4 h-4 text-amber-400" />
               Lire la convention prestataire
@@ -432,7 +433,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                   minLength={2}
                   value={businessName}
                   onChange={(e) => setBusinessName(e.target.value)}
-                  placeholder="Ex. : Villa Côtière Ouidah"
+                  placeholder={`Ex. : Villa Côtière ${currentCountry.cities[0]?.name || 'Assinie-Mafia'}`}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
                 />
               </div>
@@ -712,7 +713,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                           )}
                         </div>
                         {res.responseDeadlineAt && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-100 text-amber-900 tabular-nums">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-amber-100 text-amber-900 tabular-nums">
                             <AlertTriangle className="w-3.5 h-3.5" />
                             Répondre avant : {res.responseDeadlineAt.replace('T', ' ').slice(0, 16)} UTC
                           </span>
@@ -728,7 +729,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                             <div className="flex flex-wrap items-center gap-1.5 text-xs">
                               <span className="text-slate-500">Justificatif d&apos;identité client :</span>
                               <span
-                                className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${ui.badgeClass}`}
+                                className={`px-2 py-0.5 rounded border text-xs font-semibold ${ui.badgeClass}`}
                               >
                                 {ui.label}
                               </span>
@@ -736,7 +737,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                             <button
                               type="button"
                               onClick={() => setActiveIdentityRes(res)}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-[11px] font-semibold"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-xs font-semibold"
                             >
                               <ShieldCheck className="w-3.5 h-3.5" />
                               Vérification d&apos;identité client
@@ -901,14 +902,14 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span
-                              className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${ui.badgeClass}`}
+                              className={`px-2 py-0.5 rounded border text-xs font-semibold ${ui.badgeClass}`}
                             >
                               {ui.label}
                             </span>
                             <button
                               type="button"
                               onClick={() => setActiveIdentityRes(res)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-[11px] font-semibold"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-xs font-semibold"
                             >
                               <ShieldCheck className="w-3 h-3" />
                               Justificatif client
@@ -980,7 +981,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                         Statut catalogue : <strong>{srv.status}</strong> · Capacité : {srv.capacity} pers.
                       </p>
                       {srv.blockedDates && srv.blockedDates.length > 0 && (
-                        <p className="text-[11px] text-rose-700 dark:text-rose-400 flex items-center gap-1">
+                        <p className="text-xs text-rose-700 dark:text-rose-400 flex items-center gap-1">
                           <CalendarX2 className="w-3.5 h-3.5" />
                           Dates bloquées : {srv.blockedDates.join(', ')}
                         </p>
@@ -1151,7 +1152,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                               {off.maxGuests ?? off.seats ?? 2} pers.
                             </p>
                             {off.history && off.history.length > 0 && (
-                              <p className="text-[11px] text-slate-500 tabular-nums">
+                              <p className="text-xs text-slate-500 tabular-nums">
                                 Dernière mise à jour : {off.history[off.history.length - 1].updatedAtIso.slice(0, 16).replace('T', ' ')} ({off.history[off.history.length - 1].summary})
                               </p>
                             )}
@@ -1446,7 +1447,7 @@ export const PromoteServicesView: React.FC<PromoteServicesViewProps> = ({
                     <p className="text-xs text-slate-800 dark:text-slate-200 italic">
                       « {ty.message} »
                     </p>
-                    <p className="text-[11px] text-slate-500 mt-1">
+                    <p className="text-xs text-slate-500 mt-1">
                       — {ty.clientDisplayName} · {ty.serviceTitle} ({ty.createdAtIso.slice(0, 10)})
                     </p>
                   </div>

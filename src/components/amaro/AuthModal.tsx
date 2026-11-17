@@ -144,7 +144,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
             type="button"
             onClick={onClose}
             aria-label="Fermer"
-            className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white"
+            className="min-h-[44px] min-w-[40px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white"
           >
             <X className="w-5 h-5" />
           </button>
@@ -160,7 +160,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                 setErrorMsg('');
                 setInfoMsg('');
               }}
-              className={`min-h-[38px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+              className={`min-h-[44px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 mode === 'signin'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300'
@@ -175,7 +175,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                 setErrorMsg('');
                 setInfoMsg('');
               }}
-              className={`min-h-[38px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+              className={`min-h-[44px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 mode === 'signup'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300'
@@ -190,7 +190,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                 setErrorMsg('');
                 setInfoMsg('');
               }}
-              className={`min-h-[38px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+              className={`min-h-[44px] px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 mode === 'reset'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300'
@@ -212,7 +212,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                 <span>Continuer avec Google</span>
               </button>
 
-              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+              <div className="flex items-center gap-3 text-xs text-slate-400">
                 <div className="flex-1 h-px bg-slate-200 dark:bg-slate-800" />
                 <span>ou par e-mail et mot de passe</span>
                 <div className="flex-1 h-px bg-slate-200 dark:bg-slate-800" />
@@ -232,7 +232,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="Ex. Kossi A."
                   maxLength={90}
-                  className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full min-h-[44px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                 />
               </div>
             )}
@@ -248,7 +248,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="vous@exemple.com"
                 maxLength={190}
-                className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="w-full min-h-[44px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
             </div>
 
@@ -264,7 +264,7 @@ export function AuthModal({ onClose, onSuccessMessage }: AuthModalProps) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="6 caractères minimum"
-                  className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full min-h-[44px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                 />
               </div>
             )}

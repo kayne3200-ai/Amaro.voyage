@@ -58,27 +58,27 @@ export function ListingTrustBadge({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {isAmaroAssistance ? (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
           <Sparkles className="w-3 h-3 shrink-0" />
           <span>Accompagnement humain AMARO</span>
         </span>
       ) : isConventionedPartner ? (
         <span
           title="Établissement ayant accepté la convention AMARO et validé par l’administration."
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
         >
           <CheckCircle2 className="w-3 h-3 shrink-0" />
           <span>Partenaire AMARO</span>
         </span>
       ) : isPendingProvider ? (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
           <Clock className="w-3 h-3 shrink-0" />
           <span>En attente de validation</span>
         </span>
       ) : (
         <span
           title="Établissement issu de sources publiques documentées, non encore conventionné avec AMARO. Vérification manuelle sur dossier."
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
         >
           <HelpCircle className="w-3 h-3 shrink-0" />
           <span>Recensé, non vérifié</span>
@@ -86,7 +86,7 @@ export function ListingTrustBadge({
       )}
 
       {showPriorityNotice && isConventionedPartner && !compact && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-amber-50/90 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50/90 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800">
           Priorité partenaire conventionné
         </span>
       )}
@@ -94,7 +94,7 @@ export function ListingTrustBadge({
       {showPhotoNotice && hasVerifiedRealPhoto && (
         <span
           title="Cliché certifié fourni par l’établissement partenaire."
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs"
         >
           <CheckCircle2 className="w-3 h-3 shrink-0 text-emerald-400" />
           <span>Cliché certifié</span>
@@ -104,7 +104,7 @@ export function ListingTrustBadge({
       {showPhotoNotice && !hasVerifiedRealPhoto && (
         <span
           title="Photo d'illustration ou à vérifier auprès de l’établissement."
-          className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs"
+          className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs"
         >
           Photo d'illustration
         </span>
@@ -126,7 +126,7 @@ export function PhotoIllustrationBadge({
     return null;
   }
   return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
+    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
       Photo d'illustration
     </span>
   );

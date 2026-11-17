@@ -79,12 +79,15 @@ import {
   VALIDATION_MATRIX,
 } from '../../data/amaroRegistry';
 import {
+  cleanClientSettingValue,
   CONVENTION_EXPECTED_CLAUSES_REMINDER,
   DEFAULT_PLATFORM_CONTENT,
+  isConfiguredSettingValue,
   OWNER_PLACEHOLDER,
 } from '../../data/amaroGovernanceDefaults';
 import {
   UN_COUNTRIES_REGISTRY,
+  getEffectiveCountryState,
   type UNCountryMeta,
   type UNCountryState,
 } from '../../data/unCountries';
@@ -460,9 +463,9 @@ export function WorkspacesAdminView({
     countrySetting?.partnerMarginPercent ?? 10
   );
   const [directoryMarginPct, setDirectoryMarginPct] = useState<number>(
-    countrySetting?.directoryMarginPercent ?? 5
+    countrySetting?.directoryMarginPercent ?? 6
   );
-  const [flatFee, setFlatFee] = useState<number>(countrySetting?.serviceFeeFlat ?? 0);
+  const [flatFee, setFlatFee] = useState<number>(countrySetting?.serviceFeeFlat ?? 500);
   const [taxPct, setTaxPct] = useState<number>(countrySetting?.taxPercent ?? 0);
   const [dossierFeeXof, setDossierFeeXof] = useState<number>(
     countrySetting?.dossierFeeXof ?? 20000
@@ -480,19 +483,43 @@ export function WorkspacesAdminView({
     countrySetting?.localContributionPercent ?? 0
   );
   const [localContribLabel, setLocalContribLabel] = useState<string>(
-    countrySetting?.localContributionLabel ?? OWNER_PLACEHOLDER
+    cleanClientSettingValue(countrySetting?.localContributionLabel)
   );
   const [momoNumber, setMomoNumber] = useState<string>(
-    countrySetting?.amaroMobileMoneyNumber ?? OWNER_PLACEHOLDER
+    cleanClientSettingValue(countrySetting?.amaroMobileMoneyNumber)
   );
   const [momoHolder, setMomoHolder] = useState<string>(
-    countrySetting?.amaroMobileMoneyHolder ?? OWNER_PLACEHOLDER
+    cleanClientSettingValue(countrySetting?.amaroMobileMoneyHolder)
   );
   const [waSupport, setWaSupport] = useState<string>(
-    countrySetting?.amaroWhatsappNumber ?? OWNER_PLACEHOLDER
+    cleanClientSettingValue(countrySetting?.amaroWhatsappNumber)
   );
   const [retentionDuration, setRetentionDuration] = useState<string>(
-    countrySetting?.financialRetentionDuration ?? OWNER_PLACEHOLDER
+    cleanClientSettingValue(countrySetting?.financialRetentionDuration) || '5 ans'
+  );
+  const [legalCompanyName, setLegalCompanyName] = useState<string>(
+    cleanClientSettingValue(countrySetting?.legalCompanyName)
+  );
+  const [legalRccm, setLegalRccm] = useState<string>(
+    cleanClientSettingValue(countrySetting?.legalRccm)
+  );
+  const [legalIfu, setLegalIfu] = useState<string>(
+    cleanClientSettingValue(countrySetting?.legalIfu)
+  );
+  const [legalAddress, setLegalAddress] = useState<string>(
+    cleanClientSettingValue(countrySetting?.legalAddress)
+  );
+  const [legalContact, setLegalContact] = useState<string>(
+    cleanClientSettingValue(countrySetting?.legalContact)
+  );
+  const [waveNumber, setWaveNumber] = useState<string>(
+    cleanClientSettingValue(countrySetting?.waveNumber)
+  );
+  const [orangeMoneyNumber, setOrangeMoneyNumber] = useState<string>(
+    cleanClientSettingValue(countrySetting?.orangeMoneyNumber)
+  );
+  const [mtnMoneyNumber, setMtnMoneyNumber] = useState<string>(
+    cleanClientSettingValue(countrySetting?.mtnMoneyNumber)
   );
   const [vaultKeyConfirmed, setVaultKeyConfirmed] = useState<boolean>(
     Boolean(countrySetting?.vaultKeyConfirmedByOwner)
@@ -551,10 +578,10 @@ export function WorkspacesAdminView({
 
   // Admin Catalogue Editor State
   const [admSrvId, setAdmSrvId] = useState<string>('');
-  const [admProvId, setAdmProvId] = useState<string>('dir-admin-benin');
+  const [admProvId, setAdmProvId] = useState<string>('dir-admin-amaro');
   const [admTitle, setAdmTitle] = useState<string>('');
   const [admCategory, setAdmCategory] = useState<ServiceCategory>('accommodation');
-  const [admCity, setAdmCity] = useState<string>('cotonou');
+  const [admCity, setAdmCity] = useState<string>('abidjan');
   const [admAddress, setAdmAddress] = useState<string>('');
   const [admDesc, setAdmDesc] = useState<string>('');
   const [admPrice, setAdmPrice] = useState<number>(0);
@@ -564,7 +591,7 @@ export function WorkspacesAdminView({
   const [admOrigin, setAdmOrigin] = useState<DataOriginType>('public_directory');
   const [admVerif, setAdmVerif] = useState<VerificationLevel>('verified');
   const [admStatus, setAdmStatus] = useState<'published' | 'draft' | 'archived'>('published');
-  const [admImgKey, setAdmImgKey] = useState<string>('cotonou_coast');
+  const [admImgKey, setAdmImgKey] = useState<string>('photo_a_ajouter');
   const [admCustomPhotoUrl, setAdmCustomPhotoUrl] = useState<string>('');
   const [admPhotoVerified, setAdmPhotoVerified] = useState<boolean>(false);
   const [admSourceName, setAdmSourceName] = useState<string>('');
@@ -573,6 +600,7 @@ export function WorkspacesAdminView({
   const [admSacredNotice, setAdmSacredNotice] = useState<string>('');
   const [admRespHours, setAdmRespHours] = useState<number>(24);
   const [savingAdminSrv, setSavingAdminSrv] = useState<boolean>(false);
+  const [togglingCountryCode, setTogglingCountryCode] = useState<string | null>(null);
 
   // Admin Operational Tools State (Notifications, Deadlines, Dossier Fee, Governance, Multi-Admin, Content)
   const [notifChannels, setNotifChannels] = useState<
@@ -637,15 +665,52 @@ export function WorkspacesAdminView({
       setMaxVisitsChange(countrySetting.maxVisitsCityChangeDay ?? 1);
       setMaxVisitsSame(countrySetting.maxVisitsSameCityDay ?? 2);
       setLocalContribPct(countrySetting.localContributionPercent ?? 0);
-      setLocalContribLabel(countrySetting.localContributionLabel ?? OWNER_PLACEHOLDER);
-      setMomoNumber(countrySetting.amaroMobileMoneyNumber ?? OWNER_PLACEHOLDER);
-      setMomoHolder(countrySetting.amaroMobileMoneyHolder ?? OWNER_PLACEHOLDER);
-      setWaSupport(countrySetting.amaroWhatsappNumber ?? OWNER_PLACEHOLDER);
-      setRetentionDuration(countrySetting.financialRetentionDuration ?? OWNER_PLACEHOLDER);
+      setLocalContribLabel(cleanClientSettingValue(countrySetting.localContributionLabel));
+      setMomoNumber(cleanClientSettingValue(countrySetting.amaroMobileMoneyNumber));
+      setMomoHolder(cleanClientSettingValue(countrySetting.amaroMobileMoneyHolder));
+      setWaSupport(cleanClientSettingValue(countrySetting.amaroWhatsappNumber));
+      setRetentionDuration(
+        cleanClientSettingValue(countrySetting.financialRetentionDuration) || '5 ans'
+      );
+      setLegalCompanyName(cleanClientSettingValue(countrySetting.legalCompanyName));
+      setLegalRccm(cleanClientSettingValue(countrySetting.legalRccm));
+      setLegalIfu(cleanClientSettingValue(countrySetting.legalIfu));
+      setLegalAddress(cleanClientSettingValue(countrySetting.legalAddress));
+      setLegalContact(cleanClientSettingValue(countrySetting.legalContact));
+      setWaveNumber(cleanClientSettingValue(countrySetting.waveNumber));
+      setOrangeMoneyNumber(cleanClientSettingValue(countrySetting.orangeMoneyNumber));
+      setMtnMoneyNumber(cleanClientSettingValue(countrySetting.mtnMoneyNumber));
       setVaultKeyConfirmed(Boolean(countrySetting.vaultKeyConfirmedByOwner));
       setIncludeDemo(Boolean(countrySetting.includeDemoData));
     }
   }, [countrySetting]);
+
+  // Admin-only check of required legal & Mobile Money configuration fields (never shown to clients)
+  const missingAdminRequiredFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!isConfiguredSettingValue(legalCompanyName)) missing.push('Dénomination sociale');
+    if (!isConfiguredSettingValue(legalRccm)) missing.push('Numéro RCCM');
+    if (!isConfiguredSettingValue(legalIfu)) missing.push('Numéro IFU / NCC');
+    if (!isConfiguredSettingValue(legalAddress)) missing.push('Adresse légale du siège');
+    if (!isConfiguredSettingValue(legalContact)) missing.push('Contact officiel (e-mail / tél.)');
+    if (!isConfiguredSettingValue(waveNumber)) missing.push('Numéro Wave AMARO');
+    if (!isConfiguredSettingValue(orangeMoneyNumber)) missing.push('Numéro Orange Money AMARO');
+    if (!isConfiguredSettingValue(mtnMoneyNumber)) missing.push('Numéro MTN Mobile Money AMARO');
+    if (!isConfiguredSettingValue(momoHolder)) missing.push('Titulaire des comptes Mobile Money');
+    if (!isConfiguredSettingValue(waSupport)) missing.push('Numéro WhatsApp Support AMARO');
+    return missing;
+  }, [
+    legalCompanyName,
+    legalRccm,
+    legalIfu,
+    legalAddress,
+    legalContact,
+    waveNumber,
+    orangeMoneyNumber,
+    mtnMoneyNumber,
+    momoHolder,
+    waSupport,
+  ]);
 
   const loadNotificationIssues = async () => {
     if (!isSignedIn || !isAdmin) return;
@@ -1154,7 +1219,7 @@ export function WorkspacesAdminView({
         <button
           type="button"
           onClick={onToggleTheme}
-          className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
+          className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl"
         >
           {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
           <span>{isDark ? 'Mode Clair' : 'Mode Sombre'}</span>
@@ -1230,7 +1295,7 @@ export function WorkspacesAdminView({
                 key={tab.id}
                 type="button"
                 onClick={() => setSubTab(tab.id)}
-                className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
+                className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
                   active
                     ? 'bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950'
                     : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
@@ -1351,7 +1416,7 @@ export function WorkspacesAdminView({
                 <button
                   type="button"
                   onClick={onRequireSignIn}
-                  className="min-h-[42px] px-4 py-2 font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+                  className="min-h-[44px] px-4 py-2 font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
                 >
                   Se connecter (Administrateur)
                 </button>
@@ -1622,7 +1687,7 @@ export function WorkspacesAdminView({
                         type="tel"
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
-                        placeholder="+229 ... (aucun SMS automatique envoyé)"
+                        placeholder="+225 ... (aucun SMS automatique envoyé)"
                         maxLength={38}
                         className="w-full min-h-[44px] px-3.5 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
@@ -1695,7 +1760,7 @@ export function WorkspacesAdminView({
                         <select
                           value={prefStanding}
                           onChange={(e) => setPrefStanding(e.target.value)}
-                          className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                          className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                         >
                           <option value="economique">Confort simple / économique</option>
                           <option value="equilibre">Équilibré</option>
@@ -1704,7 +1769,7 @@ export function WorkspacesAdminView({
                         <select
                           value={prefPace}
                           onChange={(e) => setPrefPace(e.target.value)}
-                          className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                          className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                         >
                           <option value="respiration">Rythme calme (temps libre chaque jour)</option>
                           <option value="modere">Rythme modéré (max 2 visites/jour)</option>
@@ -1715,7 +1780,7 @@ export function WorkspacesAdminView({
                           onChange={(e) => setPrefDietary(e.target.value)}
                           maxLength={140}
                           placeholder="Habitudes alimentaires / mobilité"
-                          className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                          className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                         />
                       </div>
                     )}
@@ -1734,7 +1799,7 @@ export function WorkspacesAdminView({
                     <button
                       type="submit"
                       disabled={savingPrefs}
-                      className="min-h-[40px] px-4 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-xl"
+                      className="min-h-[44px] px-4 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-xl"
                     >
                       {savingPrefs ? 'Sauvegarde...' : 'Enregistrer mes préférences'}
                     </button>
@@ -1758,7 +1823,7 @@ export function WorkspacesAdminView({
                   type="button"
                   disabled={exportingPersonal}
                   onClick={() => void handlePersonalExport()}
-                  className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+                  className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
                 >
                   <Download className="w-4 h-4" />
                   <span>
@@ -1776,7 +1841,7 @@ export function WorkspacesAdminView({
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                   <strong>Information transparente :</strong> la suppression efface immédiatement votre profil, vos coordonnées privées, vos préférences, vos intentions de voyage et tous vos justificatifs d’identité chiffrés. Elle n’efface pas tout : de façon minimale, les références de transaction, montants, dates et le journal d’audit anonymisé sont conservés pour les obligations comptables et de sécurité (durée paramétrée :{' '}
                   <strong className="font-mono">
-                    {countrySetting?.financialRetentionDuration || OWNER_PLACEHOLDER}
+                    {cleanClientSettingValue(countrySetting?.financialRetentionDuration) || '5 ans'}
                   </strong>
                   ).
                 </p>
@@ -1797,7 +1862,7 @@ export function WorkspacesAdminView({
                   type="button"
                   disabled={!confirmAccountDelete || deletingAccount}
                   onClick={() => void handleCompliantAccountDelete()}
-                  className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-700 disabled:opacity-50 rounded-xl"
+                  className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-700 disabled:opacity-50 rounded-xl"
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>
@@ -1839,7 +1904,7 @@ export function WorkspacesAdminView({
                 <button
                   type="button"
                   onClick={() => void onRecheckFirestore()}
-                  className="min-h-[40px] px-4 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
+                  className="min-h-[44px] px-4 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
                 >
                   Tester la connexion Cloud
                 </button>
@@ -1848,7 +1913,7 @@ export function WorkspacesAdminView({
                     type="button"
                     disabled={exportingOperational}
                     onClick={() => void handleAdminOperationalExport()}
-                    className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>
@@ -1907,7 +1972,7 @@ export function WorkspacesAdminView({
               {/* 10.5 Real Factual Milestones ("Jalons réels" — zero invented goal numbers) */}
               <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 tabular-nums">
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Établissements tiers</span>
+                  <span className="text-xs text-slate-500 block">Établissements tiers</span>
                   <strong className="font-mono text-2xl font-bold">
                     {
                       BENIN_PUBLIC_DIRECTORY.filter(
@@ -1918,25 +1983,25 @@ export function WorkspacesAdminView({
                   </strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Partenaires AMARO</span>
+                  <span className="text-xs text-slate-500 block">Partenaires AMARO</span>
                   <strong className="font-mono text-2xl font-bold text-emerald-700 dark:text-emerald-400">
                     {verifiedPartnersCount}
                   </strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Prestataires inscrits</span>
+                  <span className="text-xs text-slate-500 block">Prestataires inscrits</span>
                   <strong className="font-mono text-2xl font-bold">{allProviders.length}</strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Dossiers suivis</span>
+                  <span className="text-xs text-slate-500 block">Dossiers suivis</span>
                   <strong className="font-mono text-2xl font-bold">{allFolders.length}</strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Réservations réelles</span>
+                  <span className="text-xs text-slate-500 block">Réservations réelles</span>
                   <strong className="font-mono text-2xl font-bold">{allReservations.length}</strong>
                 </div>
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-[11px] text-slate-500 block">Avis vérifiés publiés</span>
+                  <span className="text-xs text-slate-500 block">Avis vérifiés publiés</span>
                   <strong className="font-mono text-2xl font-bold">{approvedReviewsCount}</strong>
                 </div>
               </div>
@@ -1945,7 +2010,7 @@ export function WorkspacesAdminView({
               <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+                    <span className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
                       Gestion Financière &amp; Revenus
                     </span>
                     <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
@@ -1969,7 +2034,7 @@ export function WorkspacesAdminView({
                     <strong className="font-mono text-2xl font-bold text-amber-950 dark:text-amber-100 block">
                       {dailyFinancialReport.totalCircuitAFees.toLocaleString('fr-FR')} FCFA
                     </strong>
-                    <span className="text-[11px] text-amber-800/80 dark:text-amber-400 block">
+                    <span className="text-xs text-amber-800/80 dark:text-amber-400 block">
                       Formule : 6% + 500f (plafonné à 4 000f) sur catalogue public non conventionné.
                     </span>
                   </div>
@@ -1981,7 +2046,7 @@ export function WorkspacesAdminView({
                     <strong className="font-mono text-2xl font-bold text-emerald-950 dark:text-emerald-100 block">
                       {dailyFinancialReport.totalCircuitBCommissions.toLocaleString('fr-FR')} FCFA
                     </strong>
-                    <span className="text-[11px] text-emerald-800/80 dark:text-emerald-400 block">
+                    <span className="text-xs text-emerald-800/80 dark:text-emerald-400 block">
                       10% reversés par les partenaires conventionnés après le séjour (en arrière-plan).
                     </span>
                   </div>
@@ -1993,7 +2058,7 @@ export function WorkspacesAdminView({
                     <strong className="font-mono text-2xl font-bold text-teal-950 dark:text-teal-100 block">
                       {dailyFinancialReport.totalDossierFees.toLocaleString('fr-FR')} FCFA
                     </strong>
-                    <span className="text-[11px] text-teal-800/80 dark:text-teal-400 block">
+                    <span className="text-xs text-teal-800/80 dark:text-teal-400 block">
                       20 000 FCFA déductibles par dossier de voyage validé.
                     </span>
                   </div>
@@ -2070,7 +2135,7 @@ export function WorkspacesAdminView({
               <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="space-y-0.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+                    <span className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">
                       Gouvernance &amp; Pré-lancement
                     </span>
                     <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
@@ -2085,68 +2150,82 @@ export function WorkspacesAdminView({
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <strong className="font-bold">1. Catalogue initial</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">175 / 175</span>
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-bold">175 / 175</span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-xs text-slate-500">
                       172 établissements tiers réels + 3 offres conciergerie AMARO.
                     </p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <strong className="font-bold">2. Conventions partenaires</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-bold">
                         {verifiedPartnersCount} vérifié(s)
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-xs text-slate-500">
                       Convention 8 clauses à signer avec chaque prestataire partenaire.
                     </p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <strong className="font-bold">3. Coordination &amp; Frais</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[10px] font-bold">
+                      <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-xs font-bold">
                         {allFolders.length} dossier(s)
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-xs text-slate-500">
                       Frais de dossier 20 000 FCFA déductibles du total final après validation.
                     </p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <strong className="font-bold">4. Gouvernance &amp; Accès</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-bold">
                         {adminsList.length} admin(s)
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-xs text-slate-500">
                       Accès sécurisés, 2FA obligatoire, audit logs conservés.
                     </p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <strong className="font-bold">5. Documents légaux</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-bold">
                         {Object.values(platformContents).filter((c) => c.ownerValidated).length} / {contentSlugs.length} validés
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
-                      Documents provisoires à relire et cocher « Validé par le propriétaire ».
+                    <p className="text-xs text-slate-500">
+                      Textes complets publiés côté client ; à faire valider par un juriste côté tableau de bord administrateur.
                     </p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
-                      <strong className="font-bold">6. Pré-requis légaux &amp; Réseau</strong>
-                      <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold">
-                        Hors périmètre
+                      <strong className="font-bold">6. Encaissement &amp; Domaine</strong>
+                      <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-xs font-bold">
+                        Mode manuel actif
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500">
-                      Autorisation APDP, passerelle paiement automatique, nom de domaine amaro.voyage.
+                    <p className="text-xs text-slate-500">
+                      Validation manuelle Wave / Orange Money / MTN opérationnelle ; validation juridique externe &amp; domaine amaro.voyage à finaliser.
                     </p>
                   </div>
                 </div>
+
+                {missingAdminRequiredFields.length > 0 && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200 space-y-1">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>
+                        Avertissement Administrateur uniquement — Champs obligatoires encore vides ({missingAdminRequiredFields.length}) :
+                      </span>
+                    </p>
+                    <p>
+                      {missingAdminRequiredFields.join(' · ')}. Complétez ces champs dans le formulaire ci-dessous (les clients ne voient jamais cet avertissement).
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* BLOC 2 & LOT 1: Dossier Fees Queue + Notifications & Deadlines Control */}
@@ -2173,11 +2252,11 @@ export function WorkspacesAdminView({
                         >
                           <div className="flex justify-between gap-2">
                             <strong>{f.title}</strong>
-                            <span className="font-mono text-[11px] text-amber-700 dark:text-amber-400">
+                            <span className="font-mono text-xs text-amber-700 dark:text-amber-400">
                               {f.dossierFeeStatus || f.status}
                             </span>
                           </div>
-                          <p className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                          <p className="font-mono text-xs text-slate-600 dark:text-slate-400">
                             Réf MoMo : <strong>{f.dossierTxRef || '—'}</strong> · Payeur :{' '}
                             {f.dossierPayerName || '—'} ({f.dossierPayerPhone || '—'}) · Montant :{' '}
                             {f.dossierFeeAmountXof ?? 20000} FCFA
@@ -2192,7 +2271,7 @@ export function WorkspacesAdminView({
                               type="button"
                               disabled={verifyingFeeFolderId === f.id}
                               onClick={() => void handleVerifyDossierFee(f.id, 'approve')}
-                              className="min-h-[34px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
+                              className="min-h-[44px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                             >
                               Valider les frais reçus
                             </button>
@@ -2206,13 +2285,13 @@ export function WorkspacesAdminView({
                                 }))
                               }
                               placeholder="Motif si refus..."
-                              className="min-h-[34px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                              className="min-h-[44px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                             />
                             <button
                               type="button"
                               disabled={verifyingFeeFolderId === f.id}
                               onClick={() => void handleVerifyDossierFee(f.id, 'reject')}
-                              className="min-h-[34px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                              className="min-h-[44px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                             >
                               Refuser
                             </button>
@@ -2233,7 +2312,7 @@ export function WorkspacesAdminView({
                       type="button"
                       disabled={evaluatingDeadlines}
                       onClick={() => void handleEvaluateDeadlinesNow()}
-                      className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 rounded-xl"
+                      className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 rounded-xl"
                     >
                       <Clock className="w-3.5 h-3.5" />
                       <span>
@@ -2244,11 +2323,11 @@ export function WorkspacesAdminView({
                     </button>
                   </div>
 
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-xs text-slate-500">
                     Exécution honnête à la demande (ou via un planificateur externe branché par vos soins sur <code className="font-mono">POST /api/amaro/admin/evaluate-deadlines</code>). Les canaux externes sans clé API affichent le statut réel « canal non configuré ».
                   </p>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
                     {(['in_app', 'email', 'sms', 'whatsapp'] as const).map((ch) => {
                       const info = notifChannels[ch];
                       const active = ch === 'in_app' || info?.configured;
@@ -2289,7 +2368,7 @@ export function WorkspacesAdminView({
                       notifIssues.slice(0, 12).map((n) => (
                         <div
                           key={n.id}
-                          className="p-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-[11px] flex justify-between gap-2"
+                          className="p-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs flex justify-between gap-2"
                         >
                           <span>
                             <strong className="uppercase">[{n.channel}]</strong> {n.title}
@@ -2321,12 +2400,23 @@ export function WorkspacesAdminView({
                       maxVisitsCityChangeDay: maxVisitsChange,
                       maxVisitsSameCityDay: maxVisitsSame,
                       localContributionPercent: localContribPct,
-                      localContributionLabel: localContribLabel.trim() || OWNER_PLACEHOLDER,
-                      amaroMobileMoneyNumber: momoNumber.trim() || OWNER_PLACEHOLDER,
-                      amaroMobileMoneyHolder: momoHolder.trim() || OWNER_PLACEHOLDER,
-                      amaroWhatsappNumber: waSupport.trim() || OWNER_PLACEHOLDER,
-                      financialRetentionDuration:
-                        retentionDuration.trim() || OWNER_PLACEHOLDER,
+                      localContributionLabel: localContribLabel.trim(),
+                      amaroMobileMoneyNumber:
+                        momoNumber.trim() ||
+                        waveNumber.trim() ||
+                        orangeMoneyNumber.trim() ||
+                        mtnMoneyNumber.trim(),
+                      amaroMobileMoneyHolder: momoHolder.trim(),
+                      amaroWhatsappNumber: waSupport.trim(),
+                      financialRetentionDuration: retentionDuration.trim() || '5 ans',
+                      legalCompanyName: legalCompanyName.trim(),
+                      legalRccm: legalRccm.trim(),
+                      legalIfu: legalIfu.trim(),
+                      legalAddress: legalAddress.trim(),
+                      legalContact: legalContact.trim(),
+                      waveNumber: waveNumber.trim(),
+                      orangeMoneyNumber: orangeMoneyNumber.trim(),
+                      mtnMoneyNumber: mtnMoneyNumber.trim(),
                       vaultKeyConfirmedByOwner: vaultKeyConfirmed,
                       includeDemoData: includeDemo,
                       // C2: Paramètres des frais de service Circuit A & TVA
@@ -2345,12 +2435,19 @@ export function WorkspacesAdminView({
               >
                 <div>
                   <h3 className="font-display text-lg font-bold">
-                    Paramètres Commerciaux, Circuits A/B, Sécurité Coffre &amp; Règles d’Itinéraire (BJ)
+                    Identité Légale, Numéros Mobile Money, Circuits A/B &amp; Règles d’Itinéraire
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Configuration des rémunérations, plafonds, règles logistiques et conformité légale.
+                    Configuration de l’identité juridique, des numéros d’encaissement Wave / Orange Money / MTN, des plafonds et de la conformité.
                   </p>
                 </div>
+
+                {missingAdminRequiredFields.length > 0 && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200">
+                    <strong>Champs administrateur obligatoires à compléter :</strong>{' '}
+                    {missingAdminRequiredFields.join(', ')}.
+                  </div>
+                )}
 
                 {/* Bloc 1: Rémunération Circuit A (Frais de service) & Circuit B (Commission) */}
                 <div className="p-4 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3">
@@ -2359,14 +2456,14 @@ export function WorkspacesAdminView({
                       <ShieldCheck className="w-4 h-4 text-teal-600" />
                       Rémunération &amp; Frais de Service (C2)
                     </span>
-                    <span className="text-[11px] text-slate-500">
+                    <span className="text-xs text-slate-500">
                       Circuit A (Non conventionné) &amp; Circuit B (Partenaire 10%)
                     </span>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Circuit A — Pourcentage (%)
                       </label>
                       <input
@@ -2376,13 +2473,13 @@ export function WorkspacesAdminView({
                         step="0.5"
                         value={amaroFeePercent}
                         onChange={(e) => setAmaroFeePercent(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 6 %</span>
+                      <span className="text-xs text-slate-400">Défaut propriétaire : 6 %</span>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Circuit A — Montant fixe (FCFA)
                       </label>
                       <input
@@ -2391,13 +2488,13 @@ export function WorkspacesAdminView({
                         step="100"
                         value={amaroFeeFixed}
                         onChange={(e) => setAmaroFeeFixed(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 500 FCFA</span>
+                      <span className="text-xs text-slate-400">Défaut propriétaire : 500 FCFA</span>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Circuit A — Plafond max (FCFA)
                       </label>
                       <input
@@ -2406,13 +2503,13 @@ export function WorkspacesAdminView({
                         step="500"
                         value={amaroFeeCap}
                         onChange={(e) => setAmaroFeeCap(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Défaut propriétaire : 4 000 FCFA</span>
+                      <span className="text-xs text-slate-400">Défaut propriétaire : 4 000 FCFA</span>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Circuit A — Arrondi sup. (FCFA)
                       </label>
                       <input
@@ -2421,15 +2518,15 @@ export function WorkspacesAdminView({
                         step="50"
                         value={amaroFeeRounding}
                         onChange={(e) => setAmaroFeeRounding(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Défaut : 100 FCFA supérieur</span>
+                      <span className="text-xs text-slate-400">Défaut : 100 FCFA supérieur</span>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-2 border-t border-slate-200 dark:border-slate-800">
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Circuit B — Commission partenaire (%)
                       </label>
                       <input
@@ -2439,13 +2536,13 @@ export function WorkspacesAdminView({
                         step="0.5"
                         value={partnerMarginPct}
                         onChange={(e) => setPartnerMarginPct(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Reversée en arrière-plan (10%)</span>
+                      <span className="text-xs text-slate-400">Reversée en arrière-plan (10%)</span>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         TVA réservée à l'État (%)
                       </label>
                       <input
@@ -2455,13 +2552,13 @@ export function WorkspacesAdminView({
                         step="0.5"
                         value={tvaRate}
                         onChange={(e) => setTvaRate(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Actuellement 0% (non assujetti)</span>
+                      <span className="text-xs text-slate-400">Actuellement 0% (non assujetti)</span>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] mb-1 font-medium">
+                      <label className="block text-xs mb-1 font-medium">
                         Frais de dossier réservation (FCFA)
                       </label>
                       <input
@@ -2469,9 +2566,9 @@ export function WorkspacesAdminView({
                         min={0}
                         value={dossierFeeXof}
                         onChange={(e) => setDossierFeeXof(Number(e.target.value))}
-                        className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
-                      <span className="text-[10px] text-slate-400">Déductible du total final (20 000 FCFA)</span>
+                      <span className="text-xs text-slate-400">Déductible du total final (20 000 FCFA)</span>
                     </div>
                   </div>
                 </div>
@@ -2479,18 +2576,18 @@ export function WorkspacesAdminView({
                 {/* Bloc 2: Logistique & Règles de visite */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <label className="block text-[11px] mb-1">Délai réponse défaut (h)</label>
+                    <label className="block text-xs mb-1">Délai réponse défaut (h)</label>
                     <input
                       type="number"
                       min={2}
                       max={168}
                       value={providerRespHours}
                       onChange={(e) => setProviderRespHours(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1">
+                    <label className="block text-xs mb-1">
                       Visites max (changement ville)
                     </label>
                     <input
@@ -2499,24 +2596,24 @@ export function WorkspacesAdminView({
                       max={6}
                       value={maxVisitsChange}
                       onChange={(e) => setMaxVisitsChange(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
-                    <span className="text-[10px] text-slate-400">Défaut : 1 visite</span>
+                    <span className="text-xs text-slate-400">Défaut : 1 visite</span>
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1">Visites max (même ville)</label>
+                    <label className="block text-xs mb-1">Visites max (même ville)</label>
                     <input
                       type="number"
                       min={1}
                       max={6}
                       value={maxVisitsSame}
                       onChange={(e) => setMaxVisitsSame(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
-                    <span className="text-[10px] text-slate-400">Défaut : 2 visites</span>
+                    <span className="text-xs text-slate-400">Défaut : 2 visites</span>
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1">
+                    <label className="block text-xs mb-1">
                       Contribution locale (%, 0 = désactivée)
                     </label>
                     <input
@@ -2526,49 +2623,172 @@ export function WorkspacesAdminView({
                       step="0.5"
                       value={localContribPct}
                       onChange={(e) => setLocalContribPct(Number(e.target.value))}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <div>
-                    <label className="block text-[11px] mb-1">Numéro Mobile Money AMARO</label>
-                    <input
-                      type="text"
-                      value={momoNumber}
-                      onChange={(e) => setMomoNumber(e.target.value)}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+                <div className="p-4 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl space-y-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900 dark:text-slate-100">
+                      Identité légale de l’opérateur &amp; Numéros Mobile Money AMARO (visibles uniquement une fois renseignés)
+                    </span>
+                    <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                      Textes légaux : à faire valider par un juriste
+                    </span>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Titulaire Mobile Money</label>
-                    <input
-                      type="text"
-                      value={momoHolder}
-                      onChange={(e) => setMomoHolder(e.target.value)}
-                      className="w-full min-h-[40px] px-3 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Dénomination sociale *
+                      </label>
+                      <input
+                        type="text"
+                        value={legalCompanyName}
+                        onChange={(e) => setLegalCompanyName(e.target.value)}
+                        placeholder="Ex : AMARO VOYAGE SARL"
+                        className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro RCCM *
+                      </label>
+                      <input
+                        type="text"
+                        value={legalRccm}
+                        onChange={(e) => setLegalRccm(e.target.value)}
+                        placeholder="Ex : CI-ABJ-..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro IFU / NCC *
+                      </label>
+                      <input
+                        type="text"
+                        value={legalIfu}
+                        onChange={(e) => setLegalIfu(e.target.value)}
+                        placeholder="Identifiant fiscal"
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs mb-1 font-medium">
+                        Adresse du siège social *
+                      </label>
+                      <input
+                        type="text"
+                        value={legalAddress}
+                        onChange={(e) => setLegalAddress(e.target.value)}
+                        placeholder="Quartier, commune, ville, Côte d’Ivoire"
+                        className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Contact officiel (e-mail / tél.) *
+                      </label>
+                      <input
+                        type="text"
+                        value={legalContact}
+                        onChange={(e) => setLegalContact(e.target.value)}
+                        placeholder="contact@... / +225 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">Numéro WhatsApp Support AMARO</label>
-                    <input
-                      type="text"
-                      value={waSupport}
-                      onChange={(e) => setWaSupport(e.target.value)}
-                      className="w-full min-h-[40px] px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro Wave AMARO *
+                      </label>
+                      <input
+                        type="text"
+                        value={waveNumber}
+                        onChange={(e) => setWaveNumber(e.target.value)}
+                        placeholder="+225 07 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro Orange Money AMARO *
+                      </label>
+                      <input
+                        type="text"
+                        value={orangeMoneyNumber}
+                        onChange={(e) => setOrangeMoneyNumber(e.target.value)}
+                        placeholder="+225 07 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro MTN Money AMARO *
+                      </label>
+                      <input
+                        type="text"
+                        value={mtnMoneyNumber}
+                        onChange={(e) => setMtnMoneyNumber(e.target.value)}
+                        placeholder="+225 05 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Titulaire Mobile Money *
+                      </label>
+                      <input
+                        type="text"
+                        value={momoHolder}
+                        onChange={(e) => setMomoHolder(e.target.value)}
+                        placeholder="Nom officiel du compte"
+                        className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[11px] mb-1">
-                      Durée conservation comptable
-                    </label>
-                    <input
-                      type="text"
-                      value={retentionDuration}
-                      onChange={(e) => setRetentionDuration(e.target.value)}
-                      className="w-full min-h-[40px] px-3 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro Mobile Money générique (secours)
+                      </label>
+                      <input
+                        type="text"
+                        value={momoNumber}
+                        onChange={(e) => setMomoNumber(e.target.value)}
+                        placeholder="+225 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Numéro WhatsApp Support AMARO *
+                      </label>
+                      <input
+                        type="text"
+                        value={waSupport}
+                        onChange={(e) => setWaSupport(e.target.value)}
+                        placeholder="+225 ..."
+                        className="w-full min-h-[44px] px-3 py-1.5 font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1 font-medium">
+                        Durée conservation comptable
+                      </label>
+                      <input
+                        type="text"
+                        value={retentionDuration}
+                        onChange={(e) => setRetentionDuration(e.target.value)}
+                        placeholder="5 ans"
+                        className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -2597,11 +2817,11 @@ export function WorkspacesAdminView({
                 <button
                   type="submit"
                   disabled={savingSettings}
-                  className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                  className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
                 >
                   {savingSettings
                     ? 'Application...'
-                    : 'Enregistrer tous les paramètres Bénin (BJ)'}
+                    : 'Enregistrer les paramètres de la plateforme'}
                 </button>
               </form>
 
@@ -2617,7 +2837,7 @@ export function WorkspacesAdminView({
                       Calcul sur 4 Prix de Référence
                     </h3>
                   </div>
-                  <span className="text-[11px] text-slate-500 font-mono">
+                  <span className="text-xs text-slate-500 font-mono">
                     Formule : {amaroFeePercent}% + {amaroFeeFixed} FCFA (Plafond : {amaroFeeCap} FCFA, Arrondi : {amaroFeeRounding} FCFA)
                   </span>
                 </div>
@@ -2653,7 +2873,7 @@ export function WorkspacesAdminView({
                           <td className="p-3 text-slate-600 dark:text-slate-400">
                             {row.effectiveFeePercent.toFixed(2)} %
                           </td>
-                          <td className="p-3 text-[11px] font-sans text-slate-500">
+                          <td className="p-3 text-xs font-sans text-slate-500">
                             {row.capped ? (
                               <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-semibold">
                                 Plafonné au maximum ({amaroFeeCap.toLocaleString('fr-FR')} FCFA)
@@ -2669,7 +2889,7 @@ export function WorkspacesAdminView({
                     </tbody>
                   </table>
                 </div>
-                <p className="text-[11px] text-slate-500 italic">
+                <p className="text-xs text-slate-500 italic">
                   Note : L'affichage au voyageur indique toujours la transparence stricte : « Prix prestataire : X + Frais de service Amaro : Y = Total : Z ». Le mot « Taxes » seul n'est jamais employé (réservé à l'État).
                 </p>
               </section>
@@ -2699,7 +2919,7 @@ export function WorkspacesAdminView({
                         BENIN_PUBLIC_DIRECTORY.find((x) => x.id === pickedId);
                       if (found) loadItemIntoAdminEditor(found);
                     }}
-                    className="min-h-[40px] max-w-xs px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="min-h-[44px] max-w-xs px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   >
                     <option value="">Charger une fiche existante ({BENIN_PUBLIC_DIRECTORY.length})...</option>
                     {BENIN_PUBLIC_DIRECTORY.map((it) => (
@@ -2755,7 +2975,7 @@ export function WorkspacesAdminView({
                       value={admSrvId}
                       onChange={(e) => setAdmSrvId(e.target.value)}
                       placeholder="ID fiche (vide = auto, ou ex: acc-cotonou-sofitel-marina)"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="text"
@@ -2763,7 +2983,7 @@ export function WorkspacesAdminView({
                       onChange={(e) => setAdmProvId(e.target.value)}
                       required
                       placeholder="ID prestataire"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="text"
@@ -2773,7 +2993,7 @@ export function WorkspacesAdminView({
                       minLength={2}
                       maxLength={155}
                       placeholder="Nom de l'établissement / site"
-                      className="sm:col-span-2 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="sm:col-span-2 min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
 
@@ -2781,7 +3001,7 @@ export function WorkspacesAdminView({
                     <select
                       value={admCategory}
                       onChange={(e) => setAdmCategory(e.target.value as ServiceCategory)}
-                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       {CATEGORIES.map((c) => (
                         <option key={c} value={c}>
@@ -2793,7 +3013,7 @@ export function WorkspacesAdminView({
                     <select
                       value={admCity}
                       onChange={(e) => setAdmCity(e.target.value)}
-                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       {BENIN_CITIES.map((c) => (
                         <option key={c.id} value={c.id}>
@@ -2805,7 +3025,7 @@ export function WorkspacesAdminView({
                     <select
                       value={admOrigin}
                       onChange={(e) => setAdmOrigin(e.target.value as DataOriginType)}
-                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       <option value="public_directory">Recensé, non vérifié (Circuit A)</option>
                       <option value="verified_partner">Partenaire AMARO (Circuit B)</option>
@@ -2816,7 +3036,7 @@ export function WorkspacesAdminView({
                     <select
                       value={admVerif}
                       onChange={(e) => setAdmVerif(e.target.value as VerificationLevel)}
-                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       <option value="verified">Vérifié</option>
                       <option value="partially_verified">Partiellement vérifié</option>
@@ -2828,7 +3048,7 @@ export function WorkspacesAdminView({
                       onChange={(e) =>
                         setAdmStatus(e.target.value as 'published' | 'draft' | 'archived')
                       }
-                      className="min-h-[40px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       <option value="published">Publié</option>
                       <option value="draft">Brouillon</option>
@@ -2844,7 +3064,7 @@ export function WorkspacesAdminView({
                       required
                       maxLength={230}
                       placeholder="Adresse / Quartier vérifiable"
-                      className="sm:col-span-2 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="sm:col-span-2 min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="number"
@@ -2852,7 +3072,7 @@ export function WorkspacesAdminView({
                       value={admPrice}
                       onChange={(e) => setAdmPrice(Number(e.target.value))}
                       placeholder="Tarif XOF"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <label className="flex items-center gap-2 text-xs cursor-pointer">
                       <input
@@ -2868,7 +3088,7 @@ export function WorkspacesAdminView({
                     <select
                       value={admImgKey}
                       onChange={(e) => setAdmImgKey(e.target.value)}
-                      className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       {Object.entries(EDITORIAL_IMAGES).map(([k, v]) => (
                         <option key={k} value={k}>
@@ -2882,7 +3102,7 @@ export function WorkspacesAdminView({
                       value={admDuration}
                       onChange={(e) => setAdmDuration(Number(e.target.value))}
                       placeholder="Durée min"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="number"
@@ -2890,7 +3110,7 @@ export function WorkspacesAdminView({
                       value={admCapacity}
                       onChange={(e) => setAdmCapacity(Number(e.target.value))}
                       placeholder="Capacité"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="number"
@@ -2899,7 +3119,7 @@ export function WorkspacesAdminView({
                       value={admRespHours}
                       onChange={(e) => setAdmRespHours(Number(e.target.value))}
                       placeholder="Délai réponse (h)"
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
 
@@ -2910,7 +3130,7 @@ export function WorkspacesAdminView({
                       value={admCustomPhotoUrl}
                       onChange={(e) => setAdmCustomPhotoUrl(e.target.value)}
                       placeholder="URL photo propre à l'établissement (optionnel)"
-                      className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <label className="flex items-center gap-2 text-xs cursor-pointer">
                       <input
@@ -2925,13 +3145,13 @@ export function WorkspacesAdminView({
                       value={admSourceName}
                       onChange={(e) => setAdmSourceName(e.target.value)}
                       placeholder="Source (ex: Convention directe, terrain)"
-                      className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
                       type="date"
                       value={admVerifiedAt}
                       onChange={(e) => setAdmVerifiedAt(e.target.value)}
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
 
@@ -2949,7 +3169,7 @@ export function WorkspacesAdminView({
                       value={admSacredNotice}
                       onChange={(e) => setAdmSacredNotice(e.target.value)}
                       placeholder="Règles de respect vérifiées auprès du gestionnaire du lieu (laisser vide sinon)"
-                      className="sm:col-span-2 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="sm:col-span-2 min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
 
@@ -2966,7 +3186,7 @@ export function WorkspacesAdminView({
                   <button
                     type="submit"
                     disabled={savingAdminSrv}
-                    className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+                    className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
                   >
                     {savingAdminSrv ? 'Enregistrement Cloud...' : 'Enregistrer dans /services'}
                   </button>
@@ -3006,14 +3226,14 @@ export function WorkspacesAdminView({
                               <button
                                 type="button"
                                 onClick={() => void onAdminVerifyProvider(p.id, 'verified')}
-                                className="min-h-[34px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
+                                className="min-h-[44px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                               >
                                 Valider Partenaire AMARO
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void onAdminVerifyProvider(p.id, 'rejected')}
-                                className="min-h-[34px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                                className="min-h-[44px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                               >
                                 Refuser
                               </button>
@@ -3034,7 +3254,7 @@ export function WorkspacesAdminView({
                                     [p.id]: e.target.value,
                                   }))
                                 }
-                                className="flex-1 min-h-[34px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                className="flex-1 min-h-[44px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                               >
                                 <option value="">
                                   Rattacher à une fiche existante de {p.cityId}...
@@ -3060,7 +3280,7 @@ export function WorkspacesAdminView({
                                   }
                                   void onAdminLinkProviderToDirectoryListing(p, targetId);
                                 }}
-                                className="min-h-[34px] px-3 py-1 font-semibold bg-teal-700 text-white rounded-lg"
+                                className="min-h-[44px] px-3 py-1 font-semibold bg-teal-700 text-white rounded-lg"
                               >
                                 Rattacher sans doublon
                               </button>
@@ -3082,7 +3302,7 @@ export function WorkspacesAdminView({
                     <h3 className="font-display text-base font-bold">
                       Gouvernance des Accès Administrateurs
                     </h3>
-                    <p className="text-[11px] text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900">
+                    <p className="text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900">
                       <strong>Rappel sécurité 7.1 :</strong> activez impérativement la double authentification (2FA) sur le compte Google/e-mail de chaque administrateur inscrit.
                     </p>
                     {adminsList.map((adm) => (
@@ -3111,14 +3331,14 @@ export function WorkspacesAdminView({
                           value={newAdminUid}
                           onChange={(e) => setNewAdminUid(e.target.value)}
                           placeholder="UID Firebase"
-                          className="min-h-[36px] px-2.5 py-1 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                          className="min-h-[44px] px-2.5 py-1 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                         />
                         <input
                           type="email"
                           value={newAdminEmail}
                           onChange={(e) => setNewAdminEmail(e.target.value)}
                           placeholder="Email admin"
-                          className="min-h-[36px] px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                          className="min-h-[44px] px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                         />
                         <button
                           type="button"
@@ -3128,7 +3348,7 @@ export function WorkspacesAdminView({
                             setNewAdminUid('');
                             setNewAdminEmail('');
                           }}
-                          className="min-h-[36px] px-3 py-1 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
+                          className="min-h-[44px] px-3 py-1 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
                         >
                           Ajouter Admin
                         </button>
@@ -3145,21 +3365,21 @@ export function WorkspacesAdminView({
                       value={govTargetUid}
                       onChange={(e) => setGovTargetUid(e.target.value)}
                       placeholder="UID client à suspendre ou débloquer"
-                      className="w-full min-h-[36px] px-2.5 py-1 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      className="w-full min-h-[44px] px-2.5 py-1 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                     <input
                       type="text"
                       value={govReason}
                       onChange={(e) => setGovReason(e.target.value)}
                       placeholder="Motif interne (ex: 3 soldes expirés consécutifs)"
-                      className="w-full min-h-[36px] px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      className="w-full min-h-[44px] px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                     <div className="flex gap-2">
                       <button
                         type="button"
                         disabled={govBusy}
                         onClick={() => void handleAccountGovernanceAction(true)}
-                        className="min-h-[34px] px-3 py-1 text-xs font-semibold text-white bg-red-700 rounded-lg"
+                        className="min-h-[44px] px-3 py-1 text-xs font-semibold text-white bg-red-700 rounded-lg"
                       >
                         Bloquer nouvelles demandes
                       </button>
@@ -3167,7 +3387,7 @@ export function WorkspacesAdminView({
                         type="button"
                         disabled={govBusy}
                         onClick={() => void handleAccountGovernanceAction(false)}
-                        className="min-h-[34px] px-3 py-1 text-xs font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
+                        className="min-h-[44px] px-3 py-1 text-xs font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
                       >
                         Débloquer
                       </button>
@@ -3223,15 +3443,15 @@ export function WorkspacesAdminView({
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="font-bold">{r.serviceTitle}</div>
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-[10px]">
+                                <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">
                                   {isCircuitA ? 'Circuit A · Répertoire' : 'Circuit B · Partenaire'}
                                 </span>
                                 {isCircuitA ? (
-                                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300 font-mono text-[10px] font-semibold">
+                                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300 font-mono text-xs font-semibold">
                                     Frais Amaro : {(r.amaroFee !== undefined ? r.amaroFee : calculateCircuitAFee(Number(r.providerPrice || 0))).toLocaleString('fr-FR')} FCFA
                                   </span>
                                 ) : (
-                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 font-mono text-[10px] font-semibold">
+                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 font-mono text-xs font-semibold">
                                     Commission Amaro (10%) : {Math.round(Number(r.providerPrice || 0) * 0.1).toLocaleString('fr-FR')} FCFA
                                   </span>
                                 )}
@@ -3245,8 +3465,22 @@ export function WorkspacesAdminView({
                               {r.paymentStatus}
                               {r.coordinationStatus && <> · Coord: {r.coordinationStatus}</>}
                             </div>
+                            {(r.paymentStatus === 'initiated' ||
+                              r.paymentStatus === 'pending' ||
+                              Boolean(r.clientTxRef)) && (
+                              <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200">
+                                <strong>Paiement client déclaré (à valider) :</strong>{' '}
+                                {r.paymentMethodDeclared || 'Mobile Money'}{' '}
+                                {r.clientTxRef ? (
+                                  <>
+                                    · Réf. transaction :{' '}
+                                    <span className="font-mono font-bold">{r.clientTxRef}</span>
+                                  </>
+                                ) : null}
+                              </div>
+                            )}
                             {(r.payNowAmount !== undefined || r.payOnSiteAmount !== undefined || r.restaurantCautionXof) && (
-                              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
+                              <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
                                 {r.payNowAmount !== undefined && (
                                   <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-900 dark:bg-teal-950/50 dark:text-teal-200 border border-teal-200 dark:border-teal-900">
                                     À payer maintenant : {r.payNowAmount.toLocaleString('fr-FR')} FCFA
@@ -3270,7 +3504,7 @@ export function WorkspacesAdminView({
                               </div>
                             )}
                             {chosenLines.length > 0 && (
-                              <div className="text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+                              <div className="text-xs text-slate-600 dark:text-slate-300 tabular-nums">
                                 Offres demandées :{' '}
                                 {chosenLines
                                   .map((l) => `${l.quantity} × ${l.offerName} (${l.priceUnit})`)
@@ -3278,7 +3512,7 @@ export function WorkspacesAdminView({
                               </div>
                             )}
                             {r.isPartialAcceptance && (
-                              <div className="text-[11px] font-semibold text-teal-800 dark:text-teal-300 tabular-nums">
+                              <div className="text-xs font-semibold text-teal-800 dark:text-teal-300 tabular-nums">
                                 Confirmation partielle enregistrée : {r.acceptedUnitsTotal}/
                                 {r.requestedUnitsTotal} unité(s) confirmée(s).
                               </div>
@@ -3292,7 +3526,7 @@ export function WorkspacesAdminView({
                             {/* Bloc 1 Circuit A Admin Coordination Assistant */}
                             {isCircuitA && r.status === 'pending_provider' && (
                               <div className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-2">
-                                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                                <p className="text-xs text-slate-600 dark:text-slate-400">
                                   Contact recensé :{' '}
                                   <strong className="font-mono">
                                     {catItem?.contactPhone || 'À compléter sur la fiche'}
@@ -3305,7 +3539,7 @@ export function WorkspacesAdminView({
                                       void navigator.clipboard?.writeText(readyMessage);
                                       onNotify('Message de coordination copié dans le presse-papiers.');
                                     }}
-                                    className="min-h-[32px] inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded font-semibold"
+                                    className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded font-semibold"
                                   >
                                     <Copy className="w-3 h-3" />
                                     <span>Copier le message</span>
@@ -3317,7 +3551,7 @@ export function WorkspacesAdminView({
                                       )}`}
                                       target="_blank"
                                       rel="noreferrer"
-                                      className="min-h-[32px] inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 text-emerald-900 rounded font-semibold"
+                                      className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 text-emerald-900 rounded font-semibold"
                                     >
                                       <ExternalLink className="w-3 h-3" />
                                       <span>Ouvrir WhatsApp</span>
@@ -3332,7 +3566,7 @@ export function WorkspacesAdminView({
                                         dispatchChannel: 'manual_concierge',
                                       })
                                     }
-                                    className="min-h-[32px] px-2.5 py-1 bg-amber-300 text-slate-950 rounded font-semibold"
+                                    className="min-h-[44px] px-2.5 py-1 bg-amber-300 text-slate-950 rounded font-semibold"
                                   >
                                     J’ai contacté l’établissement
                                   </button>
@@ -3359,7 +3593,7 @@ export function WorkspacesAdminView({
                                             }
                                       )
                                     }
-                                    className="min-h-[34px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
+                                    className="min-h-[44px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
                                   >
                                     Confirmer dispo réelle
                                   </button>
@@ -3429,7 +3663,7 @@ export function WorkspacesAdminView({
                                             }
                                       )
                                     }
-                                    className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                                    className="min-h-[44px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                                   >
                                     Indisponible (alternatives)
                                   </button>
@@ -3444,7 +3678,7 @@ export function WorkspacesAdminView({
                                       action: 'admin_confirm_payment',
                                     })
                                   }
-                                  className="min-h-[34px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
+                                  className="min-h-[44px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                                 >
                                   Valider paiement reçu
                                 </button>
@@ -3458,13 +3692,13 @@ export function WorkspacesAdminView({
                                       action: 'admin_refund',
                                     })
                                   }
-                                  className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                                  className="min-h-[44px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                                 >
                                   Marquer remboursé
                                 </button>
                               )}
                               {r.noShow ? (
-                                <span className="min-h-[34px] inline-flex items-center px-2.5 py-1 text-xs font-bold text-red-700 bg-red-100 dark:bg-red-950/60 dark:text-red-300 rounded-lg">
+                                <span className="min-h-[44px] inline-flex items-center px-2.5 py-1 text-xs font-bold text-red-700 bg-red-100 dark:bg-red-950/60 dark:text-red-300 rounded-lg">
                                   No-Show consigné (caution conservée)
                                 </span>
                               ) : (
@@ -3472,7 +3706,7 @@ export function WorkspacesAdminView({
                                   <button
                                     type="button"
                                     onClick={() => void handleReportNoShow(r.id)}
-                                    className="min-h-[34px] px-2.5 py-1 font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200 rounded-lg"
+                                    className="min-h-[44px] px-2.5 py-1 font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200 rounded-lg"
                                   >
                                     Signaler No-Show
                                   </button>
@@ -3483,7 +3717,7 @@ export function WorkspacesAdminView({
                                 onClick={() =>
                                   setIdentityModalContext({ reservation: r, role: 'admin' })
                                 }
-                                className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-slate-800 dark:text-slate-200 bg-slate-200/80 dark:bg-slate-800 rounded-lg"
+                                className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-slate-800 dark:text-slate-200 bg-slate-200/80 dark:bg-slate-800 rounded-lg"
                               >
                                 <Lock className="w-3 h-3" />
                                 <span>
@@ -3524,7 +3758,7 @@ export function WorkspacesAdminView({
                             <strong>
                               {rev.serviceTitle} · {rev.rating}/5 ({rev.authorDisplayName})
                             </strong>
-                            <span className="font-mono text-[10px] uppercase">
+                            <span className="font-mono text-xs uppercase">
                               {rev.moderationStatus}
                             </span>
                           </div>
@@ -3533,14 +3767,14 @@ export function WorkspacesAdminView({
                             <button
                               type="button"
                               onClick={() => void onAdminModerateReview(rev.id, 'approved')}
-                              className="min-h-[30px] px-2.5 py-0.5 font-semibold text-white bg-emerald-700 rounded"
+                              className="min-h-[44px] px-2.5 py-0.5 font-semibold text-white bg-emerald-700 rounded"
                             >
                               Publier l’avis
                             </button>
                             <button
                               type="button"
                               onClick={() => void onAdminModerateReview(rev.id, 'rejected')}
-                              className="min-h-[30px] px-2.5 py-0.5 font-semibold text-red-700 bg-red-100 rounded"
+                              className="min-h-[44px] px-2.5 py-0.5 font-semibold text-red-700 bg-red-100 rounded"
                             >
                               Refuser
                             </button>
@@ -3567,7 +3801,7 @@ export function WorkspacesAdminView({
                                 Pour {ty.serviceTitle} (de {ty.clientDisplayName})
                               </span>
                             </strong>
-                            <span className="font-mono text-[10px]">{ty.status}</span>
+                            <span className="font-mono text-xs">{ty.status}</span>
                           </div>
                           <p className="text-slate-600 dark:text-slate-400">{ty.message}</p>
                           {ty.status === 'pending_admin' && (
@@ -3576,7 +3810,7 @@ export function WorkspacesAdminView({
                               onClick={() =>
                                 void onAdminUpdateThankYou(ty.id, 'transmitted_to_provider')
                               }
-                              className="min-h-[30px] px-2.5 py-0.5 font-semibold bg-teal-700 text-white rounded"
+                              className="min-h-[44px] px-2.5 py-0.5 font-semibold bg-teal-700 text-white rounded"
                             >
                               Marquer transmis au prestataire
                             </button>
@@ -3593,7 +3827,7 @@ export function WorkspacesAdminView({
                     >
                       <div className="flex justify-between">
                         <strong>{s.title}</strong>
-                        <span className="uppercase font-mono text-[10px]">
+                        <span className="uppercase font-mono text-xs">
                           {s.moderationStatus}
                         </span>
                       </div>
@@ -3602,14 +3836,14 @@ export function WorkspacesAdminView({
                         <button
                           type="button"
                           onClick={() => void onAdminModerateStory(s.id, 'approved')}
-                          className="min-h-[32px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded"
+                          className="min-h-[44px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded"
                         >
                           Approuver
                         </button>
                         <button
                           type="button"
                           onClick={() => void onAdminModerateStory(s.id, 'rejected')}
-                          className="min-h-[32px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded"
+                          className="min-h-[44px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded"
                         >
                           Rejeter
                         </button>
@@ -3620,7 +3854,7 @@ export function WorkspacesAdminView({
                   {auditLogs.slice(0, 6).map((log) => (
                     <div
                       key={log.id}
-                      className="text-[11px] font-mono text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-2"
+                      className="text-xs font-mono text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-2"
                     >
                       [AUDIT] {log.action} · {log.summary}
                     </div>
@@ -3634,16 +3868,16 @@ export function WorkspacesAdminView({
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h3 className="font-display text-lg font-bold">
-                         Textes Juridiques, Convention Prestataire &amp; Pages Institutionnelles Éditables (Bloc 8)
+                         Textes Juridiques, Convention Prestataire &amp; Confidentialité (Bloc 8)
                       </h3>
-                      <p className="text-xs text-slate-500">
-                        Tant que vous n’avez pas coché « Validé par le propriétaire », le document affiche automatiquement le bandeau honnête « Document provisoire à faire valider avant ouverture commerciale ».
+                      <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                        Rappel administrateur : textes complets en français simple — à faire valider par un juriste avant ouverture commerciale étendue. Cet avis reste strictement réservé à votre tableau de bord.
                       </p>
                     </div>
                     <select
                       value={selectedContentSlug}
                       onChange={(e) => setSelectedContentSlug(e.target.value)}
-                      className="min-h-[40px] px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       {contentSlugs.map((slug) => (
                         <option key={slug} value={slug}>
@@ -3693,14 +3927,14 @@ export function WorkspacesAdminView({
                         value={contentTitle}
                         onChange={(e) => setContentTitle(e.target.value)}
                         required
-                        className="sm:col-span-3 min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="sm:col-span-3 min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
                       <input
                         type="text"
                         value={contentVersion}
                         onChange={(e) => setContentVersion(e.target.value)}
                         placeholder="Version (ex: 1.1)"
-                        className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                       />
                     </div>
                     <textarea
@@ -3717,7 +3951,7 @@ export function WorkspacesAdminView({
                           onChange={(e) => setContentOwnerValidated(e.target.checked)}
                         />
                         <span>
-                          Document relu et validé par le propriétaire (retire la mention « Document provisoire »)
+                          Document relu et approuvé par un juriste et par le propriétaire (validation notée au tableau de bord)
                         </span>
                       </label>
                       <div className="flex gap-2">
@@ -3725,7 +3959,7 @@ export function WorkspacesAdminView({
                           <button
                             type="button"
                             onClick={() => onOpenLegalDoc(selectedContentSlug)}
-                            className="min-h-[40px] px-4 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
+                            className="min-h-[44px] px-4 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
                           >
                             Prévisualiser
                           </button>
@@ -3733,7 +3967,7 @@ export function WorkspacesAdminView({
                         <button
                           type="submit"
                           disabled={savingContent}
-                          className="min-h-[40px] px-5 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                          className="min-h-[44px] px-5 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
                         >
                           {savingContent
                             ? 'Publication...'
@@ -3860,7 +4094,7 @@ export function WorkspacesAdminView({
                 CGV, Politique d’Annulation &amp; Charte du Voyage Respectueux
               </h3>
               <p>
-                L’exploration du Bénin, l’assistant itinéraire et l’espace urgence sont gratuits. L’envoi des demandes de réservation est encadré par des frais de dossier déductibles de 20 000 FCFA après acceptation explicite des CGV.
+                L’exploration des destinations ouvertes, l’assistant itinéraire et l’espace urgence sont gratuits. L’envoi des demandes de réservation est encadré par des frais de dossier déductibles de 20 000 FCFA après acceptation explicite des CGV.
               </p>
               {onOpenLegalDoc && (
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -3890,18 +4124,15 @@ export function WorkspacesAdminView({
          ===================================================================== */}
       {subTab === 'money_flow' && (
         <div className="space-y-6">
-          {/* Bannière Démonstration Obligatoire (C3.2) */}
-          <div className="p-4 sm:p-5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 rounded-2xl flex items-start gap-3 text-amber-950 dark:text-amber-100">
-            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          {/* Mode encaissement manuel vérifié (C3) */}
+          <div className="p-4 sm:p-5 bg-teal-50 dark:bg-teal-950/40 border border-teal-300 dark:border-teal-800 rounded-2xl flex items-start gap-3 text-teal-950 dark:text-teal-100">
+            <ShieldCheck className="w-5 h-5 text-teal-700 dark:text-teal-400 shrink-0 mt-0.5" />
             <div className="space-y-1 text-xs sm:text-sm">
-              <p className="font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
-                « Démonstration, aucun argent réel »
+              <p className="font-bold text-teal-900 dark:text-teal-200">
+                Encaissement manuel vérifié par Mobile Money (Wave, Orange Money, MTN)
               </p>
-              <p className="leading-relaxed text-amber-900/90 dark:text-amber-200/90">
-                AMARO.VOYAGE ne dispose pas encore de passerelle de paiement automatisée connectée.
-                Tous les flux financiers, avances, acomptes et séquestres affichés sont soit gérés
-                sous contrôle humain strict (rapprochement manuel Mobile Money / virement), soit
-                simulés dans le cadre du démonstrateur technique.
+              <p className="leading-relaxed text-teal-900/90 dark:text-teal-200/90">
+                Le voyageur règle sur le numéro AMARO configuré dans votre tableau de bord, saisit sa référence de transaction et voit « Paiement en attente de validation ». Vous vérifiez la réception puis validez en un clic dans l’onglet Administration.
               </p>
             </div>
           </div>
@@ -4059,7 +4290,7 @@ export function WorkspacesAdminView({
                   <span>Traitements Manuels (Équipe Amaro)</span>
                 </div>
                 <ul className="space-y-1.5 list-disc list-inside text-slate-700 dark:text-slate-300">
-                  <li>Rapprochement des paiements Mobile Money (MTN / Moov) et virements bancaires.</li>
+                  <li>Rapprochement des paiements Mobile Money (Wave, Orange Money, MTN, Moov) et virements bancaires.</li>
                   <li>Validation humaine des preuves de transaction avant confirmation ferme.</li>
                   <li>Ordres de virement ou décaissement Mobile Money vers les prestataires locaux.</li>
                   <li>Régularisation et remboursement manuel des cautions restaurant et trop-perçus.</li>
@@ -4103,36 +4334,36 @@ export function WorkspacesAdminView({
                     setSavingCountriesPhotos(false);
                   }
                 }}
-                className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
               >
                 {savingCountriesPhotos ? 'Enregistrement...' : 'Enregistrer les états des pays & photos'}
               </button>
             </div>
 
-            {/* Compteurs des 4 états */}
+            {/* Compteurs des 4 états calculés dynamiquement */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl">
-                <span className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium">Ouverts (Public)</span>
+                <span className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">Ouverts (Public)</span>
                 <p className="font-display text-lg font-bold text-emerald-900 dark:text-emerald-200">
-                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'ouvert').length}
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => getEffectiveCountryState(c.code, countryStates) === 'ouvert').length}
                 </p>
               </div>
               <div className="p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl">
-                <span className="text-[11px] text-indigo-800 dark:text-indigo-300 font-medium">Ouvert Admin Seulement</span>
+                <span className="text-xs text-indigo-800 dark:text-indigo-300 font-medium">Ouvert Admin Seulement</span>
                 <p className="font-display text-lg font-bold text-indigo-900 dark:text-indigo-200">
-                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'ouvert_admin_seulement').length} (Côte d'Ivoire)
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => getEffectiveCountryState(c.code, countryStates) === 'ouvert_admin_seulement').length}
                 </p>
               </div>
               <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl">
-                <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">Bientôt Disponibles</span>
+                <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">En préparation</span>
                 <p className="font-display text-lg font-bold text-amber-900 dark:text-amber-200">
-                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'bientot').length} (BJ, SN, TG)
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => getEffectiveCountryState(c.code, countryStates) === 'bientot').length}
                 </p>
               </div>
               <div className="p-3 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
-                <span className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">Cachés</span>
+                <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">Cachés</span>
                 <p className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => (countryStates[c.code] || c.initialState) === 'cache').length}
+                  {UN_COUNTRIES_REGISTRY.filter((c: UNCountryMeta) => getEffectiveCountryState(c.code, countryStates) === 'cache').length}
                 </p>
               </div>
             </div>
@@ -4160,16 +4391,16 @@ export function WorkspacesAdminView({
                   <option value="all">Tous les statuts</option>
                   <option value="ouvert">Ouvert</option>
                   <option value="ouvert_admin_seulement">Ouvert admin seulement</option>
-                  <option value="bientot">Bientôt</option>
+                  <option value="bientot">En préparation</option>
                   <option value="cache">Caché</option>
                 </select>
               </div>
             </div>
 
-            {/* Liste filtrée des pays */}
-            <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+            {/* Liste filtrée des pays avec interrupteur immédiat 1-clic */}
+            <div className="max-h-96 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 text-xs">
               {UN_COUNTRIES_REGISTRY.filter((country: UNCountryMeta) => {
-                const currentState = countryStates[country.code] || country.initialState;
+                const currentState = getEffectiveCountryState(country.code, countryStates);
                 if (countryStatusFilter !== 'all' && currentState !== countryStatusFilter) {
                   return false;
                 }
@@ -4183,19 +4414,59 @@ export function WorkspacesAdminView({
                 }
                 return true;
               }).map((country: UNCountryMeta) => {
-                const currentState = countryStates[country.code] || country.initialState;
+                const currentState = getEffectiveCountryState(country.code, countryStates);
+                const isOpen = currentState === 'ouvert';
                 const isSelected = selectedCountryCode === country.code;
+                const isBusy = togglingCountryCode === country.code;
+
+                const applyCountryStateUpdate = async (nextState: UNCountryState) => {
+                  const nextMap = { ...countryStates, [country.code]: nextState };
+                  setCountryStates(nextMap);
+                  setTogglingCountryCode(country.code);
+                  try {
+                    const resp = await authorizedFetch('/api/amaro/admin/country-state', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        countryCode: country.code,
+                        state: nextState,
+                      }),
+                    });
+                    if (!resp.ok) {
+                      const errBody = await resp.json().catch(() => null);
+                      onNotify(errBody?.error || `Erreur serveur lors du basculement de ${country.nameFr}.`);
+                    }
+                    await onAdminSaveExtendedSettings({
+                      countryOperationalStates: nextMap,
+                      photoRegistryOverrides: photoOverrides,
+                    });
+                    onNotify(
+                      `${country.nameFr} (${country.code}) basculé sur « ${
+                        nextState === 'ouvert'
+                          ? 'Ouvert'
+                          : nextState === 'bientot'
+                          ? 'En préparation'
+                          : nextState === 'ouvert_admin_seulement'
+                          ? 'Ouvert admin seulement'
+                          : 'Caché'
+                      } ».`
+                    );
+                  } finally {
+                    setTogglingCountryCode(null);
+                  }
+                };
+
                 return (
                   <div
                     key={country.code}
-                    className={`p-3 flex items-center justify-between gap-3 transition-colors ${
+                    className={`p-3 flex flex-wrap items-center justify-between gap-3 transition-colors ${
                       isSelected
                         ? 'bg-amber-50/70 dark:bg-amber-950/30'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                     }`}
                   >
                     <div
-                      className="flex-1 cursor-pointer"
+                      className="flex-1 min-w-[180px] cursor-pointer"
                       onClick={() => setSelectedCountryCode(country.code)}
                     >
                       <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
@@ -4203,22 +4474,48 @@ export function WorkspacesAdminView({
                           {country.code}
                         </span>
                         <span>{country.nameFr}</span>
-                        <span className="text-[10px] text-slate-400">({country.alpha3})</span>
+                        <span className="text-xs text-slate-400">({country.region})</span>
                       </div>
-                      <span className="text-[11px] text-slate-500">Région : {country.region}</span>
+                      <span className="text-xs text-slate-500">
+                        Statut public :{' '}
+                        <strong className={isOpen ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
+                          {isOpen ? 'Ouvert au public' : currentState === 'bientot' ? 'En préparation' : currentState === 'ouvert_admin_seulement' ? 'Admin uniquement' : 'Caché'}
+                        </strong>
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {/* Interrupteur 1-clic Ouvert / En préparation */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isOpen}
+                        aria-label={`Basculer l'ouverture de ${country.nameFr}`}
+                        disabled={isBusy}
+                        onClick={() => void applyCountryStateUpdate(isOpen ? 'bientot' : 'ouvert')}
+                        className={`min-h-[44px] inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border transition-colors ${
+                          isOpen
+                            ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
+                            : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-amber-50 hover:border-amber-400 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${
+                            isOpen ? 'bg-white' : 'bg-amber-500'
+                          }`}
+                        />
+                        <span>{isBusy ? 'Mise à jour...' : isOpen ? 'Ouvert' : 'En préparation'}</span>
+                      </button>
+
                       <select
                         value={currentState}
+                        disabled={isBusy}
+                        aria-label={`Statut avancé pour ${country.nameFr}`}
                         onChange={(e) => {
                           const nextState = e.target.value as UNCountryState;
-                          setCountryStates((prev) => ({
-                            ...prev,
-                            [country.code]: nextState,
-                          }));
+                          void applyCountryStateUpdate(nextState);
                         }}
-                        className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border ${
+                        className={`px-2 py-1 text-xs font-semibold rounded-lg border ${
                           currentState === 'ouvert'
                             ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-200'
                             : currentState === 'ouvert_admin_seulement'
@@ -4230,14 +4527,14 @@ export function WorkspacesAdminView({
                       >
                         <option value="ouvert">Ouvert</option>
                         <option value="ouvert_admin_seulement">Ouvert admin seulement</option>
-                        <option value="bientot">Bientôt</option>
+                        <option value="bientot">En préparation</option>
                         <option value="cache">Caché</option>
                       </select>
 
                       <button
                         type="button"
                         onClick={() => setSelectedCountryCode(country.code)}
-                        className="px-2 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400 underline"
+                        className="px-2 py-1 text-xs font-semibold text-teal-700 dark:text-teal-400 underline"
                       >
                         Fiche
                       </button>
@@ -4271,50 +4568,50 @@ export function WorkspacesAdminView({
                   </span>
                 </div>
 
-                {/* Champs vides « à renseigner » (C5.4) */}
+                {/* Paramètres pays dans le tableau de bord */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                    <label className="block text-xs mb-1 font-medium text-slate-500">
                       Monnaie officielle
                     </label>
                     <input
                       type="text"
                       disabled
-                      placeholder="à renseigner"
-                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                      placeholder="Selon devise locale"
+                      className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                    <label className="block text-xs mb-1 font-medium text-slate-500">
                       Frais de dossier
                     </label>
                     <input
                       type="text"
                       disabled
-                      placeholder="à renseigner"
-                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                      placeholder="Paramétrable avant ouverture"
+                      className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                    <label className="block text-xs mb-1 font-medium text-slate-500">
                       Plafond visites / jour
                     </label>
                     <input
                       type="text"
                       disabled
-                      placeholder="à renseigner"
-                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                      placeholder="1 changement ville / 2 même ville"
+                      className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] mb-1 font-medium text-slate-500">
+                    <label className="block text-xs mb-1 font-medium text-slate-500">
                       Taux TVA applicable
                     </label>
                     <input
                       type="text"
                       disabled
-                      placeholder="à renseigner"
-                      className="w-full min-h-[38px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-400 italic"
+                      placeholder="Selon régime fiscal local"
+                      className="w-full min-h-[44px] px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-500"
                     />
                   </div>
                 </div>
@@ -4379,7 +4676,7 @@ export function WorkspacesAdminView({
                           className="w-full h-full object-cover"
                         />
                         {showBadge && (
-                          <span className="absolute bottom-1 right-1 text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-950/75 text-white backdrop-blur-xs">
+                          <span className="absolute bottom-1 right-1 text-xs font-medium px-1.5 py-0.5 rounded bg-slate-950/75 text-white backdrop-blur-xs">
                             Illustration
                           </span>
                         )}
@@ -4388,11 +4685,11 @@ export function WorkspacesAdminView({
                       {/* Meta Info */}
                       <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center justify-between gap-1">
-                          <code className="text-[11px] font-mono font-bold text-teal-700 dark:text-teal-400 truncate">
+                          <code className="text-xs font-mono font-bold text-teal-700 dark:text-teal-400 truncate">
                             {imgKey}
                           </code>
                           <span
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
                               currentIndicator === 'propre_etablissement'
                                 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                                 : currentIndicator === 'illustration'
@@ -4407,7 +4704,7 @@ export function WorkspacesAdminView({
                               : 'À vérifier'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2">
+                        <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">
                           {meta.alt}
                         </p>
                       </div>
@@ -4416,7 +4713,7 @@ export function WorkspacesAdminView({
                     {/* Edit Form for this photo */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-slate-800">
                       <div>
-                        <label className="block text-[10px] font-medium mb-1 text-slate-500">
+                        <label className="block text-xs font-medium mb-1 text-slate-500">
                           Indicateur d'origine
                         </label>
                         <select
@@ -4440,7 +4737,7 @@ export function WorkspacesAdminView({
                       </div>
 
                       <div>
-                        <label className="block text-[10px] font-medium mb-1 text-slate-500">
+                        <label className="block text-xs font-medium mb-1 text-slate-500">
                           Source et licence
                         </label>
                         <input
@@ -4462,7 +4759,7 @@ export function WorkspacesAdminView({
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                    <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
                       <span>Auteur : Inconnu (Génération IA)</span>
                       <span>
                         Affichage : {showBadge ? 'Étiquette active' : 'Aucune étiquette (photo propre)'}

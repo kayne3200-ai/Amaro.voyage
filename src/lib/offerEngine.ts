@@ -1289,11 +1289,12 @@ export const DEFAULT_CIRCUIT_A_FEE_CONFIG: CircuitAFeeConfig = {
 /**
  * Formule Circuit A (catalogue non conventionné) — C2.2 :
  * Frais Amaro = 6% du prix prestataire + 500f, plafonné à 4.000f maximum.
- * Arrondir au 100f supérieur.
+ * Arrondir au multiple de 100f supérieur.
  * Exemples vérifiés :
- * - Hôtel 60.000f -> +4.000f = 64.000f affiché
- * - Transport 12.000f -> +1.200f = 13.200f affiché
- * - Guide 25.000f -> +2.000f = 27.000f affiché
+ * - 5.000f -> +800f = 5.800f affiché
+ * - 12.000f -> 1.220f arrondi à +1.300f = 13.300f affiché
+ * - 25.000f -> +2.000f = 27.000f affiché
+ * - 100.000f -> +4.000f (plafond) = 104.000f affiché
  */
 export function calculateCircuitAFee(
   providerPrice: number,
@@ -1304,7 +1305,7 @@ export function calculateCircuitAFee(
   const raw = providerPrice * cfg.percentRate + cfg.fixedAmount;
   const capped = Math.min(cfg.capAmount, raw);
   const step = Math.max(1, cfg.roundingStep);
-  return Math.min(cfg.capAmount, Math.round(capped / step) * step);
+  return Math.min(cfg.capAmount, Math.ceil(capped / step) * step);
 }
 
 export interface FeeSimulationResult {

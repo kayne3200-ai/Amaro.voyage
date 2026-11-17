@@ -449,18 +449,18 @@ export function ServiceDetailModal({
             {resolvedOffers.length > 1 && (
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
                 <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">Capacité min.</label>
+                  <label className="block text-xs text-slate-500 mb-1">Capacité min.</label>
                   <input
                     type="number"
                     min={1}
                     placeholder="Ex: 2"
                     value={minCapacityFilter}
                     onChange={(e) => setMinCapacityFilter(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">
+                  <label className="block text-xs text-slate-500 mb-1">
                     Prix max. (FCFA)
                   </label>
                   <input
@@ -469,12 +469,12 @@ export function ServiceDetailModal({
                     placeholder="Ex: 85000"
                     value={maxPriceXofFilter}
                     onChange={(e) => setMaxPriceXofFilter(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
                 {(item.category === 'accommodation' || item.category === 'transport') && (
                   <div className="flex items-end">
-                    <label className="min-h-[38px] inline-flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                    <label className="min-h-[44px] inline-flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
                       <input
                         type="checkbox"
                         checked={acOnlyFilter}
@@ -487,7 +487,7 @@ export function ServiceDetailModal({
                 )}
                 {item.category === 'transport' && (
                   <div>
-                    <label className="block text-[11px] text-slate-500 mb-1">Chauffeur</label>
+                    <label className="block text-xs text-slate-500 mb-1">Chauffeur</label>
                     <select
                       value={driverFilter}
                       onChange={(e) =>
@@ -495,7 +495,7 @@ export function ServiceDetailModal({
                           e.target.value as 'all' | 'with_driver' | 'without_driver'
                         )
                       }
-                      className="w-full min-h-[38px] px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      className="w-full min-h-[44px] px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
                     >
                       <option value="all">Toutes options</option>
                       <option value="with_driver">Avec chauffeur</option>
@@ -573,13 +573,13 @@ export function ServiceDetailModal({
                         )}
 
                         {off.amenities && off.amenities.length > 0 && (
-                          <p className="text-[11px] text-slate-500">
+                          <p className="text-xs text-slate-500">
                             Équipements : {off.amenities.join(' · ')}
                           </p>
                         )}
 
                         {(off.routeOrigin || off.routeDestination || off.publishedSchedule) && (
-                          <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                          <p className="text-xs text-slate-600 dark:text-slate-400">
                             {off.routeOrigin && off.routeDestination
                               ? `Trajet : ${off.routeOrigin} → ${off.routeDestination}`
                               : ''}
@@ -593,7 +593,7 @@ export function ServiceDetailModal({
                           off.fuelPolicy ||
                           off.mileagePolicy ||
                           off.licenseRequired) && (
-                          <p className="text-[11px] text-slate-500">
+                          <p className="text-xs text-slate-500">
                             {[
                               off.depositInfo ? `Caution : ${off.depositInfo}` : null,
                               off.fuelPolicy ? `Carburant : ${off.fuelPolicy}` : null,
@@ -606,7 +606,7 @@ export function ServiceDetailModal({
                         )}
 
                         {/* Honest Availability & Traceable Source per Offer (B1 & B5) */}
-                        <div className="pt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                        <div className="pt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                           <span className="font-medium text-slate-700 dark:text-slate-300">
                             {honestAvailability.circuit === 'A'
                               ? CIRCUIT_A_HONEST_AVAILABILITY_TEXT
@@ -647,7 +647,7 @@ export function ServiceDetailModal({
                             onClick={() => adjustOfferQty(off.id, -1)}
                             disabled={qty === 0}
                             aria-label={`Retirer une unité de ${off.name}`}
-                            className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-slate-700 dark:text-slate-200 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-800"
+                            className="min-h-[44px] min-w-[32px] inline-flex items-center justify-center rounded text-slate-700 dark:text-slate-200 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-800"
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
@@ -658,7 +658,7 @@ export function ServiceDetailModal({
                             type="button"
                             onClick={() => adjustOfferQty(off.id, 1)}
                             aria-label={`Ajouter une unité de ${off.name}`}
-                            className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800"
+                            className="min-h-[44px] min-w-[32px] inline-flex items-center justify-center rounded text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800"
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
@@ -674,7 +674,7 @@ export function ServiceDetailModal({
             <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                     {item.category === 'accommodation' ? 'Date d’arrivée' : 'Date souhaitée'}
                   </label>
                   <input
@@ -690,13 +690,13 @@ export function ServiceDetailModal({
                         setPrefillCheckOutDate(addDaysIso(next, 1));
                       }
                     }}
-                    className="w-full min-h-[40px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
 
                 {item.category === 'accommodation' ? (
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                       Date de départ ({stayNights} nuit
                       {stayNights > 1 ? 's' : ''})
                     </label>
@@ -705,25 +705,25 @@ export function ServiceDetailModal({
                       min={addDaysIso(prefillDate, 1)}
                       value={prefillCheckOutDate}
                       onChange={(e) => setPrefillCheckOutDate(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                   </div>
                 ) : (
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                       Horaire souhaité
                     </label>
                     <input
                       type="time"
                       value={prefillTime}
                       onChange={(e) => setPrefillTime(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                     Nombre de voyageurs
                   </label>
                   <input
@@ -732,7 +732,7 @@ export function ServiceDetailModal({
                     max={50}
                     value={participants}
                     onChange={(e) => setParticipants(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-full min-h-[40px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-2.5 py-1.5 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
               </div>
@@ -740,27 +740,35 @@ export function ServiceDetailModal({
               {item.category === 'transport' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                       Lieu de prise en charge
                     </label>
                     <input
                       type="text"
                       value={pickupLocation}
                       onChange={(e) => setPickupLocation(e.target.value)}
-                      placeholder="Ex: Aéroport de Cotonou ou hôtel"
-                      className="w-full min-h-[40px] px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      placeholder={
+                        item.countryCode === 'CI'
+                          ? 'Ex: Aéroport FHB Abidjan ou hôtel'
+                          : 'Ex: Aéroport international ou hôtel'
+                      }
+                      className="w-full min-h-[44px] px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                       Lieu de restitution / destination
                     </label>
                     <input
                       type="text"
                       value={dropoffLocation}
                       onChange={(e) => setDropoffLocation(e.target.value)}
-                      placeholder="Ex: Ouidah centre ou Cotonou"
-                      className="w-full min-h-[40px] px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                      placeholder={
+                        item.countryCode === 'CI'
+                          ? 'Ex: Grand-Bassam ou Plateau'
+                          : 'Ex: Centre-ville ou lieu de séjour'
+                      }
+                      className="w-full min-h-[44px] px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                     />
                   </div>
                 </div>
@@ -783,7 +791,7 @@ export function ServiceDetailModal({
                       }`}
                     >
                       <strong className="block">Cas 1 : Table simple (0 FCFA)</strong>
-                      <span className="text-[11px] block text-slate-500">
+                      <span className="text-xs block text-slate-500">
                         Caution de 5 000 FCFA déduite de votre addition sur place.
                       </span>
                     </button>
@@ -797,7 +805,7 @@ export function ServiceDetailModal({
                       }`}
                     >
                       <strong className="block">Cas 2 : Menu fixe</strong>
-                      <span className="text-[11px] block text-slate-500">
+                      <span className="text-xs block text-slate-500">
                         Paiement du menu à l’avance (+ Frais de service Amaro). Boissons sur place.
                       </span>
                     </button>
@@ -854,7 +862,7 @@ export function ServiceDetailModal({
                               ? 'Circuit B — Prestataire Partenaire Conventionné'
                               : 'Circuit A — Prestataire Recensé (Non-conventionné)'}
                           </span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
                             {isPartnerVerified ? 'Commission partenaire 10%' : 'Marge individuelle transparente'}
                           </span>
                         </div>
@@ -865,7 +873,7 @@ export function ServiceDetailModal({
                             <p className="font-mono font-semibold text-emerald-800 dark:text-emerald-300">
                               Prix affiché au client = {sched.providerPrice.toLocaleString('fr-FR')} FCFA (Prix réel direct du prestataire, sans aucun ajout).
                             </p>
-                            <p className="text-[11px] text-slate-500">
+                            <p className="text-xs text-slate-500">
                               Rémunération Amaro : Commission de 10% ({sched.commissionCircuitB?.toLocaleString('fr-FR')} FCFA) reversée par le partenaire après le séjour, en arrière-plan.
                             </p>
                           </div>
@@ -874,7 +882,7 @@ export function ServiceDetailModal({
                             <p className="font-mono font-bold text-slate-900 dark:text-slate-100">
                               Prix prestataire : {sched.providerPrice.toLocaleString('fr-FR')} FCFA + Frais de service Amaro : {sched.amaroFee.toLocaleString('fr-FR')} FCFA = Total : {sched.totalClientPrice.toLocaleString('fr-FR')} FCFA
                             </p>
-                            <p className="text-[11px] text-slate-500">
+                            <p className="text-xs text-slate-500">
                               Formule Circuit A : 6% du prix prestataire + 500 FCFA (plafonné à 4 000 FCFA, arrondi à la centaine).
                             </p>
                           </div>
@@ -884,13 +892,13 @@ export function ServiceDetailModal({
                       {/* The 2 Separated Totals: À PAYER MAINTENANT vs À PAYER SUR PLACE */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 space-y-1">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800 dark:text-teal-300 block">
+                          <span className="text-xs font-bold uppercase tracking-wider text-teal-800 dark:text-teal-300 block">
                             À PAYER MAINTENANT
                           </span>
                           <strong className="font-mono text-lg text-teal-950 dark:text-teal-100 block">
                             {sched.payNowAmount.toLocaleString('fr-FR')} FCFA
                           </strong>
-                          <span className="text-[11px] text-teal-900/80 dark:text-teal-300/80 block leading-tight">
+                          <span className="text-xs text-teal-900/80 dark:text-teal-300/80 block leading-tight">
                             {item.category === 'accommodation'
                               ? 'Paiement total à la réservation.'
                               : item.category === 'transport'
@@ -904,7 +912,7 @@ export function ServiceDetailModal({
                         </div>
 
                         <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
                             À PAYER SUR PLACE
                           </span>
                           <strong className="font-mono text-lg text-slate-900 dark:text-slate-100 block">
@@ -912,7 +920,7 @@ export function ServiceDetailModal({
                               ? `${sched.payOnSiteAmount.toLocaleString('fr-FR')} FCFA`
                               : '0 FCFA'}
                           </strong>
-                          <span className="text-[11px] text-slate-600 dark:text-slate-400 block leading-tight">
+                          <span className="text-xs text-slate-600 dark:text-slate-400 block leading-tight">
                             {sched.payOnSiteDescription}
                           </span>
                         </div>
@@ -924,7 +932,7 @@ export function ServiceDetailModal({
                           <Info className="w-3.5 h-3.5 shrink-0" />
                           <span>Règle d’annulation &amp; de présence ({item.category.toUpperCase()}) :</span>
                         </strong>
-                        <p className="leading-relaxed text-[11px]">
+                        <p className="leading-relaxed text-xs">
                           {sched.cancellationRuleDescription}
                         </p>
                       </div>
@@ -1009,7 +1017,7 @@ export function ServiceDetailModal({
                 </div>
               </div>
 
-              <p className="text-[11px] text-slate-500">
+              <p className="text-xs text-slate-500">
                 <strong>Sources documentaires :</strong>{' '}
                 {ed.sources.map((s) => s.name).join(' · ')}
               </p>
@@ -1048,7 +1056,7 @@ export function ServiceDetailModal({
                     key={rv.id}
                     className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800"
                   >
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 tabular-nums">
+                    <div className="flex items-center justify-between text-xs text-slate-500 tabular-nums">
                       <strong className="text-slate-800 dark:text-slate-200">
                         {rv.authorDisplayName} · {rv.rating}/5
                       </strong>
@@ -1077,7 +1085,7 @@ export function ServiceDetailModal({
                   : 'Établissement recensé dans l’annuaire public — non vérifié contractuellement'}
               </p>
               <p>{activationMeta.publicNotice}</p>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-xs text-slate-500">
                 Source : <strong>{item.sourceName || 'Répertoire public documenté'}</strong> · Date
                 de vérification :{' '}
                 <strong>
@@ -1178,7 +1186,7 @@ export function AccommodationComparatorModal({
           <button
             type="button"
             onClick={onClose}
-            className="min-h-[42px] px-3.5 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
+            className="min-h-[44px] px-3.5 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 rounded-xl"
           >
             Fermer
           </button>
@@ -1240,7 +1248,7 @@ export function AccommodationComparatorModal({
                   >
                     <div>{formatPrice(it)}</div>
                     {it.priceRangeNote && (
-                      <div className="font-sans text-[11px] text-slate-500 mt-0.5">
+                      <div className="font-sans text-xs text-slate-500 mt-0.5">
                         {it.priceRangeNote}
                       </div>
                     )}
@@ -1291,7 +1299,7 @@ export function AccommodationComparatorModal({
                         onClose();
                         onSelectForJourney(it);
                       }}
-                      className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl whitespace-nowrap"
+                      className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl whitespace-nowrap"
                     >
                       Ajouter à mon voyage
                     </button>

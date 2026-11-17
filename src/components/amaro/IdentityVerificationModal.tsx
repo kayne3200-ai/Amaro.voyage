@@ -203,8 +203,8 @@ export function IdentityVerificationModal({
   );
 
   // Traveler form state
-  const [nationalityCountry, setNationalityCountry] = useState<string>('BJ');
-  const [residenceCountry, setResidenceCountry] = useState<string>('BJ');
+  const [nationalityCountry, setNationalityCountry] = useState<string>('CI');
+  const [residenceCountry, setResidenceCountry] = useState<string>('CI');
   const [documentType, setDocumentType] =
     useState<Exclude<IdentityDocumentType, 'none'>>('national_id');
   const [otherDocumentLabel, setOtherDocumentLabel] = useState<string>('');
@@ -279,7 +279,7 @@ export function IdentityVerificationModal({
   useEffect(() => {
     if (metadata && metadata.documentType !== 'none') return;
     const natObj = COUNTRY_OPTIONS.find((c) => c.code === nationalityCountry);
-    if (natObj?.zone === 'international' && residenceCountry === 'BJ') {
+    if (natObj?.zone === 'international' && (residenceCountry === 'CI' || residenceCountry === 'BJ')) {
       setDocumentType('residence_permit');
     } else if (natObj?.zone === 'international') {
       setDocumentType('passport');
@@ -588,7 +588,7 @@ export function IdentityVerificationModal({
         {/* Current Status Banner */}
         <div className="p-3.5 rounded-xl border bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
-            <span className="text-[11px] uppercase tracking-wider text-slate-500 block">
+            <span className="text-xs uppercase tracking-wider text-slate-500 block">
               Statut actuel du justificatif
             </span>
             <span
@@ -652,15 +652,15 @@ export function IdentityVerificationModal({
               <button
                 type="button"
                 onClick={() => setEphemeralView(null)}
-                className="min-h-[36px] px-3 py-1 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold"
+                className="min-h-[44px] px-3 py-1 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold"
               >
                 Refermer l’aperçu immédiatement
               </button>
             </div>
-            <p className="text-[11px] text-slate-300">{ephemeralView.recipientNotice}</p>
+            <p className="text-xs text-slate-300">{ephemeralView.recipientNotice}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
-                <span className="text-[11px] text-slate-400">
+                <span className="text-xs text-slate-400">
                   Recto / Page d’identification
                 </span>
                 <img
@@ -671,7 +671,7 @@ export function IdentityVerificationModal({
               </div>
               {ephemeralView.backDataUrl && (
                 <div className="space-y-1">
-                  <span className="text-[11px] text-slate-400">Verso du document</span>
+                  <span className="text-xs text-slate-400">Verso du document</span>
                   <img
                     src={ephemeralView.backDataUrl}
                     alt="Pièce d'identité verso protégée"
@@ -807,7 +807,7 @@ export function IdentityVerificationModal({
                       (
                       {nationalityZone === 'ecowas'
                         ? 'CNI CEDEAO/CIP ou Passeport recommandés'
-                        : residenceCountry === 'BJ'
+                        : residenceCountry === 'CI' || residenceCountry === 'BJ'
                         ? 'Carte de séjour ou Passeport recommandés'
                         : 'Passeport recommandé hors CEDEAO'}
                       )
@@ -853,7 +853,7 @@ export function IdentityVerificationModal({
                 )}
 
                 {/* Photo framing guidance (Section 1.2) */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-[11px] text-slate-600 dark:text-slate-400 space-y-1">
+                <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-600 dark:text-slate-400 space-y-1">
                   <strong className="text-slate-900 dark:text-slate-200 block">
                     Conseils pour une photo nette, complète et lisible :
                   </strong>
@@ -913,7 +913,7 @@ export function IdentityVerificationModal({
                           alt="Aperçu recto"
                           className="w-full h-32 object-cover rounded-xl border border-emerald-400"
                         />
-                        <span className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                        <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" /> Photo prête et nettoyée (EXIF retiré)
                         </span>
                       </div>
@@ -969,7 +969,7 @@ export function IdentityVerificationModal({
                             alt="Aperçu verso"
                             className="w-full h-32 object-cover rounded-xl border border-emerald-400"
                           />
-                          <span className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                          <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Verso prêt et nettoyé
                           </span>
                         </div>
@@ -1086,7 +1086,7 @@ export function IdentityVerificationModal({
                     onChange={(e) => setProviderDecisionNote(e.target.value)}
                     maxLength={320}
                     placeholder="Commentaire éventuel pour le client (ex: Photo lisible, ou reflet sur le verso)..."
-                    className="w-full min-h-[42px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="w-full min-h-[44px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
 
                   <div className="flex flex-wrap gap-2">
@@ -1094,7 +1094,7 @@ export function IdentityVerificationModal({
                       type="button"
                       disabled={submitting}
                       onClick={() => void handleProviderDecision('accepted')}
-                      className="min-h-[42px] px-4 py-2 text-xs font-semibold text-white bg-emerald-700 rounded-xl"
+                      className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-emerald-700 rounded-xl"
                     >
                       Accepter le document
                     </button>
@@ -1102,7 +1102,7 @@ export function IdentityVerificationModal({
                       type="button"
                       disabled={submitting}
                       onClick={() => void handleProviderDecision('renewal_required')}
-                      className="min-h-[42px] inline-flex items-center gap-1 px-4 py-2 text-xs font-semibold text-amber-950 bg-amber-300 rounded-xl"
+                      className="min-h-[44px] inline-flex items-center gap-1 px-4 py-2 text-xs font-semibold text-amber-950 bg-amber-300 rounded-xl"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>Demander renouvellement</span>
@@ -1111,7 +1111,7 @@ export function IdentityVerificationModal({
                       type="button"
                       disabled={submitting}
                       onClick={() => void handleProviderDecision('rejected')}
-                      className="min-h-[42px] px-4 py-2 text-xs font-semibold text-red-700 bg-red-100 rounded-xl"
+                      className="min-h-[44px] px-4 py-2 text-xs font-semibold text-red-700 bg-red-100 rounded-xl"
                     >
                       Refuser
                     </button>
@@ -1141,7 +1141,7 @@ export function IdentityVerificationModal({
                   onChange={(e) => setAdminGovernanceNote(e.target.value)}
                   maxLength={320}
                   placeholder="Motif d'audit (ex: Révocation suite signalement, purge fin de conservation)..."
-                  className="w-full min-h-[42px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full min-h-[44px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
                 />
                 <div className="flex flex-wrap gap-2">
                   {metadata.providerAuthorized && (
@@ -1149,7 +1149,7 @@ export function IdentityVerificationModal({
                       type="button"
                       disabled={submitting}
                       onClick={() => void handleAdminGovernance('revoke_provider_access')}
-                      className="min-h-[40px] px-3.5 py-1.5 text-xs font-semibold text-amber-950 bg-amber-300 rounded-xl"
+                      className="min-h-[44px] px-3.5 py-1.5 text-xs font-semibold text-amber-950 bg-amber-300 rounded-xl"
                     >
                       Révoquer l’accès du prestataire
                     </button>
@@ -1161,7 +1161,7 @@ export function IdentityVerificationModal({
                         type="button"
                         disabled={submitting}
                         onClick={() => void handleAdminGovernance('authorize_provider_access')}
-                        className="min-h-[40px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 rounded-xl"
+                        className="min-h-[44px] px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 rounded-xl"
                       >
                         Rétablir l’accès prestataire (consentement actif)
                       </button>
@@ -1170,7 +1170,7 @@ export function IdentityVerificationModal({
                     type="button"
                     disabled={submitting}
                     onClick={() => void handleAdminGovernance('request_renewal')}
-                    className="min-h-[40px] px-3.5 py-1.5 text-xs font-semibold bg-slate-200 dark:bg-slate-800 rounded-xl"
+                    className="min-h-[44px] px-3.5 py-1.5 text-xs font-semibold bg-slate-200 dark:bg-slate-800 rounded-xl"
                   >
                     Demander renouvellement
                   </button>
@@ -1178,7 +1178,7 @@ export function IdentityVerificationModal({
                     type="button"
                     disabled={submitting}
                     onClick={() => void handleAdminGovernance('purge_retention_or_incident')}
-                    className="min-h-[40px] inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-semibold text-red-700 bg-red-100 rounded-xl"
+                    className="min-h-[44px] inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-semibold text-red-700 bg-red-100 rounded-xl"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Purger et détruire les fichiers chiffrés</span>
@@ -1203,7 +1203,7 @@ export function IdentityVerificationModal({
               {accessLogs.map((log) => (
                 <div
                   key={log.id}
-                  className="p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 rounded-xl text-[11px] flex flex-wrap items-center justify-between gap-2"
+                  className="p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2"
                 >
                   <div>
                     <strong className="font-mono text-slate-800 dark:text-slate-200">
@@ -1213,7 +1213,7 @@ export function IdentityVerificationModal({
                       {log.summary}
                     </span>
                   </div>
-                  <span className="font-mono text-[10px] text-slate-400">
+                  <span className="font-mono text-xs text-slate-400">
                     {log.createdAtIso ? log.createdAtIso.slice(0, 19).replace('T', ' ') : ''}
                   </span>
                 </div>

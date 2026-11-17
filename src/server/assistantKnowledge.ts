@@ -35,7 +35,7 @@ const ALL_REAL_BENIN_ITEMS: CatalogueItem[] = [
 ];
 
 function getCountryItemsPool(countryCode: string, extraPublishedItems?: CatalogueItem[]): CatalogueItem[] {
-  const code = (countryCode || 'BJ').toUpperCase();
+  const code = (countryCode || 'CI').toUpperCase();
   const baseItems =
     code === 'BJ'
       ? ALL_REAL_BENIN_ITEMS
@@ -296,8 +296,10 @@ export function buildRealDraftItinerary(params: {
   maxVisitsSameCityDay?: number;
   extraPublishedItems?: CatalogueItem[];
 }): AssistantDraftItinerary {
-  const targetCountryCode = (params.countryCode || 'BJ').toUpperCase();
-  const targetCountryDef = COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode);
+  const targetCountryCode = (params.countryCode || 'CI').toUpperCase();
+  const targetCountryDef =
+    COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI');
   const days = Math.min(14, Math.max(2, Math.round(params.daysCount || 4)));
   const travelers = Math.min(12, Math.max(1, Math.round(params.travelersCount || 2)));
   const dossierFeeXof = params.dossierFeeXof ?? 20_000;
@@ -527,7 +529,7 @@ export function modifyDraftItinerary(
   activeDraft: AssistantDraftItinerary,
   modificationRequest: string,
   extraPublishedItems?: CatalogueItem[],
-  countryCode = 'BJ'
+  countryCode = 'CI'
 ): { modifiedDraft: AssistantDraftItinerary; summaryChange: string } {
   const norm = normalizeText(modificationRequest);
   const catalogPool = getCountryItemsPool(countryCode, extraPublishedItems).filter(
@@ -658,8 +660,11 @@ export function analyzeConversationAndCatalogue(
   activeDraft?: AssistantDraftItinerary | null,
   systemSettings?: { countryCode?: string; maxVisitsCityChangeDay?: number; maxVisitsSameCityDay?: number; dossierFeeXof?: number }
 ): ConversationAnalysis {
-  const targetCountryCode = (systemSettings?.countryCode || 'BJ').toUpperCase();
-  const targetCountryDef = COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode) || COUNTRIES_REGISTRY[0];
+  const targetCountryCode = (systemSettings?.countryCode || 'CI').toUpperCase();
+  const targetCountryDef =
+    COUNTRIES_REGISTRY.find((c) => c.code === targetCountryCode) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
   const norm = normalizeText(rawMessage);
   const words = norm.split(' ').filter(Boolean);
   const isShortFollowUp = words.length <= 4;
@@ -781,6 +786,7 @@ export function analyzeConversationAndCatalogue(
   const mentionsFamily = /\b(famille|enfants|enfant|bebe|parents|groupe)\b/.test(norm);
 
   const isGeneralBenin =
+    targetCountryCode === 'BJ' &&
     !currentCity &&
     !currentCategory &&
     (/\b(connais rien|decouvrir|visiter|parle moi|c est comment|quelles villes|quels endroits|ou aller|je ne sais pas)\b/.test(
@@ -1035,8 +1041,11 @@ export function buildCatalogueContextSnippet(
   analysis: ConversationAnalysis,
   extraPublishedItems?: CatalogueItem[]
 ): string {
-  const code = (analysis.countryCode || 'BJ').toUpperCase();
-  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
+  const code = (analysis.countryCode || 'CI').toUpperCase();
+  const cDef =
+    COUNTRIES_REGISTRY.find((c) => c.code === code) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
   const pool = getCountryItemsPool(code, extraPublishedItems);
   const counts = computeDynamicCatalogueCounts(pool);
   const lines: string[] = [];
@@ -1079,8 +1088,11 @@ export function buildConversationalSystemPrompt(params: {
   isSignedIn: boolean;
 }): string {
   const { locale, analysis, journeyContextJson, isSignedIn } = params;
-  const code = (analysis.countryCode || 'BJ').toUpperCase();
-  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
+  const code = (analysis.countryCode || 'CI').toUpperCase();
+  const cDef =
+    COUNTRIES_REGISTRY.find((c) => c.code === code) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
   const catalogueBlock = buildCatalogueContextSnippet(analysis);
   const folderBlock = journeyContextJson
     ? `Dossier actif : ${journeyContextJson.slice(0, 500)}`
@@ -1113,8 +1125,11 @@ export function buildResilientHumanReply(
   analysis: ConversationAnalysis,
   locale: LocaleCode
 ): string {
-  const code = (analysis.countryCode || 'BJ').toUpperCase();
-  const cDef = COUNTRIES_REGISTRY.find((c) => c.code === code) || COUNTRIES_REGISTRY[0];
+  const code = (analysis.countryCode || 'CI').toUpperCase();
+  const cDef =
+    COUNTRIES_REGISTRY.find((c) => c.code === code) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
   const counts = computeDynamicCatalogueCounts(getCountryItemsPool(code));
   const cityNames = cDef.cities.slice(0, 4).map((c) => c.name).join(', ');
 

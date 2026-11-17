@@ -474,6 +474,7 @@ service cloud.firestore {
           'halfTimeReminderSentAt', 'balanceDeadlineAt', 'adminNotifyProviderTask', 'localContributionXof',
           'selectedOffersJson', 'hasPriceToVerify', 'checkOutDate', 'pickupLocation', 'dropoffLocation',
           'isPartialAcceptance', 'requestedUnitsTotal', 'acceptedUnitsTotal',
+          'clientTxRef', 'paymentMethodDeclared',
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.clientId)
@@ -521,6 +522,8 @@ service cloud.firestore {
         && (!('isPartialAcceptance' in data) || data.isPartialAcceptance is bool)
         && (!('requestedUnitsTotal' in data) || (data.requestedUnitsTotal is int && data.requestedUnitsTotal >= 0 && data.requestedUnitsTotal <= 100))
         && (!('acceptedUnitsTotal' in data) || (data.acceptedUnitsTotal is int && data.acceptedUnitsTotal >= 0 && data.acceptedUnitsTotal <= 100))
+        && (!('clientTxRef' in data) || (data.clientTxRef is string && data.clientTxRef.size() <= 120))
+        && (!('paymentMethodDeclared' in data) || (data.paymentMethodDeclared is string && data.paymentMethodDeclared.size() <= 80))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -626,6 +629,11 @@ service cloud.firestore {
           'vaultKeyConfirmedByOwner', 'financialRetentionDuration', 'termsVersion', 'conventionVersion',
           'includeDemoData', 'exchangeRateEurToXof', 'exchangeRateUsdToXof',
           'exchangeRateSource', 'exchangeRateUpdatedAt',
+          'amaroFeePercent', 'amaroFeeFixed', 'amaroFeeCap', 'amaroFeeRounding',
+          'tvaActive', 'tvaRate',
+          'countryOperationalStates', 'photoRegistryOverrides',
+          'legalCompanyName', 'legalRccm', 'legalIfu', 'legalAddress', 'legalContact',
+          'waveNumber', 'orangeMoneyNumber', 'mtnMoneyNumber',
           'updatedBy', 'createdAt', 'updatedAt'
         ])
         && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
@@ -633,6 +641,14 @@ service cloud.firestore {
         && data.serviceFeeFlat is number && data.serviceFeeFlat >= 0 && data.serviceFeeFlat <= 10000000
         && data.taxPercent is number && data.taxPercent >= 0 && data.taxPercent <= 100
         && isValidCurrency(data.currency)
+        && (!('legalCompanyName' in data) || (data.legalCompanyName is string && data.legalCompanyName.size() <= 160))
+        && (!('legalRccm' in data) || (data.legalRccm is string && data.legalRccm.size() <= 120))
+        && (!('legalIfu' in data) || (data.legalIfu is string && data.legalIfu.size() <= 120))
+        && (!('legalAddress' in data) || (data.legalAddress is string && data.legalAddress.size() <= 300))
+        && (!('legalContact' in data) || (data.legalContact is string && data.legalContact.size() <= 240))
+        && (!('waveNumber' in data) || (data.waveNumber is string && data.waveNumber.size() <= 80))
+        && (!('orangeMoneyNumber' in data) || (data.orangeMoneyNumber is string && data.orangeMoneyNumber.size() <= 80))
+        && (!('mtnMoneyNumber' in data) || (data.mtnMoneyNumber is string && data.mtnMoneyNumber.size() <= 80))
         && isValidId(data.updatedBy)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;

@@ -16,11 +16,10 @@ export const SENEGAL_COUNTRY_DEF: CountryDefinition = {
   languages: ['Français', 'Wolof', 'Pulaar', 'Sérère', 'Diola', 'Mandinka'],
   operationalStatus: 'operational',
   paymentMethods: [
-    'Wave Sénégal (passerelle marchande en cours)',
-    'Orange Money Sénégal (passerelle marchande en cours)',
-    'Free Money (passerelle marchande en cours)',
-    'Carte bancaire Visa / Mastercard',
-    'Validation manuelle encadrée Amaro',
+    'Wave Sénégal (paiement Mobile Money vérifié)',
+    'Orange Money Sénégal (paiement Mobile Money vérifié)',
+    'Free Money (paiement Mobile Money vérifié)',
+    'Virement bancaire / règlement encadré AMARO',
   ],
   localRulesFr: [
     'Devise officielle : Franc CFA (XOF — parité fixe garantie 1 EUR = 655,957 XOF).',
@@ -266,10 +265,9 @@ export const TOGO_COUNTRY_DEF: CountryDefinition = {
   languages: ['Français', 'Éwé', 'Kabyè', 'Mina'],
   operationalStatus: 'operational',
   paymentMethods: [
-    'T-Money Togo (passerelle marchande en cours)',
-    'Moov Money Togo (passerelle marchande en cours)',
-    'Carte bancaire Visa / Mastercard',
-    'Validation manuelle encadrée Amaro',
+    'T-Money Togo (paiement Mobile Money vérifié)',
+    'Moov Money Togo (paiement Mobile Money vérifié)',
+    'Virement bancaire / règlement encadré AMARO',
   ],
   localRulesFr: [
     'Devise officielle : Franc CFA (XOF — parité fixe 1 EUR = 655,957 XOF).',

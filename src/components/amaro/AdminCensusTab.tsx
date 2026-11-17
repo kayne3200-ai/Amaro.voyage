@@ -246,7 +246,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
               type="button"
               disabled={loading || busyAction}
               onClick={() => void loadCensusQueue()}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800"
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               <span>Actualiser</span>
@@ -255,14 +255,14 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
               type="button"
               disabled={busyAction}
               onClick={() => void handleImportSeedOrJson(INITIAL_BENIN_WEB_CENSUS_RECORDS)}
-              className="min-h-[40px] px-3.5 py-2 text-xs font-semibold bg-[#0B192C] text-white rounded-xl hover:bg-slate-800"
+              className="min-h-[44px] px-3.5 py-2 text-xs font-semibold bg-[#0B192C] text-white rounded-xl hover:bg-slate-800"
             >
               Recharger le lot web du {CENSUS_METHODOLOGY_SUMMARY.consultationDate}
             </button>
             <button
               type="button"
               onClick={() => setShowJsonImport((v) => !v)}
-              className="min-h-[40px] px-3.5 py-2 text-xs font-semibold border border-slate-300 dark:border-slate-700 rounded-xl"
+              className="min-h-[44px] px-3.5 py-2 text-xs font-semibold border border-slate-300 dark:border-slate-700 rounded-xl"
             >
               Importer un fichier JSON sourcé
             </button>
@@ -518,7 +518,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
                       {rec.originalCurrency} ({OFFER_PRICE_STATE_LABELS[rec.priceState]})
                     </span>
                   )}
-                  <div className="text-[11px] text-slate-500">
+                  <div className="text-xs text-slate-500">
                     Photo : photo à fournir (non reprise sans droit)
                   </div>
                 </div>
@@ -591,7 +591,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
                               : `${off.priceAmount.toLocaleString('fr-FR')} ${off.originalCurrency} / ${off.priceUnit}`}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-xs text-slate-500">
                           {off.shortDescription} · {OFFER_PRICE_STATE_LABELS[off.priceState]} · Source consultée le {off.consultedAt}
                         </p>
                       </div>
@@ -607,7 +607,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
                     Fiche déjà présente au catalogue ({rec.matchedExistingServiceId}) — différences relevées sans écrasement automatique :
                   </div>
                   {rec.proposedDiffs.map((diff, idx) => (
-                    <div key={`${diff.field}-${idx}`} className="text-[11px] text-slate-700 dark:text-slate-300 font-mono">
+                    <div key={`${diff.field}-${idx}`} className="text-xs text-slate-700 dark:text-slate-300 font-mono">
                       • {diff.field} : actuel = « {diff.currentValue} » → relevé web = « {diff.discoveredValue} » (source du {diff.consultedAt})
                     </div>
                   ))}
@@ -616,7 +616,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
 
               {/* Points Marked "À vérifier" */}
               {rec.toVerifyFlags.length > 0 && (
-                <div className="text-[11px] text-amber-800 dark:text-amber-300">
+                <div className="text-xs text-amber-800 dark:text-amber-300">
                   <strong>Points signalés « à vérifier » :</strong>{' '}
                   {rec.toVerifyFlags.join(' · ')}
                 </div>
@@ -739,7 +739,7 @@ export const AdminCensusTab: React.FC<AdminCensusTabProps> = ({
                 </div>
 
                 {rec.history.length > 0 && (
-                  <span className="text-[11px] text-slate-400 tabular-nums">
+                  <span className="text-xs text-slate-400 tabular-nums">
                     Historique : {rec.history[rec.history.length - 1].note} ({rec.history[rec.history.length - 1].atIso.slice(0, 10)})
                   </span>
                 )}

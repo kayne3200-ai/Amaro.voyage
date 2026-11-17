@@ -488,11 +488,10 @@ const RAW_COUNTRIES_REGISTRY: CountryDefinition[] = [
     languages: ['Français', 'Fon', 'Yoruba', 'Goun', 'Mina', 'Bariba', 'Ditammari', 'Dendi'],
     operationalStatus: 'operational',
     paymentMethods: [
-      'MTN Mobile Money Bénin (passerelle marchande à connecter)',
-      'Moov Money Bénin (passerelle marchande à connecter)',
-      'Celtiis Cash (passerelle marchande à connecter)',
-      'Carte bancaire Visa / Mastercard (passerelle marchande à connecter)',
-      'Validation manuelle encadrée Amaro',
+      'MTN Mobile Money Bénin (paiement Mobile Money vérifié)',
+      'Moov Money Bénin (paiement Mobile Money vérifié)',
+      'Celtiis Cash (paiement Mobile Money vérifié)',
+      'Virement bancaire / règlement encadré AMARO',
     ],
     localRulesFr: [
       'Devise officielle : Franc CFA (XOF — parité fixe garantie 1 EUR = 655,957 XOF).',

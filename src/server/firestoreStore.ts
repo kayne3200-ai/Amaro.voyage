@@ -112,6 +112,8 @@ export interface ServerReservationRecord {
   isPartialAcceptance?: boolean;
   requestedUnitsTotal?: number;
   acceptedUnitsTotal?: number;
+  clientTxRef?: string;
+  paymentMethodDeclared?: string;
   createdAtIso?: string;
   updatedAtIso?: string;
 }
@@ -236,6 +238,10 @@ export interface AmaroServerStore {
     rawIdToken?: string
   ): Promise<ServerPilotStockRecord[]>;
   getSystemSetting(countryCode: string, rawIdToken?: string): Promise<ServerSystemSetting>;
+  updateSystemSetting?(
+    patch: Partial<ServerSystemSetting> & { countryCode?: string; updatedBy?: string },
+    rawIdToken?: string
+  ): Promise<ServerSystemSetting>;
   getJourneyFolder(folderId: string, rawIdToken: string): Promise<ServerFolderRecord | null>;
   getPartnerByCode?(referralCode: string, rawIdToken?: string): Promise<ServerPartnerRecord | null>;
   getReservation?(reservationId: string, rawIdToken: string): Promise<ServerReservationRecord | null>;
@@ -268,6 +274,8 @@ export interface AmaroServerStore {
       isPartialAcceptance?: boolean;
       requestedUnitsTotal?: number;
       acceptedUnitsTotal?: number;
+      clientTxRef?: string;
+      paymentMethodDeclared?: string;
       folderIdToMarkPartiallyConfirmed?: string;
       cancelAffiliateReferral?: boolean;
       releaseStock?: {
@@ -529,12 +537,15 @@ function decodeFirestoreFields(fields: Record<string, any> | undefined): Record<
   const out: Record<string, any> = {};
   if (!fields) return out;
   for (const [k, v] of Object.entries(fields)) {
+    if (!v || typeof v !== 'object') continue;
     if ('stringValue' in v) out[k] = v.stringValue;
     else if ('integerValue' in v) out[k] = Number(v.integerValue);
     else if ('doubleValue' in v) out[k] = Number(v.doubleValue);
     else if ('booleanValue' in v) out[k] = Boolean(v.booleanValue);
     else if ('timestampValue' in v) out[k] = v.timestampValue;
-    else if ('arrayValue' in v) {
+    else if ('mapValue' in v) {
+      out[k] = decodeFirestoreFields(v.mapValue?.fields);
+    } else if ('arrayValue' in v) {
       const vals = Array.isArray(v.arrayValue?.values) ? v.arrayValue.values : [];
       out[k] = vals.map((el: any) =>
         'stringValue' in el
@@ -545,6 +556,8 @@ function decodeFirestoreFields(fields: Record<string, any> | undefined): Record<
           ? Number(el.doubleValue)
           : 'booleanValue' in el
           ? Boolean(el.booleanValue)
+          : 'mapValue' in el
+          ? decodeFirestoreFields(el.mapValue?.fields)
           : null
       );
     } else if ('nullValue' in v) out[k] = null;
@@ -810,8 +823,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         countryCode: code,
         commissionPercent: 10,
         partnerMarginPercent: 10,
-        directoryMarginPercent: 5,
-        serviceFeeFlat: 0,
+        directoryMarginPercent: 6,
+        serviceFeeFlat: 500,
+        serviceFeeCap: 4000,
+        amaroFeePercent: 6,
+        amaroFeeFixed: 500,
+        amaroFeeCap: 4000,
+        amaroFeeRounding: 100,
         taxPercent: 0,
         currency: 'XOF',
         partnerCommissionPercent: 5,
@@ -829,12 +847,21 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         freeTimeBlocksPerDay: 1,
         includeDossierFeeInAffiliateBase: false,
         localContributionPercent: 0,
-        localContributionLabel: OWNER_PLACEHOLDER,
-        amaroMobileMoneyNumber: OWNER_PLACEHOLDER,
-        amaroMobileMoneyHolder: OWNER_PLACEHOLDER,
-        amaroWhatsappNumber: OWNER_PLACEHOLDER,
+        localContributionLabel: '',
+        amaroMobileMoneyNumber: '',
+        amaroMobileMoneyHolder: '',
+        amaroWhatsappNumber: '',
+        supportWhatsappNumber: '',
+        legalCompanyName: '',
+        legalRccm: '',
+        legalIfu: '',
+        legalAddress: '',
+        legalContact: '',
+        waveNumber: '',
+        orangeMoneyNumber: '',
+        mtnMoneyNumber: '',
         vaultKeyConfirmedByOwner: false,
-        financialRetentionDuration: OWNER_PLACEHOLDER,
+        financialRetentionDuration: '5 ans',
         termsVersion: '1.0',
         conventionVersion: '1.0',
         includeDemoData: false,
@@ -842,6 +869,11 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     }
 
     const baseComm = Math.max(0, Math.min(100, Number(raw.commissionPercent ?? 10)));
+    const sanitizeOptionalText = (v: unknown, fallback = '') => {
+      const s = String(v ?? '').trim();
+      if (!s || s === OWNER_PLACEHOLDER || s.toLowerCase() === 'à renseigner') return fallback;
+      return s;
+    };
     return {
       countryCode: String(raw.countryCode || code),
       commissionPercent: baseComm,
@@ -852,8 +884,9 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       directoryMarginPercent:
         raw.directoryMarginPercent !== undefined
           ? Math.max(0, Math.min(100, Number(raw.directoryMarginPercent)))
-          : 5,
-      serviceFeeFlat: Math.max(0, Number(raw.serviceFeeFlat ?? 0)),
+          : 6,
+      serviceFeeFlat: Math.max(0, Number(raw.serviceFeeFlat ?? 500)),
+      serviceFeeCap: Math.max(0, Number(raw.serviceFeeCap ?? raw.amaroFeeCap ?? 4000)),
       taxPercent: Math.max(0, Math.min(100, Number(raw.taxPercent ?? 0))),
       currency: (raw.currency || 'XOF') as CurrencyCode,
       partnerCommissionPercent: Math.max(
@@ -884,18 +917,223 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         0,
         Math.min(100, Number(raw.localContributionPercent ?? 0))
       ),
-      localContributionLabel: String(raw.localContributionLabel || OWNER_PLACEHOLDER),
-      amaroMobileMoneyNumber: String(raw.amaroMobileMoneyNumber || OWNER_PLACEHOLDER),
-      amaroMobileMoneyHolder: String(raw.amaroMobileMoneyHolder || OWNER_PLACEHOLDER),
-      amaroWhatsappNumber: String(raw.amaroWhatsappNumber || OWNER_PLACEHOLDER),
+      localContributionLabel: sanitizeOptionalText(raw.localContributionLabel, ''),
+      amaroMobileMoneyNumber: sanitizeOptionalText(raw.amaroMobileMoneyNumber, ''),
+      amaroMobileMoneyHolder: sanitizeOptionalText(raw.amaroMobileMoneyHolder, ''),
+      amaroWhatsappNumber: sanitizeOptionalText(raw.amaroWhatsappNumber, ''),
+      supportWhatsappNumber: sanitizeOptionalText(raw.supportWhatsappNumber, ''),
+      legalCompanyName: sanitizeOptionalText(raw.legalCompanyName, ''),
+      legalRccm: sanitizeOptionalText(raw.legalRccm, ''),
+      legalIfu: sanitizeOptionalText(raw.legalIfu, ''),
+      legalAddress: sanitizeOptionalText(raw.legalAddress, ''),
+      legalContact: sanitizeOptionalText(raw.legalContact, ''),
+      waveNumber: sanitizeOptionalText(raw.waveNumber, ''),
+      orangeMoneyNumber: sanitizeOptionalText(raw.orangeMoneyNumber, ''),
+      mtnMoneyNumber: sanitizeOptionalText(raw.mtnMoneyNumber, ''),
       vaultKeyConfirmedByOwner: Boolean(raw.vaultKeyConfirmedByOwner),
-      financialRetentionDuration: String(
-        raw.financialRetentionDuration || OWNER_PLACEHOLDER
-      ),
+      financialRetentionDuration: sanitizeOptionalText(raw.financialRetentionDuration, '5 ans'),
       termsVersion: String(raw.termsVersion || '1.0'),
       conventionVersion: String(raw.conventionVersion || '1.0'),
       includeDemoData: Boolean(raw.includeDemoData),
+      amaroFeePercent:
+        raw.amaroFeePercent !== undefined ? Number(raw.amaroFeePercent) : 6,
+      amaroFeeFixed:
+        raw.amaroFeeFixed !== undefined ? Number(raw.amaroFeeFixed) : 500,
+      amaroFeeCap:
+        raw.amaroFeeCap !== undefined ? Number(raw.amaroFeeCap) : 4000,
+      amaroFeeRounding:
+        raw.amaroFeeRounding !== undefined ? Number(raw.amaroFeeRounding) : 100,
+      tvaActive: raw.tvaActive !== undefined ? Boolean(raw.tvaActive) : undefined,
+      tvaRate: raw.tvaRate !== undefined ? Number(raw.tvaRate) : undefined,
+      countryOperationalStates:
+        raw.countryOperationalStates && typeof raw.countryOperationalStates === 'object'
+          ? (raw.countryOperationalStates as ServerSystemSetting['countryOperationalStates'])
+          : undefined,
+      photoRegistryOverrides:
+        raw.photoRegistryOverrides && typeof raw.photoRegistryOverrides === 'object'
+          ? (raw.photoRegistryOverrides as ServerSystemSetting['photoRegistryOverrides'])
+          : undefined,
     };
+  }
+
+  async updateSystemSetting(
+    patch: Partial<ServerSystemSetting> & { countryCode?: string; updatedBy?: string },
+    rawIdToken?: string
+  ): Promise<ServerSystemSetting> {
+    const code = (patch.countryCode || 'BJ').toUpperCase().trim();
+    const existing = await this.getSystemSetting(code, rawIdToken);
+    const merged: ServerSystemSetting = {
+      ...existing,
+      ...patch,
+      countryCode: code,
+    };
+
+    const encodeJsVal = (val: any): Record<string, any> => {
+      if (val === null || val === undefined) return { nullValue: null };
+      if (typeof val === 'boolean') return { booleanValue: val };
+      if (typeof val === 'number') return encodeNumber(val);
+      if (typeof val === 'string') return { stringValue: val };
+      if (Array.isArray(val)) {
+        return { arrayValue: { values: val.map((item) => encodeJsVal(item)) } };
+      }
+      if (typeof val === 'object') {
+        const fields: Record<string, any> = {};
+        for (const [mk, mv] of Object.entries(val)) {
+          if (mv !== undefined) fields[mk] = encodeJsVal(mv);
+        }
+        return { mapValue: { fields } };
+      }
+      return { stringValue: String(val) };
+    };
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const docRef = db.collection('system_settings').doc(code);
+      const snap = await docRef.get();
+      const payload: Record<string, any> = {
+        countryCode: code,
+        commissionPercent: merged.commissionPercent,
+        serviceFeeFlat: merged.serviceFeeFlat,
+        taxPercent: merged.taxPercent,
+        currency: merged.currency || 'XOF',
+        updatedBy: String(patch.updatedBy || 'admin_owner').replace(/[^a-zA-Z0-9_-]/g, '_'),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (!snap.exists) {
+        payload.createdAt = FieldValue.serverTimestamp();
+      }
+      const optionalScalarKeys = [
+        'partnerMarginPercent',
+        'directoryMarginPercent',
+        'dossierFeeXof',
+        'amaroMobileMoneyNumber',
+        'amaroMobileMoneyHolder',
+        'amaroWhatsappNumber',
+        'supportWhatsappNumber',
+        'legalCompanyName',
+        'legalRccm',
+        'legalIfu',
+        'legalAddress',
+        'legalContact',
+        'waveNumber',
+        'orangeMoneyNumber',
+        'mtnMoneyNumber',
+        'financialRetentionDuration',
+        'localContributionPercent',
+        'localContributionLabel',
+        'amaroFeePercent',
+        'amaroFeeFixed',
+        'amaroFeeCap',
+        'amaroFeeRounding',
+        'tvaActive',
+        'tvaRate',
+        'vaultKeyConfirmedByOwner',
+        'includeDemoData',
+      ] as const;
+      for (const ok of optionalScalarKeys) {
+        if ((patch as any)[ok] !== undefined) {
+          payload[ok] = (merged as any)[ok];
+        }
+      }
+      if (merged.countryOperationalStates) {
+        payload.countryOperationalStates = merged.countryOperationalStates;
+      }
+      if (merged.photoRegistryOverrides) {
+        payload.photoRegistryOverrides = merged.photoRegistryOverrides;
+      }
+      await docRef.set(payload, { merge: true });
+      return merged;
+    }
+
+    if (!rawIdToken) {
+      throw new Error('Jeton administrateur requis pour persister la configuration système.');
+    }
+
+    const existingRaw = await this.restGetDoc(`system_settings/${encodeURIComponent(code)}`, rawIdToken);
+    const updateMask: string[] = ['updatedAt', 'updatedBy'];
+    const fields: Record<string, any> = {
+      countryCode: encodeString(code),
+      commissionPercent: encodeNumber(merged.commissionPercent),
+      serviceFeeFlat: encodeNumber(merged.serviceFeeFlat),
+      taxPercent: encodeNumber(merged.taxPercent),
+      currency: encodeString(merged.currency || 'XOF'),
+      updatedBy: encodeString(
+        String(patch.updatedBy || 'admin_owner').replace(/[^a-zA-Z0-9_-]/g, '_')
+      ),
+    };
+    const updateTransforms: Array<{ fieldPath: string; setToServerValue: string }> = [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ];
+    if (!existingRaw) {
+      updateMask.push('countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'createdAt');
+      updateTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    }
+    const restOptionalScalarKeys = [
+      'partnerMarginPercent',
+      'directoryMarginPercent',
+      'dossierFeeXof',
+      'amaroMobileMoneyNumber',
+      'amaroMobileMoneyHolder',
+      'amaroWhatsappNumber',
+      'supportWhatsappNumber',
+      'legalCompanyName',
+      'legalRccm',
+      'legalIfu',
+      'legalAddress',
+      'legalContact',
+      'waveNumber',
+      'orangeMoneyNumber',
+      'mtnMoneyNumber',
+      'financialRetentionDuration',
+      'localContributionPercent',
+      'localContributionLabel',
+      'amaroFeePercent',
+      'amaroFeeFixed',
+      'amaroFeeCap',
+      'amaroFeeRounding',
+      'tvaActive',
+      'tvaRate',
+      'vaultKeyConfirmedByOwner',
+      'includeDemoData',
+    ] as const;
+    for (const ok of restOptionalScalarKeys) {
+      if ((patch as any)[ok] !== undefined) {
+        fields[ok] = encodeJsVal((merged as any)[ok]);
+        updateMask.push(ok);
+      }
+    }
+    if (patch.countryOperationalStates) {
+      fields.countryOperationalStates = encodeJsVal(merged.countryOperationalStates);
+      updateMask.push('countryOperationalStates');
+    }
+    if (patch.photoRegistryOverrides) {
+      fields.photoRegistryOverrides = encodeJsVal(merged.photoRegistryOverrides);
+      updateMask.push('photoRegistryOverrides');
+    }
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/system_settings/${encodeURIComponent(code)}`,
+              fields,
+            },
+            updateMask: { fieldPaths: updateMask },
+            updateTransforms,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Mise à jour configuration système refusée (${res.status}).`);
+    }
+    return merged;
   }
 
   async getJourneyFolder(
@@ -1806,6 +2044,10 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         raw.requestedUnitsTotal !== undefined ? Number(raw.requestedUnitsTotal) : undefined,
       acceptedUnitsTotal:
         raw.acceptedUnitsTotal !== undefined ? Number(raw.acceptedUnitsTotal) : undefined,
+      clientTxRef: raw.clientTxRef ? String(raw.clientTxRef) : undefined,
+      paymentMethodDeclared: raw.paymentMethodDeclared
+        ? String(raw.paymentMethodDeclared)
+        : undefined,
       updatedAtIso,
     };
   }
@@ -1839,6 +2081,8 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       isPartialAcceptance?: boolean;
       requestedUnitsTotal?: number;
       acceptedUnitsTotal?: number;
+      clientTxRef?: string;
+      paymentMethodDeclared?: string;
       folderIdToMarkPartiallyConfirmed?: string;
       cancelAffiliateReferral?: boolean;
       releaseStock?: {
@@ -1945,6 +2189,12 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         }
         if (params.acceptedUnitsTotal !== undefined) {
           updatePayload.acceptedUnitsTotal = params.acceptedUnitsTotal;
+        }
+        if (params.clientTxRef !== undefined) {
+          updatePayload.clientTxRef = params.clientTxRef.slice(0, 120);
+        }
+        if (params.paymentMethodDeclared !== undefined) {
+          updatePayload.paymentMethodDeclared = params.paymentMethodDeclared.slice(0, 80);
         }
         tx.update(resRef, updatePayload);
 
@@ -2066,6 +2316,14 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     if (params.acceptedUnitsTotal !== undefined) {
       resUpdateFields.acceptedUnitsTotal = encodeInt(params.acceptedUnitsTotal);
       resFieldPaths.push('acceptedUnitsTotal');
+    }
+    if (params.clientTxRef !== undefined) {
+      resUpdateFields.clientTxRef = encodeString(params.clientTxRef.slice(0, 120));
+      resFieldPaths.push('clientTxRef');
+    }
+    if (params.paymentMethodDeclared !== undefined) {
+      resUpdateFields.paymentMethodDeclared = encodeString(params.paymentMethodDeclared.slice(0, 80));
+      resFieldPaths.push('paymentMethodDeclared');
     }
 
     const writes: any[] = [

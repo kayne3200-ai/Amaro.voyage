@@ -13,17 +13,19 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
-import type {
-  AssistantChatHistoryItem,
-  AssistantDraftItinerary,
-  AssistantQuickAction,
-  AssistantSuggestionItem,
-  EmergencyNumberEntry,
-  JourneyFolderDoc,
-  JourneyItemDoc,
-  LocaleCode,
-  ServiceCategory,
+import {
+  PENDING_ASSISTANT_DRAFT_KEY,
+  type AssistantChatHistoryItem,
+  type AssistantDraftItinerary,
+  type AssistantQuickAction,
+  type AssistantSuggestionItem,
+  type EmergencyNumberEntry,
+  type JourneyFolderDoc,
+  type JourneyItemDoc,
+  type LocaleCode,
+  type ServiceCategory,
 } from '../../types/amaro';
+export { PENDING_ASSISTANT_DRAFT_KEY };
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 import {
   DEFAULT_EMERGENCY_NUMBERS_BJ,
@@ -60,14 +62,13 @@ interface ChatTurn {
   canOfferFolderGeneration?: boolean;
 }
 
-const SESSION_CHAT_KEY = 'amaro_assistant_chat_v2';
-export const PENDING_ASSISTANT_DRAFT_KEY = 'amaro_pending_assistant_draft_v1';
+const SESSION_CHAT_KEY_PREFIX = 'amaro_assistant_chat_v3';
 
 function makeInitialWelcome(
   locale: LocaleCode,
-  countryName = 'Bénin',
-  city1 = 'Ouidah',
-  city2 = 'Cotonou'
+  countryName = 'Côte d’Ivoire',
+  city1 = 'Abidjan',
+  city2 = 'Grand-Bassam'
 ): ChatTurn {
   return {
     id: 'welcome',
@@ -98,14 +99,17 @@ export function AssistantRescueView({
   onOpenJourney,
   onRequireSignIn,
   onApplyAssistantDraft,
-  selectedCountryCode = 'BJ',
+  selectedCountryCode = 'CI',
 }: AssistantRescueViewProps) {
   const activeCountry = React.useMemo(() => {
     return (
       COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
       COUNTRIES_REGISTRY[0]
     );
   }, [selectedCountryCode]);
+
+  const chatStorageKey = `${SESSION_CHAT_KEY_PREFIX}_${activeCountry.code}`;
 
   const [shareFolderWithAi, setShareFolderWithAi] = useState<boolean>(true);
   const [inputPrompt, setInputPrompt] = useState<string>('');
@@ -117,7 +121,7 @@ export function AssistantRescueView({
 
   const [messages, setMessages] = useState<ChatTurn[]>(() => {
     try {
-      const saved = sessionStorage.getItem(SESSION_CHAT_KEY);
+      const saved = sessionStorage.getItem(chatStorageKey);
       if (saved) {
         const parsed = JSON.parse(saved) as ChatTurn[];
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -171,12 +175,30 @@ export function AssistantRescueView({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(SESSION_CHAT_KEY, JSON.stringify(messages.slice(-24)));
+      const saved = sessionStorage.getItem(chatStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as ChatTurn[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    const c1 = activeCountry.cities[0]?.name || 'la capitale';
+    const c2 = activeCountry.cities[1]?.name || activeCountry.cities[0]?.name || 'les côtes';
+    setMessages([makeInitialWelcome(locale, activeCountry.nameFr, c1, c2)]);
+  }, [chatStorageKey, activeCountry.nameFr, activeCountry.cities, locale]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(chatStorageKey, JSON.stringify(messages.slice(-24)));
     } catch {
       // ignore storage issues
     }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [messages]);
+  }, [messages, chatStorageKey]);
 
   const rescueCountry = activeCountry;
 
@@ -220,7 +242,7 @@ export function AssistantRescueView({
     setActiveDraftState(null);
     onUpdateSessionDraft?.(null);
     try {
-      sessionStorage.removeItem(SESSION_CHAT_KEY);
+      sessionStorage.removeItem(chatStorageKey);
       sessionStorage.removeItem(PENDING_ASSISTANT_DRAFT_KEY);
     } catch {
       // ignore
@@ -450,7 +472,10 @@ export function AssistantRescueView({
 
       if (!res.ok || !data?.reply) {
         const politeFallback =
-          res.status === 429
+          res.status === 403
+            ? data?.error ||
+              'Cette destination est actuellement en préparation sur AMARO et n’accepte pas encore de requêtes.'
+            : res.status === 429
             ? 'Je reçois beaucoup de questions en ce moment. Laissez-moi quelques instants puis réécrivez-moi votre souhait, je vous répondrai avec plaisir.'
             : 'Je veux être sûr de bien vous comprendre. Vous souhaitez des informations sur une destination, un hébergement ou l’organisation de votre voyage ?';
 
@@ -543,6 +568,11 @@ export function AssistantRescueView({
           guidance: String(data.guidance || ''),
           alternatives: Array.isArray(data.alternatives) ? data.alternatives : [],
         });
+      } else if (res.status === 403) {
+        setIncidentResult({
+          guidance: 'Cette destination est actuellement en préparation sur AMARO.',
+          alternatives: [],
+        });
       }
     } finally {
       setIncidentLoading(false);
@@ -576,9 +606,9 @@ export function AssistantRescueView({
               >
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center justify-between gap-1">
-                    <span className="text-[11px] text-slate-500">{num.zoneFr}</span>
+                    <span className="text-xs text-slate-500">{num.zoneFr}</span>
                     {!num.verifiedByOwner && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-xs font-bold">
                         numéro à confirmer
                       </span>
                     )}
@@ -589,8 +619,8 @@ export function AssistantRescueView({
                 </div>
 
                 {isPlaceholder ? (
-                  <div className="px-3 py-2 text-xs font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-xl text-center">
-                    {OWNER_PLACEHOLDER}
+                  <div className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-center">
+                    Numéro local en cours de vérification
                   </div>
                 ) : (
                   <a
@@ -623,15 +653,15 @@ export function AssistantRescueView({
                 href={whatsappPrefilledHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
+                className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
               >
                 <MessageCircle className="w-4 h-4" />
                 <span>Contacter AMARO sur WhatsApp</span>
               </a>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                WhatsApp support : {OWNER_PLACEHOLDER}
+              <span className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium border border-slate-200 dark:border-slate-700">
+                <MessageCircle className="w-4 h-4 text-teal-600" />
+                Assistance directe disponible ci-dessous via votre dossier
               </span>
             )}
           </div>
@@ -639,7 +669,7 @@ export function AssistantRescueView({
           <form onSubmit={(e) => void handleReportIncident(e)} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {folderItems.length > 0 && (
               <div className="sm:col-span-3">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
                   Étape concernée de votre voyage (optionnel) :
                 </label>
                 <select
@@ -653,7 +683,7 @@ export function AssistantRescueView({
                       if (found.category) setIncidentCategory(found.category);
                     }
                   }}
-                  className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                 >
                   <option value="">Sélectionner une étape de l’agenda (ou saisir librement ci-dessous)</option>
                   {folderItems.map((it) => (
@@ -667,7 +697,7 @@ export function AssistantRescueView({
             <select
               value={incidentType}
               onChange={(e) => setIncidentType(e.target.value)}
-              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+              className="min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
             >
               <option value="retard_vol_transport">Retard de vol ou de transport</option>
               <option value="prestataire_injoignable">Prestataire injoignable / refus sur place</option>
@@ -679,7 +709,7 @@ export function AssistantRescueView({
             <select
               value={incidentCity}
               onChange={(e) => setIncidentCity(e.target.value)}
-              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+              className="min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
             >
               {rescueCountry.cities.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -691,7 +721,7 @@ export function AssistantRescueView({
             <select
               value={incidentCategory}
               onChange={(e) => setIncidentCategory(e.target.value as ServiceCategory)}
-              className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+              className="min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
             >
               <option value="accommodation">Chercher un hébergement alternatif</option>
               <option value="transport">Chercher un transport alternatif</option>
@@ -705,13 +735,13 @@ export function AssistantRescueView({
               value={incidentNotes}
               onChange={(e) => setIncidentNotes(e.target.value)}
               placeholder="Précisez l'heure ou le contexte (optionnel)..."
-              className="sm:col-span-2 min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+              className="sm:col-span-2 min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
             />
 
             <button
               type="submit"
               disabled={incidentLoading}
-              className="min-h-[42px] px-4 py-2 rounded-xl bg-[#0B192C] text-white text-xs font-bold hover:bg-slate-800"
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0B192C] text-white text-xs font-bold hover:bg-slate-800"
             >
               {incidentLoading ? 'Recherche en cours...' : 'Trouver des solutions réelles'}
             </button>
@@ -735,13 +765,13 @@ export function AssistantRescueView({
                       onClick={() => onOpenExplorer?.(alt.cityId, alt.category, alt.id)}
                       className="text-left p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-500 space-y-1"
                     >
-                      <span className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-400">
+                      <span className="text-xs font-bold uppercase text-emerald-700 dark:text-emerald-400">
                         {alt.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé, non vérifié'}
                       </span>
                       <strong className="block text-xs text-slate-900 dark:text-white">
                         {alt.title}
                       </strong>
-                      <span className="text-[11px] font-mono text-slate-500">
+                      <span className="text-xs font-mono text-slate-500">
                         {alt.priceKnown
                           ? `${alt.priceAmount.toLocaleString('fr-FR')} ${alt.currency || rescueCountry.currency}`
                           : 'Tarif sur demande'}
@@ -808,7 +838,7 @@ export function AssistantRescueView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-2 rounded-xl min-h-[40px]">
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-2 rounded-xl min-h-[44px]">
             <input
               type="checkbox"
               checked={shareFolderWithAi}
@@ -823,7 +853,7 @@ export function AssistantRescueView({
             type="button"
             onClick={handleResetConversation}
             title="Recommencer une nouvelle conversation"
-            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl"
+            className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Nouveau dialogue</span>
@@ -844,7 +874,7 @@ export function AssistantRescueView({
             key={q}
             type="button"
             onClick={() => void handleSendQuestion(q)}
-            className="min-h-[40px] px-3.5 py-1.5 text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:border-teal-500 whitespace-nowrap shrink-0 transition-colors"
+            className="min-h-[44px] px-3.5 py-1.5 text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:border-teal-500 whitespace-nowrap shrink-0 transition-colors"
           >
             {q}
           </button>
@@ -868,7 +898,7 @@ export function AssistantRescueView({
               }`}
             >
               <p className="whitespace-pre-wrap">{m.content}</p>
-              <span className="block text-[11px] opacity-60 mt-1.5 tabular-nums">
+              <span className="block text-xs opacity-60 mt-1.5 tabular-nums">
                 {m.timestamp}
               </span>
             </div>
@@ -878,7 +908,7 @@ export function AssistantRescueView({
               <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-slate-900 border-2 border-amber-300 dark:border-amber-700 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
+                    <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
                       Brouillon d’itinéraire réel prêt à enregistrer
                     </span>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -888,7 +918,7 @@ export function AssistantRescueView({
                   </div>
                   <span className="text-xs font-mono font-bold text-slate-900 dark:text-amber-300">
                     Budget connu estimé :{' '}
-                    {m.draftItinerary.knownBudgetXof.toLocaleString('fr-FR')} FCFA
+                    {m.draftItinerary.knownBudgetXof.toLocaleString('fr-FR')} {activeCountry.currency || 'XOF'}
                   </span>
                 </div>
 
@@ -899,7 +929,7 @@ export function AssistantRescueView({
                         J{st.dayIndex} ({st.date} {st.startTime}) ·{' '}
                         <strong>{st.serviceTitle}</strong>
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                         {st.dataOrigin === 'verified_partner'
                           ? 'Partenaire AMARO'
                           : st.isFreeTimeBlock
@@ -910,9 +940,9 @@ export function AssistantRescueView({
                   ))}
                 </ul>
 
-                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                <p className="text-xs text-slate-600 dark:text-slate-400">
                   Exploration et création du dossier gratuites. L’envoi réel des demandes aux prestataires requiert ensuite les frais de dossier déductibles de{' '}
-                  {(m.draftItinerary.dossierFeeNextStepXof || 20000).toLocaleString('fr-FR')} FCFA.
+                  {(m.draftItinerary.dossierFeeNextStepXof || 20000).toLocaleString('fr-FR')} {activeCountry.currency || 'XOF'}.
                 </p>
 
                 <button
@@ -945,14 +975,14 @@ export function AssistantRescueView({
                       onClick={() => onOpenExplorer?.(item.cityId, item.category, item.id)}
                       className="text-left p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-teal-600 rounded-xl space-y-1 transition-colors"
                     >
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-400">
                         <MapPin className="w-3 h-3" />
                         {item.cityId} · {item.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé'}
                       </span>
                       <strong className="block text-xs font-bold text-slate-900 dark:text-slate-100 line-clamp-2">
                         {item.title}
                       </strong>
-                      <span className="block text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      <span className="block text-xs font-mono text-slate-500 dark:text-slate-400">
                         {!item.priceKnown
                           ? 'Tarif sur demande'
                           : item.priceAmount === 0
@@ -974,7 +1004,7 @@ export function AssistantRescueView({
                       key={`${m.id}-act-${idx}`}
                       type="button"
                       onClick={() => handleTriggerQuickAction(act, m.draftItinerary)}
-                      className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-teal-50 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-xl hover:bg-teal-100 dark:hover:bg-teal-900/50 transition-colors"
+                      className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-teal-50 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-xl hover:bg-teal-100 dark:hover:bg-teal-900/50 transition-colors"
                     >
                       {act.kind === 'open_journey' || act.kind === 'generate_draft_folder' ? (
                         <FolderKanban className="w-3.5 h-3.5" />

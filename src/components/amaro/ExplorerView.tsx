@@ -39,6 +39,12 @@ import {
   EDITORIAL_IMAGES,
   resolveItemEditorialImage,
 } from '../../data/amaroRegistry';
+import {
+  UN_193_COUNTRIES,
+  getEffectiveCountryState,
+  isCountryOpen,
+  type CountryOperationalState,
+} from '../../data/unCountries';
 import { TRANSLATIONS } from '../../i18n/translations';
 import { BeninExploreSection } from './BeninExploreSection';
 import { CountryExploreSection } from './CountryExploreSection';
@@ -87,6 +93,9 @@ interface ExplorerViewProps {
   onChangeCurrency: (currency: CurrencyCode) => void;
   defaultCountryCode?: string;
   onChangeCountryCode?: (code: string) => void;
+  countryOperationalStates?: Record<string, CountryOperationalState>;
+  isAdmin?: boolean;
+  onGoHome?: () => void;
   rateInfo: RateInfo | null;
   catalogue: CatalogueItem[];
   pilotStocks?: PilotStockDoc[];
@@ -199,6 +208,9 @@ export function ExplorerView({
   onChangeCurrency,
   defaultCountryCode,
   onChangeCountryCode,
+  countryOperationalStates,
+  isAdmin = false,
+  onGoHome,
   rateInfo,
   catalogue,
   pilotStocks = [],
@@ -221,10 +233,11 @@ export function ExplorerView({
 }: ExplorerViewProps) {
   const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
   const allowDemoData = Boolean(countrySetting?.includeDemoData);
+  const effectiveCountryStates = countryOperationalStates || countrySetting?.countryOperationalStates;
 
   const [space, setSpace] = useState<ExplorerSpace>('overview');
   const [selectedCountryCode, setSelectedCountryCode] = useState<string>(
-    defaultCountryCode || 'BJ'
+    defaultCountryCode || 'CI'
   );
 
   useEffect(() => {
@@ -296,7 +309,7 @@ export function ExplorerView({
 
   // Cultural story contribution state
   const [showStoryForm, setShowStoryForm] = useState<boolean>(false);
-  const [storyCity, setStoryCity] = useState<string>('cotonou');
+  const [storyCity, setStoryCity] = useState<string>('abidjan');
   const [storyTitle, setStoryTitle] = useState<string>('');
   const [storyBody, setStoryBody] = useState<string>('');
   const [isSavingStory, setIsSavingStory] = useState<boolean>(false);
@@ -326,15 +339,21 @@ export function ExplorerView({
       setSelectedCategory('all');
     }
     if (externalJump.itemId) {
-      const target = catalogue.find((c) => c.id === externalJump.itemId);
+      const target = catalogue.find(
+        (c) =>
+          c.id === externalJump.itemId &&
+          isCountryOpen(c.countryCode || 'CI', effectiveCountryStates, isAdmin)
+      );
       if (target) {
         setDetailItem(target);
       }
     }
-  }, [externalJump, catalogue]);
+  }, [externalJump, catalogue, effectiveCountryStates, isAdmin]);
 
   const activeCountry =
-    COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) || COUNTRIES_REGISTRY[0];
+    COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
 
   useEffect(() => {
     setCompareIds([]);
@@ -356,10 +375,16 @@ export function ExplorerView({
   }, [space, selectedCategory]);
 
   const filteredItems = useMemo(() => {
+    if (!isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)) {
+      return [];
+    }
     const list = catalogue.filter((item) => {
       // 5.8: Completely hide demo_test listings in production unless explicitly enabled by Admin
       if (item.dataOrigin === 'demo_test' && !allowDemoData) return false;
       if (item.countryCode !== selectedCountryCode) return false;
+      if (!isCountryOpen(item.countryCode || selectedCountryCode, effectiveCountryStates, isAdmin)) {
+        return false;
+      }
       if (selectedCityId !== 'all' && item.cityId !== selectedCityId) return false;
 
       if (effectiveCategoryFilter === 'services_group') {
@@ -427,6 +452,8 @@ export function ExplorerView({
     catalogue,
     allowDemoData,
     selectedCountryCode,
+    effectiveCountryStates,
+    isAdmin,
     selectedCityId,
     effectiveCategoryFilter,
     originFilter,
@@ -602,12 +629,22 @@ export function ExplorerView({
 
   const partnerMarginPct =
     countrySetting?.partnerMarginPercent ?? countrySetting?.commissionPercent ?? 10;
-  const directoryMarginPct = countrySetting?.directoryMarginPercent ?? 5;
-  const flatFee = countrySetting?.serviceFeeFlat ?? 0;
+  const directoryMarginPct = countrySetting?.directoryMarginPercent ?? 6;
+  const flatFee = countrySetting?.serviceFeeFlat ?? 500;
+
+  const activeCountryCatalogue = useMemo(
+    () =>
+      catalogue.filter(
+        (it) =>
+          it.countryCode === selectedCountryCode &&
+          isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)
+      ),
+    [catalogue, selectedCountryCode, effectiveCountryStates, isAdmin]
+  );
 
   const catalogueCounts = useMemo(
-    () => computeDynamicCatalogueCounts(catalogue, allowDemoData),
-    [catalogue, allowDemoData]
+    () => computeDynamicCatalogueCounts(activeCountryCatalogue, allowDemoData),
+    [activeCountryCatalogue, allowDemoData]
   );
   const realCount = catalogueCounts.thirdPartyCount;
   const amaroAccompanimentCount = catalogueCounts.amaroAssistanceCount;
@@ -639,14 +676,14 @@ export function ExplorerView({
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded-md">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-md">
               {(['fr', 'en'] as LocaleCode[]).map((loc) => (
                 <button
                   key={loc}
                   type="button"
                   onClick={() => onChangeLocale(loc)}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors uppercase ${
+                  className={`min-h-[44px] min-w-[44px] px-3 py-2 text-xs font-semibold rounded transition-colors uppercase inline-flex items-center justify-center ${
                     locale === loc
                       ? 'bg-white text-slate-950'
                       : 'text-slate-300 hover:text-white'
@@ -657,7 +694,7 @@ export function ExplorerView({
               ))}
             </div>
 
-            <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded-md font-mono">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-800 p-1 rounded-md font-mono">
               {Array.from(
                 new Set<CurrencyCode>([activeCountry.currency, 'EUR', 'USD', 'XOF'])
               ).map((cur) => (
@@ -665,7 +702,7 @@ export function ExplorerView({
                   key={cur}
                   type="button"
                   onClick={() => onChangeCurrency(cur)}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  className={`min-h-[44px] min-w-[44px] px-2.5 py-2 text-xs font-semibold rounded transition-colors inline-flex items-center justify-center ${
                     currency === cur
                       ? 'bg-amber-400 text-slate-950'
                       : 'text-slate-300 hover:text-white'
@@ -727,7 +764,7 @@ export function ExplorerView({
                   setSpace(nav.id);
                   setVisibleLimit(24);
                 }}
-                className={`min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
+                className={`min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-colors ${
                   active
                     ? 'bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950'
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -855,7 +892,7 @@ export function ExplorerView({
                         <span className="px-3 py-1 rounded-full text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30">
                           {activeCountry.code} · {activeCountry.continent || 'AMARO'}
                         </span>
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30 font-mono">
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30 font-mono">
                           Devise : {activeCountry.currency}
                         </span>
                       </div>
@@ -869,7 +906,7 @@ export function ExplorerView({
                       </div>
                       <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
                         <span>Fuseau : {activeCountry.timezone.split(' ')[0]}</span>
-                        <span className="inline-flex items-center gap-1 text-amber-400/90 text-[11px]">
+                        <span className="inline-flex items-center gap-1 text-amber-400/90 text-xs">
                           <Camera className="w-3.5 h-3.5" />
                           <span>Photo à ajouter</span>
                         </span>
@@ -889,7 +926,8 @@ export function ExplorerView({
                   Règle de Cohérence Transport AMARO Journey Brain :
                 </strong>
                 <p>
-                  Pour garantir une logistique fiable sur votre séjour, votre Dossier de Voyage s’appuie sur <strong>un seul prestataire de transport principal</strong> (plusieurs véhicules autorisés chez ce même loueur), tout en autorisant librement les <strong>courses urbaines ponctuelles</strong> (Gozem, Yango).
+                  Pour garantir une logistique fiable sur votre séjour, votre Dossier de Voyage s’appuie sur <strong>un seul prestataire de transport principal</strong> (plusieurs véhicules autorisés chez ce même loueur), tout en autorisant librement les <strong>courses urbaines ponctuelles</strong>{' '}
+                  {activeCountry.code === 'BJ' ? '(Gozem, Yango)' : '(VTC locaux et taxis officiels)'}.
                 </p>
               </div>
             </div>
@@ -926,41 +964,75 @@ export function ExplorerView({
               </div>
 
               <div className="flex items-center gap-1.5 p-1 bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto max-w-full">
+                {onGoHome && (
+                  <button
+                    type="button"
+                    onClick={onGoHome}
+                    className="min-h-[44px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:border-teal-600 whitespace-nowrap"
+                  >
+                    Tous les pays
+                  </button>
+                )}
                 <select
                   value={selectedCountryCode}
                   onChange={(e) => {
                     const next = e.target.value;
+                    if (!isCountryOpen(next, effectiveCountryStates, isAdmin)) return;
                     setSelectedCountryCode(next);
                     setSelectedCityId('all');
                     onChangeCountryCode?.(next);
                   }}
-                  className="min-h-[38px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                  className="min-h-[44px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
                 >
-                  {COUNTRIES_REGISTRY.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {locale === 'fr' ? c.nameFr : c.nameEn} ({c.code})
-                    </option>
-                  ))}
+                  {[...UN_193_COUNTRIES]
+                    .sort((a, b) => {
+                      const aOpen = isCountryOpen(a.code, effectiveCountryStates, isAdmin) ? 0 : 1;
+                      const bOpen = isCountryOpen(b.code, effectiveCountryStates, isAdmin) ? 0 : 1;
+                      if (aOpen !== bOpen) return aOpen - bOpen;
+                      return a.name.localeCompare(b.name, 'fr');
+                    })
+                    .map((c) => {
+                      const effState = getEffectiveCountryState(c.code, effectiveCountryStates);
+                      const open = isCountryOpen(c.code, effectiveCountryStates, isAdmin);
+                      return (
+                        <option key={c.code} value={c.code} disabled={!open}>
+                          {c.name} ({c.code}) — {open ? 'Ouvert' : effState === 'cache' ? 'Fermé' : 'En préparation'}
+                        </option>
+                      );
+                    })}
                 </select>
                 <div className="hidden sm:flex items-center gap-1">
-                  {COUNTRIES_REGISTRY.slice(0, 8).map((c) => (
-                    <button
-                      key={c.code}
-                      type="button"
-                      onClick={() => {
-                        setSelectedCountryCode(c.code);
-                        setSelectedCityId('all');
-                        onChangeCountryCode?.(c.code);
-                      }}
-                      className={`min-h-[34px] px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                        selectedCountryCode === c.code
-                          ? 'bg-[#0B192C] text-white'
-                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      {locale === 'fr' ? c.nameFr : c.nameEn}
-                    </button>
-                  ))}
+                  {COUNTRIES_REGISTRY.filter((c) =>
+                    isCountryOpen(c.code, effectiveCountryStates, isAdmin) || ['CI', 'SN', 'MA', 'FR'].includes(c.code)
+                  )
+                    .slice(0, 6)
+                    .map((c) => {
+                      const open = isCountryOpen(c.code, effectiveCountryStates, isAdmin);
+                      return (
+                        <button
+                          key={c.code}
+                          type="button"
+                          disabled={!open}
+                          title={open ? `${c.nameFr} (Ouvert)` : `${c.nameFr} — En préparation`}
+                          onClick={() => {
+                            if (!open) return;
+                            setSelectedCountryCode(c.code);
+                            setSelectedCityId('all');
+                            onChangeCountryCode?.(c.code);
+                          }}
+                          className={`min-h-[44px] px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                            !open
+                              ? 'opacity-60 cursor-not-allowed text-slate-400 dark:text-slate-500 bg-slate-100/70 dark:bg-slate-800/40'
+                              : selectedCountryCode === c.code
+                              ? 'bg-[#0B192C] text-white'
+                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                          }`}
+                        >
+                          {locale === 'fr' ? c.nameFr : c.nameEn}
+                          {!open && <span className="ml-1 text-xs font-normal">(En préparation)</span>}
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             </div>
@@ -970,7 +1042,7 @@ export function ExplorerView({
               <button
                 type="button"
                 onClick={() => setSelectedCityId('all')}
-                className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
+                className={`min-h-[44px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
                   selectedCityId === 'all'
                     ? 'bg-teal-700 text-white'
                     : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
@@ -985,7 +1057,7 @@ export function ExplorerView({
                   onClick={() =>
                     setSelectedCityId((prev) => (prev === city.id ? 'all' : city.id))
                   }
-                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
+                  className={`min-h-[44px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
                     selectedCityId === city.id
                       ? 'bg-teal-700 text-white'
                       : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-teal-600'
@@ -1086,7 +1158,7 @@ export function ExplorerView({
                 min="0"
                 value={maxBudgetXof}
                 onChange={(e) => setMaxBudgetXof(e.target.value)}
-                placeholder="Plafond tarif connu (XOF)"
+                placeholder={`Plafond tarif connu (${activeCountry.currency})`}
                 className="min-h-[44px] px-3 py-2 text-sm font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl outline-none"
               />
             </div>
@@ -1105,14 +1177,14 @@ export function ExplorerView({
                   <button
                     type="button"
                     onClick={() => setCompareIds([])}
-                    className="min-h-[36px] px-3 py-1 text-slate-300 hover:text-white"
+                    className="min-h-[44px] px-3 py-1 text-slate-300 hover:text-white"
                   >
                     Vider
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowCompareModal(true)}
-                    className="min-h-[38px] px-4 py-1.5 font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+                    className="min-h-[44px] px-4 py-1.5 font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
                   >
                     Comparer côte à côte
                   </button>
@@ -1126,7 +1198,7 @@ export function ExplorerView({
                 <strong>{filteredItems.length}</strong> fiche
                 {filteredItems.length > 1 ? 's' : ''} correspondant à votre sélection
               </span>
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1135,7 +1207,7 @@ export function ExplorerView({
                     setSelectedCityId('all');
                     setSearchQuery('AMARO Assistance Personnalisée');
                   }}
-                  className="font-semibold text-[#0B192C] dark:text-amber-400 hover:underline"
+                  className="min-h-[44px] px-2 py-2 inline-flex items-center text-left font-semibold text-[#0B192C] dark:text-amber-400 hover:underline"
                 >
                   Découvrir AMARO Assistance Personnalisée (accompagnement humain optionnel) →
                 </button>
@@ -1143,7 +1215,7 @@ export function ExplorerView({
                   <button
                     type="button"
                     onClick={() => setSelectedCityId('all')}
-                    className="font-semibold text-teal-700 dark:text-teal-400 underline"
+                    className="min-h-[44px] px-2 py-2 inline-flex items-center font-semibold text-teal-700 dark:text-teal-400 underline"
                   >
                     Réinitialiser la ville ({selectedCityId})
                   </button>
@@ -1192,6 +1264,8 @@ export function ExplorerView({
                               <img
                                 src={photoSrc}
                                 alt={item.title}
+                                referrerPolicy="no-referrer"
+                                loading="lazy"
                                 onError={() =>
                                   setFailedImages((p) => ({ ...p, [item.id]: true }))
                                 }
@@ -1203,28 +1277,28 @@ export function ExplorerView({
                                 <span className="text-xs font-semibold text-slate-200 line-clamp-1">
                                   {item.title}
                                 </span>
-                                <span className="text-[11px] text-amber-300 font-mono">
+                                <span className="text-xs text-amber-300 font-mono">
                                   Photo du lieu à ajouter
                                 </span>
                               </div>
                             )}
                             {isPhotoVerified ? (
                               <div className="absolute top-2.5 left-2.5">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
                                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                   <span>Photo certifiée</span>
                                 </span>
                               </div>
                             ) : imgMeta.indicator === 'photo_a_ajouter' || !photoSrc ? (
                               <div className="absolute top-2.5 left-2.5">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-900/80 text-amber-300 border border-amber-500/30 backdrop-blur-xs">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-slate-900/80 text-amber-300 border border-amber-500/30 backdrop-blur-xs">
                                   <Camera className="w-3 h-3 text-amber-400" />
                                   <span>Photo à ajouter</span>
                                 </span>
                               </div>
                             ) : (
                               <div className="absolute top-2.5 left-2.5">
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
                                   Photo d'illustration
                                 </span>
                               </div>
@@ -1232,7 +1306,7 @@ export function ExplorerView({
                             <button
                               type="button"
                               onClick={() => setDetailItem(item)}
-                              className="absolute bottom-2.5 right-2.5 min-h-[34px] inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-black/75 text-white hover:bg-black rounded-lg backdrop-blur-xs"
+                              className="absolute bottom-2.5 right-2.5 min-h-[44px] inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-black/75 text-white hover:bg-black rounded-lg backdrop-blur-xs"
                             >
                               <Eye className="w-3.5 h-3.5" />
                               <span>
@@ -1279,12 +1353,12 @@ export function ExplorerView({
                             </p>
 
                             {item.languagesSpoken && item.languagesSpoken.length > 0 && (
-                              <p className="text-[11px] text-teal-700 dark:text-teal-400 font-medium">
+                              <p className="text-xs text-teal-700 dark:text-teal-400 font-medium">
                                 Langues : {item.languagesSpoken.join(' · ')}
                               </p>
                             )}
 
-                            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                            <p className="text-xs text-slate-400 dark:text-slate-500">
                               Source : {item.sourceName || 'Répertoire public'} · Vérifié :{' '}
                               {item.verifiedAt ? item.verifiedAt.slice(0, 10) : 'à confirmer'}
                             </p>
@@ -1297,7 +1371,7 @@ export function ExplorerView({
                               <span className="font-mono text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
                                 {formatItemPrice(item)}
                               </span>
-                              <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                              <span className="block text-xs text-slate-500 dark:text-slate-400">
                                 {item.priceRangeNote
                                   ? item.priceRangeNote
                                   : isPartnerVerified
@@ -1309,7 +1383,7 @@ export function ExplorerView({
                                     }`}
                               </span>
                             </div>
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400 text-right">
+                            <span className="text-xs text-slate-500 dark:text-slate-400 text-right">
                               {item.capacity} pers. max
                             </span>
                           </div>
@@ -1318,7 +1392,7 @@ export function ExplorerView({
                             <button
                               type="button"
                               onClick={() => openActionModal(item, 'folder')}
-                              className="w-full min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
+                              className="w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
                             >
                               <CalendarPlus className="w-3.5 h-3.5" />
                               <span>Planifier dans mon voyage (Niveau A · Consultation)</span>
@@ -1328,7 +1402,7 @@ export function ExplorerView({
                               <button
                                 type="button"
                                 onClick={() => openActionModal(item, 'folder')}
-                                className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors whitespace-nowrap"
+                                className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors whitespace-nowrap"
                               >
                                 <CalendarPlus className="w-3.5 h-3.5" />
                                 <span>{t.common.addToFolder}</span>
@@ -1337,7 +1411,7 @@ export function ExplorerView({
                               <button
                                 type="button"
                                 onClick={() => openActionModal(item, 'booking')}
-                                className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 dark:hover:bg-amber-300 rounded-xl transition-colors whitespace-nowrap"
+                                className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 dark:hover:bg-amber-300 rounded-xl transition-colors whitespace-nowrap"
                               >
                                 <span>
                                   {item.activationLevel === 'level_c_instant'
@@ -1352,7 +1426,7 @@ export function ExplorerView({
                             <button
                               type="button"
                               onClick={() => toggleCompare(item.id)}
-                              className={`w-full min-h-[36px] text-xs font-semibold rounded-lg border transition-colors ${
+                              className={`w-full min-h-[44px] text-xs font-semibold rounded-lg border transition-colors ${
                                 isCompared
                                   ? 'border-teal-600 bg-teal-50 dark:bg-teal-950/50 text-teal-800 dark:text-teal-300'
                                   : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-400'
@@ -1403,7 +1477,7 @@ export function ExplorerView({
               <button
                 type="button"
                 onClick={() => setShowStoryForm((v) => !v)}
-                className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-slate-800 rounded-xl hover:opacity-95"
+                className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-slate-800 rounded-xl hover:opacity-95"
               >
                 <Plus className="w-4 h-4" />
                 <span>Proposer un témoignage culturel</span>
@@ -1423,7 +1497,7 @@ export function ExplorerView({
                   <select
                     value={storyCity}
                     onChange={(e) => setStoryCity(e.target.value)}
-                    className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   >
                     {activeCountry.cities.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -1439,7 +1513,7 @@ export function ExplorerView({
                     required
                     minLength={3}
                     maxLength={150}
-                    className="sm:col-span-2 min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="sm:col-span-2 min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
                 </div>
                 <textarea
@@ -1455,7 +1529,7 @@ export function ExplorerView({
                 <button
                   type="submit"
                   disabled={isSavingStory}
-                  className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-xl"
+                  className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-xl"
                 >
                   {isSavingStory ? 'Envoi...' : 'Soumettre à la modération'}
                 </button>
@@ -1572,38 +1646,41 @@ export function ExplorerView({
           {/* Transparency, Charter & Legal Footer Links (Blocs 6, 8, 9, 10) */}
           {onOpenLegalDoc && (
             <footer className="max-w-7xl mx-auto px-4 md:px-8 pt-6 pb-4 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 space-y-3">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <button type="button" onClick={() => onOpenLegalDoc('vision_amaro')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <button type="button" onClick={() => onOpenLegalDoc('vision_amaro')} className="min-h-[44px] px-2 inline-flex items-center hover:underline font-medium text-slate-700 dark:text-slate-300">
                   Vision d’AMARO
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('charte_voyage_respectueux')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                <button type="button" onClick={() => onOpenLegalDoc('charte_voyage_respectueux')} className="min-h-[44px] px-2 inline-flex items-center hover:underline font-medium text-slate-700 dark:text-slate-300">
                   Charte du voyage respectueux
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('comment_amaro_verifie')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                <button type="button" onClick={() => onOpenLegalDoc('comment_amaro_verifie')} className="min-h-[44px] px-2 inline-flex items-center hover:underline font-medium text-slate-700 dark:text-slate-300">
                   Comment AMARO vérifie
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('garanties_et_limites')} className="hover:underline font-medium text-slate-700 dark:text-slate-300">
+                <button type="button" onClick={() => onOpenLegalDoc('garanties_et_limites')} className="min-h-[44px] px-2 inline-flex items-center hover:underline font-medium text-slate-700 dark:text-slate-300">
                   Ce qu’AMARO garantit et ne garantit pas
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('cgv_client')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('cgv_client')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   CGV Client
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('politique_annulation')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('politique_annulation')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Politique d’annulation
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('convention_prestataire')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('politique_confidentialite')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
+                  Confidentialité &amp; données
+                </button>
+                <button type="button" onClick={() => onOpenLegalDoc('convention_prestataire')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Convention prestataire
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('mentions_legales')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('mentions_legales')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Mentions légales
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('avis_securite_regions')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('avis_securite_regions')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Sécurité par région
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('assurance_voyage')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('assurance_voyage')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Assurance voyage
                 </button>
-                <button type="button" onClick={() => onOpenLegalDoc('partenaires_officiels')} className="hover:underline">
+                <button type="button" onClick={() => onOpenLegalDoc('partenaires_officiels')} className="min-h-[44px] px-2 inline-flex items-center hover:underline">
                   Partenaires officiels
                 </button>
               </div>
@@ -1781,7 +1858,7 @@ export function ExplorerView({
                           <span className="font-semibold text-slate-900 dark:text-slate-100 block">
                             {off.name}
                           </span>
-                          <span className="text-[11px] text-slate-500 tabular-nums block">
+                          <span className="text-xs text-slate-500 tabular-nums block">
                             {off.priceState === 'price_on_request' || off.priceAmount <= 0
                               ? OFFER_PRICE_STATE_LABELS.price_on_request
                               : `${off.priceAmount.toLocaleString('fr-FR')} ${
@@ -1803,7 +1880,7 @@ export function ExplorerView({
                               })
                             }
                             disabled={qty === 0}
-                            className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded disabled:opacity-35"
+                            className="min-h-[44px] min-w-[30px] inline-flex items-center justify-center rounded disabled:opacity-35"
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
@@ -1818,7 +1895,7 @@ export function ExplorerView({
                                 [off.id]: Math.min(20, (prev[off.id] || 0) + 1),
                               }))
                             }
-                            className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded"
+                            className="min-h-[44px] min-w-[30px] inline-flex items-center justify-center rounded"
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
@@ -1840,7 +1917,7 @@ export function ExplorerView({
                       value={actionPickupLocation}
                       onChange={(e) => setActionPickupLocation(e.target.value)}
                       placeholder="Aéroport, hôtel..."
-                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
                   <div>
@@ -1852,7 +1929,7 @@ export function ExplorerView({
                       value={actionDropoffLocation}
                       onChange={(e) => setActionDropoffLocation(e.target.value)}
                       placeholder="Destination ou agence..."
-                      className="w-full min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                   </div>
                 </div>
@@ -1928,7 +2005,7 @@ export function ExplorerView({
 
                       {/* Naming & Formula Rule */}
                       {selectedItemForAction.mode === 'booking' && provSubtotal > 0 && (
-                        <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+                        <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 text-xs space-y-1">
                           {isCircuitB ? (
                             <p className="text-emerald-700 dark:text-emerald-400 font-medium">
                               Partenaire conventionné : Prix affiché = {provSubtotal.toLocaleString('fr-FR')} FCFA (sans aucun ajout pour le client).
@@ -1946,12 +2023,12 @@ export function ExplorerView({
                       )}
 
                       {modalOfferValidation.hasPriceToVerify && (
-                        <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                        <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
                           Estimation : inclut au moins une offre « Prix à vérifier » ou « Tarif sur demande ».
                         </p>
                       )}
                       {selectedItemForAction.mode === 'booking' && (
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-xs text-slate-500">
                           {selectedItemForAction.item.activationLevel === 'level_c_instant'
                             ? 'Niveau C : allocation atomique immédiate si le stock confirmé couvre la date.'
                             : 'Statut initial : « En attente de disponibilité ». Le prestataire dispose de 2h pour confirmer.'}
@@ -1963,13 +2040,13 @@ export function ExplorerView({
                     {selectedItemForAction.mode === 'booking' && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                         <div className="p-2.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-900 space-y-0.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 dark:text-teal-400 block">
+                          <span className="text-xs font-bold uppercase tracking-wider text-teal-800 dark:text-teal-400 block">
                             À PAYER MAINTENANT
                           </span>
                           <strong className="font-mono text-base font-bold text-teal-950 dark:text-teal-100 block">
                             {sched.payNowAmount.toLocaleString('fr-FR')} FCFA
                           </strong>
-                          <span className="text-[11px] text-teal-800 dark:text-teal-300 block">
+                          <span className="text-xs text-teal-800 dark:text-teal-300 block">
                             {selectedItemForAction.item.category === 'accommodation' || selectedItemForAction.item.category === 'transport'
                               ? 'Totalité à la réservation.'
                               : selectedItemForAction.item.category === 'site' || selectedItemForAction.item.category === 'translation'
@@ -1979,7 +2056,7 @@ export function ExplorerView({
                         </div>
 
                         <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-0.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 block">
                             À PAYER SUR PLACE
                           </span>
                           <strong className="font-mono text-base font-bold text-slate-900 dark:text-slate-100 block">
@@ -1987,7 +2064,7 @@ export function ExplorerView({
                               ? `${sched.payOnSiteAmount.toLocaleString('fr-FR')} FCFA`
                               : '0 FCFA'}
                           </strong>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                          <span className="text-xs text-slate-500 dark:text-slate-400 block">
                             {sched.payOnSiteDescription}
                           </span>
                         </div>

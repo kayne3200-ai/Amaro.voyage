@@ -179,7 +179,7 @@ export function AmaroPartnersView({
                 required
                 minLength={2}
                 maxLength={110}
-                placeholder="Ex : Découvrir le Bénin Média"
+                placeholder="Ex : Explorer la Côte d’Ivoire Média"
                 className="w-full min-h-[44px] px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
             </div>
@@ -263,7 +263,7 @@ export function AmaroPartnersView({
               <button
                 type="button"
                 onClick={() => void handleCopyLink()}
-                className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
+                className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
               >
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copied ? 'Copié' : 'Copier mon lien'}</span>
@@ -272,19 +272,19 @@ export function AmaroPartnersView({
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 tabular-nums">
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                <span className="text-[11px] text-slate-500 block">Demandes rattachées</span>
+                <span className="text-xs text-slate-500 block">Demandes rattachées</span>
                 <strong className="font-mono text-lg font-bold">
                   {myReferrals.length}
                 </strong>
               </div>
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                <span className="text-[11px] text-slate-500 block">Règle unique (1re transaction)</span>
+                <span className="text-xs text-slate-500 block">Règle unique (1re transaction)</span>
                 <strong className="font-mono text-lg font-bold">
                   {countrySetting?.partnerCommissionPercent ?? 5}% revenu AMARO
                 </strong>
               </div>
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                <span className="text-[11px] text-slate-500 block">Commissions payables</span>
+                <span className="text-xs text-slate-500 block">Commissions payables</span>
                 <strong className="font-mono text-lg font-bold text-emerald-700 dark:text-emerald-400">
                   {myReferrals
                     .filter((r) => r.status === 'payable')
@@ -294,7 +294,7 @@ export function AmaroPartnersView({
                 </strong>
               </div>
               <div className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                <span className="text-[11px] text-slate-500 block">Commissions déjà versées</span>
+                <span className="text-xs text-slate-500 block">Commissions déjà versées</span>
                 <strong className="font-mono text-lg font-bold">
                   {myReferrals
                     .filter((r) => r.status === 'paid')
@@ -364,7 +364,7 @@ export function AmaroPartnersView({
             className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl"
           >
             <div>
-              <label className="block text-[11px] font-semibold mb-1">
+              <label className="block text-xs font-semibold mb-1">
                 Commission affilié par défaut (%)
               </label>
               <input
@@ -374,11 +374,11 @@ export function AmaroPartnersView({
                 step="0.5"
                 value={defaultRate}
                 onChange={(e) => setDefaultRate(Number(e.target.value))}
-                className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                className="w-full min-h-[44px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-semibold mb-1">
+              <label className="block text-xs font-semibold mb-1">
                 Fenêtre d’attribution (jours)
               </label>
               <input
@@ -387,11 +387,11 @@ export function AmaroPartnersView({
                 max={365}
                 value={windowDays}
                 onChange={(e) => setWindowDays(Number(e.target.value))}
-                className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                className="w-full min-h-[44px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-semibold mb-1">
+              <label className="block text-xs font-semibold mb-1">
                 Modèle d’attribution
               </label>
               <select
@@ -399,7 +399,7 @@ export function AmaroPartnersView({
                 onChange={(e) =>
                   setAttrModel(e.target.value as 'first_touch' | 'last_touch')
                 }
-                className="w-full min-h-[40px] px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                className="w-full min-h-[44px] px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
               >
                 <option value="last_touch">Dernier clic valide (last_touch)</option>
                 <option value="first_touch">Premier clic valide (first_touch)</option>
@@ -407,7 +407,7 @@ export function AmaroPartnersView({
             </div>
             <button
               type="submit"
-              className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
+              className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
             >
               Enregistrer règles Partners
             </button>
@@ -449,7 +449,7 @@ export function AmaroPartnersView({
                         }
                         placeholder="Taux %"
                         aria-label="Taux personnalisé"
-                        className="w-20 min-h-[36px] px-2 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                        className="w-20 min-h-[44px] px-2 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                       <button
                         type="button"
@@ -460,7 +460,7 @@ export function AmaroPartnersView({
                             customRateByPartner[p.id] ?? p.customCommissionRate
                           )
                         }
-                        className="min-h-[36px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
+                        className="min-h-[44px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                       >
                         Activer
                       </button>
@@ -473,7 +473,7 @@ export function AmaroPartnersView({
                             customRateByPartner[p.id] ?? p.customCommissionRate
                           )
                         }
-                        className="min-h-[36px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                        className="min-h-[44px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                       >
                         Suspendre
                       </button>
@@ -525,7 +525,7 @@ export function AmaroPartnersView({
                             r.providerSettled
                           )
                         }
-                        className="min-h-[34px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
+                        className="min-h-[44px] px-2.5 py-1 font-semibold bg-slate-200 dark:bg-slate-800 rounded-lg"
                       >
                         1. Confirmer paiement client
                       </button>
@@ -534,7 +534,7 @@ export function AmaroPartnersView({
                         onClick={() =>
                           void onAdminUpdateReferral(r, 'payable', true, true)
                         }
-                        className="min-h-[34px] px-2.5 py-1 font-semibold text-white bg-teal-700 rounded-lg"
+                        className="min-h-[44px] px-2.5 py-1 font-semibold text-white bg-teal-700 rounded-lg"
                       >
                         2. Confirmer règlement prestataire → Payable
                       </button>
@@ -544,7 +544,7 @@ export function AmaroPartnersView({
                           onClick={() =>
                             void onAdminUpdateReferral(r, 'paid', true, true)
                           }
-                          className="min-h-[34px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
+                          className="min-h-[44px] px-2.5 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
                         >
                           3. Marquer Payée
                         </button>
@@ -559,7 +559,7 @@ export function AmaroPartnersView({
                             false
                           )
                         }
-                        className="min-h-[34px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
+                        className="min-h-[44px] px-2.5 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
                       >
                         Annuler (0 XOF)
                       </button>

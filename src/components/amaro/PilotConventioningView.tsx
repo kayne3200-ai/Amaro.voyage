@@ -737,7 +737,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
       {/* Header & Governance Confidentiality Rule */}
       <div className="border-b border-[var(--color-sand-line)] pb-5 flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <p className="text-[11px] uppercase tracking-widest text-[var(--color-terracotta)] font-semibold">
+          <p className="text-xs uppercase tracking-widest text-[var(--color-terracotta)] font-semibold">
             Réseau Commercial Bénin · 5 Zones Prioritaires · Zéro Donnée Fictive
           </p>
           <h3 className="font-serif text-2xl sm:text-3xl font-semibold mt-1">
@@ -806,7 +806,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
           <button
             type="button"
             onClick={() => setFeedbackBanner(null)}
-            className="text-[11px] underline font-medium cursor-pointer"
+            className="text-xs underline font-medium cursor-pointer"
           >
             Fermer
           </button>
@@ -816,7 +816,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
       {/* Global Zone / Category / Status Filter Bar */}
       <div className="bg-[var(--color-warm-paper)] border border-[var(--color-sand-line)] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
-          <label className="block text-[11px] font-medium text-[var(--color-ink-muted)] mb-1">
+          <label className="block text-xs font-medium text-[var(--color-ink-muted)] mb-1">
             Zone prioritaire
           </label>
           <select
@@ -834,7 +834,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
         </div>
 
         <div>
-          <label className="block text-[11px] font-medium text-[var(--color-ink-muted)] mb-1">
+          <label className="block text-xs font-medium text-[var(--color-ink-muted)] mb-1">
             Catégorie pilote
           </label>
           <select
@@ -855,7 +855,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
         </div>
 
         <div>
-          <label className="block text-[11px] font-medium text-[var(--color-ink-muted)] mb-1">
+          <label className="block text-xs font-medium text-[var(--color-ink-muted)] mb-1">
             Statut de conventionnement (16 étapes)
           </label>
           <select
@@ -940,13 +940,13 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 key={metric.label}
                 className="bg-white border border-[var(--color-sand-line)] rounded-xl p-4"
               >
-                <p className="text-[11px] text-[var(--color-ink-muted)] leading-snug">
+                <p className="text-xs text-[var(--color-ink-muted)] leading-snug">
                   {metric.label}
                 </p>
                 <p className="font-mono tabular-nums text-2xl font-semibold text-[var(--color-ink-main)] mt-1.5">
                   {metric.val}
                 </p>
-                <p className="text-[11px] text-[var(--color-ink-muted)] mt-1">{metric.sub}</p>
+                <p className="text-xs text-[var(--color-ink-muted)] mt-1">{metric.sub}</p>
               </div>
             ))}
           </div>
@@ -999,7 +999,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     <div>
                       <div className="flex items-baseline justify-between gap-2">
                         <h5 className="font-serif text-base font-semibold">{z.name}</h5>
-                        <span className="font-mono tabular-nums text-[11px] text-[var(--color-ink-muted)]">
+                        <span className="font-mono tabular-nums text-xs text-[var(--color-ink-muted)]">
                           {z.department} · {zoneDirCount} rép. · {zoneCrmCount} CRM ·{' '}
                           {zoneSignedCount} signé(s)
                         </span>
@@ -1007,7 +1007,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       <p className="text-xs text-[var(--color-ink-muted)] mt-2 leading-relaxed">
                         {z.prioritySummary}
                       </p>
-                      <div className="mt-3 pt-3 border-t border-[var(--color-sand-line)] space-y-1.5 text-[11px]">
+                      <div className="mt-3 pt-3 border-t border-[var(--color-sand-line)] space-y-1.5 text-xs">
                         <p>
                           <strong className="text-[var(--color-ink-main)]">Hébergement :</strong>{' '}
                           <span className="text-[var(--color-ink-muted)]">
@@ -1026,7 +1026,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                         setFilterZone(z.id);
                         setSubSection('targeting');
                       }}
-                      className="min-h-[40px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium text-left hover:border-[var(--color-terracotta)] transition-colors cursor-pointer"
+                      className="min-h-[44px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium text-left hover:border-[var(--color-terracotta)] transition-colors cursor-pointer"
                     >
                       Ouvrir la liste de prospection de {z.name} →
                     </button>
@@ -1056,7 +1056,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
           <div className="bg-white border border-[var(--color-sand-line)] rounded-xl overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-[var(--color-sand-line)] text-[11px] uppercase tracking-wider text-[var(--color-ink-muted)]">
+                <tr className="border-b border-[var(--color-sand-line)] text-xs uppercase tracking-wider text-[var(--color-ink-muted)]">
                   <th className="py-3 px-4">Établissement réel</th>
                   <th className="py-3 px-3">Zone · Catégorie</th>
                   <th className="py-3 px-3">Coordonnées publiques connues</th>
@@ -1075,7 +1075,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     <tr key={item.id} className="hover:bg-[var(--color-warm-paper)]/50">
                       <td className="py-3 px-4">
                         <p className="font-semibold text-[var(--color-ink-main)]">{item.title}</p>
-                        <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
+                        <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
                           {item.address} · Source : {item.sourceName || 'Répertoire public'}
                         </p>
                       </td>
@@ -1085,7 +1085,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                         </span>{' '}
                         · {item.category === 'accommodation' ? 'Hébergement' : 'Transport'}
                       </td>
-                      <td className="py-3 px-3 font-mono tabular-nums text-[11px] text-[var(--color-ink-muted)]">
+                      <td className="py-3 px-3 font-mono tabular-nums text-xs text-[var(--color-ink-muted)]">
                         {item.contactPhone ? item.contactPhone : 'Téléphone direct à vérifier'}
                         {item.websiteUrl ? ' · Site web' : ''}
                       </td>
@@ -1105,7 +1105,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                           type="button"
                           disabled={busyAction}
                           onClick={() => handleImportDirectoryEstablishment(item)}
-                          className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                          className="min-h-[44px] px-3 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white text-xs font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
                         >
                           {crmMatch ? 'Ouvrir fiche CRM' : 'Cibler dans le pilote'}
                         </button>
@@ -1136,7 +1136,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     ? 'Modifier la fiche partenaire pilote'
                     : 'Nouvelle fiche partenaire pilote'}
                 </h4>
-                <p className="text-[11px] text-[var(--color-ink-muted)]">
+                <p className="text-xs text-[var(--color-ink-muted)]">
                   Confidentiel Administration · Ne jamais saisir d’entreprise fictive
                 </p>
               </div>
@@ -1160,7 +1160,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   value={businessName}
                   onChange={(e) => setBusinessName(e.target.value)}
                   placeholder="Ex. Azalaï Hôtel Cotonou"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1169,7 +1169,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value as PilotPartnerCategory)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   <option value="accommodation">Hébergement touristique / Hôtel</option>
                   <option value="transport">Transporteur / Loueur / Chauffeur pro</option>
@@ -1181,7 +1181,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <select
                   value={cityId}
                   onChange={(e) => setCityId(e.target.value as PilotZoneId)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   {PILOT_PRIORITY_ZONES.map((z) => (
                     <option key={z.id} value={z.id}>
@@ -1197,7 +1197,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={coveredZones}
                   onChange={(e) => setCoveredZones(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1207,7 +1207,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={businessAddress}
                   onChange={(e) => setBusinessAddress(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1218,7 +1218,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   value={businessPhone}
                   onChange={(e) => setBusinessPhone(e.target.value)}
                   placeholder="+229 ..."
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                 />
               </div>
 
@@ -1230,7 +1230,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="email"
                   value={businessEmail}
                   onChange={(e) => setBusinessEmail(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1241,7 +1241,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   value={officialWebsite}
                   onChange={(e) => setOfficialWebsite(e.target.value)}
                   placeholder="https://..."
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1254,7 +1254,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   value={contactNameAndRole}
                   onChange={(e) => setContactNameAndRole(e.target.value)}
                   placeholder="Nom + fonction vérifiés"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1264,7 +1264,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={infoSource}
                   onChange={(e) => setInfoSource(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1274,7 +1274,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="date"
                   value={verifiedDate}
                   onChange={(e) => setVerifiedDate(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                 />
               </div>
 
@@ -1287,7 +1287,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   onChange={(e) =>
                     setConventionStatus(e.target.value as PilotConventionStatus)
                   }
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white font-medium"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white font-medium"
                 >
                   {PILOT_CONVENTION_STATUSES.map((st) => (
                     <option key={st.id} value={st.id}>
@@ -1303,7 +1303,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={contactStatus}
                   onChange={(e) => setContactStatus(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1313,7 +1313,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={negotiationStatus}
                   onChange={(e) => setNegotiationStatus(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1325,7 +1325,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={documentsReceived}
                   onChange={(e) => setDocumentsReceived(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1345,7 +1345,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     value={conventionSignedRef}
                     onChange={(e) => setConventionSignedRef(e.target.value)}
                     placeholder="Référence et date de la convention signée (ex. CONV-BJ-2026-001)"
-                    className="w-full min-h-[40px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
                   />
                 )}
               </div>
@@ -1359,7 +1359,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   value={registeredServiceId}
                   onChange={(e) => setRegisteredServiceId(e.target.value)}
                   placeholder="Ex. acc-cotonou-azalai"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                 />
               </div>
 
@@ -1372,7 +1372,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   onChange={(e) =>
                     setDispatchChannel(e.target.value as ReservationDispatchChannel)
                   }
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   {Object.entries(DISPATCH_CHANNEL_LABELS).map(([k, lbl]) => (
                     <option key={k} value={k}>
@@ -1417,7 +1417,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                         | 'level_c_instant'
                     )
                   }
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   <option value="none">Non activé (prospection / annuaire seul)</option>
                   <option value="level_a_verified">
@@ -1440,7 +1440,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={nextAction}
                   onChange={(e) => setNextAction(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1499,7 +1499,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       onChange={(e) =>
                         setSyncLevel(e.target.value as PartnerActivationLevel)
                       }
-                      className="w-full min-h-[42px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)]"
+                      className="w-full min-h-[44px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)]"
                     >
                       <option value="directory_only">Annuaire référencé (non conventionné)</option>
                       <option value="level_a_verified">
@@ -1520,7 +1520,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       min={0}
                       value={syncPrice}
                       onChange={(e) => setSyncPrice(Number(e.target.value || 0))}
-                      className="w-full min-h-[42px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
+                      className="w-full min-h-[44px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
                     />
                   </div>
                   <div>
@@ -1531,7 +1531,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       max={100}
                       value={syncCapacity}
                       onChange={(e) => setSyncCapacity(Number(e.target.value || 1))}
-                      className="w-full min-h-[42px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
+                      className="w-full min-h-[44px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)] font-mono"
                     />
                   </div>
                   <div className="sm:col-span-3">
@@ -1542,7 +1542,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       type="text"
                       value={syncCancellation}
                       onChange={(e) => setSyncCancellation(e.target.value)}
-                      className="w-full min-h-[42px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)]"
+                      className="w-full min-h-[44px] px-3 rounded-lg bg-white border border-[var(--color-sand-line)]"
                     />
                   </div>
                 </div>
@@ -1550,7 +1550,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="button"
                   disabled={busyAction}
                   onClick={handleConfirmSyncActivation}
-                  className="min-h-[42px] px-4 py-2 rounded-lg bg-[var(--color-night-indigo)] text-white font-semibold cursor-pointer"
+                  className="min-h-[44px] px-4 py-2 rounded-lg bg-[var(--color-night-indigo)] text-white font-semibold cursor-pointer"
                 >
                   Publier ce niveau d’activation dans le catalogue
                 </button>
@@ -1579,7 +1579,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                           )}
                           <h5 className="font-serif text-base font-semibold">{p.businessName}</h5>
                         </div>
-                        <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
+                        <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
                           <span className="capitalize font-medium text-[var(--color-ink-main)]">
                             {p.cityId}
                           </span>{' '}
@@ -1595,14 +1595,14 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                         <button
                           type="button"
                           onClick={() => loadPilotIntoForm(p)}
-                          className="min-h-[36px] px-3 py-1 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium hover:border-[var(--color-terracotta)] cursor-pointer"
+                          className="min-h-[44px] px-3 py-1 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium hover:border-[var(--color-terracotta)] cursor-pointer"
                         >
                           Éditer
                         </button>
                         <button
                           type="button"
                           onClick={() => openSyncPanel(p)}
-                          className="min-h-[36px] px-3 py-1 rounded-lg bg-[var(--color-warm-paper)] border border-[var(--color-sand-line)] text-xs font-medium hover:border-[var(--color-night-indigo)] cursor-pointer inline-flex items-center gap-1"
+                          className="min-h-[44px] px-3 py-1 rounded-lg bg-[var(--color-warm-paper)] border border-[var(--color-sand-line)] text-xs font-medium hover:border-[var(--color-night-indigo)] cursor-pointer inline-flex items-center gap-1"
                         >
                           <Sparkles className="w-3.5 h-3.5" />
                           Activer offre (A/B/C)
@@ -1613,14 +1613,14 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                             setSelectedKitPilotId(p.id);
                             setSubSection('kit');
                           }}
-                          className="min-h-[36px] px-3 py-1 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium cursor-pointer"
+                          className="min-h-[44px] px-3 py-1 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium cursor-pointer"
                         >
                           Kit / Contrat
                         </button>
                         <button
                           type="button"
                           onClick={() => onDeletePilotPartner(p.id)}
-                          className="min-h-[36px] px-2.5 py-1 rounded-lg border border-red-200 text-red-700 text-xs hover:bg-red-50 cursor-pointer"
+                          className="min-h-[44px] px-2.5 py-1 rounded-lg border border-red-200 text-red-700 text-xs hover:bg-red-50 cursor-pointer"
                           title="Supprimer la fiche pilote"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1628,7 +1628,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-2 border-t border-[var(--color-sand-line)] text-[var(--color-ink-muted)]">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-2 border-t border-[var(--color-sand-line)] text-[var(--color-ink-muted)]">
                       <p>
                         <strong className="text-[var(--color-ink-main)]">Contact & Canal :</strong>{' '}
                         {p.businessPhone || 'Tél. non renseigné'} ·{' '}
@@ -1674,7 +1674,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
               <h4 className="font-serif text-lg font-semibold">
                 Enregistrer un stock confirmé (Chambres ou Véhicules)
               </h4>
-              <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
+              <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
                 Protection anti-double réservation atomique · Bascule automatique en Niveau B dès
                 expiration.
               </p>
@@ -1702,7 +1702,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       );
                     }
                   }}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   <option value="">-- Sélectionner un partenaire signé --</option>
                   {pilotPartners
@@ -1725,7 +1725,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     value={stockServiceId}
                     onChange={(e) => setStockServiceId(e.target.value)}
                     placeholder="acc-cotonou-..."
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1735,7 +1735,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     required
                     value={stockUnitCode}
                     onChange={(e) => setStockUnitCode(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
               </div>
@@ -1749,7 +1749,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   required
                   value={stockUnitLabel}
                   onChange={(e) => setStockUnitLabel(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1762,7 +1762,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     max={60}
                     value={stockCapacity}
                     onChange={(e) => setStockCapacity(Number(e.target.value || 1))}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1773,7 +1773,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     max={40}
                     value={stockBaggage}
                     onChange={(e) => setStockBaggage(Number(e.target.value || 0))}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
               </div>
@@ -1796,7 +1796,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   type="text"
                   value={stockCoverage}
                   onChange={(e) => setStockCoverage(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1807,7 +1807,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     type="date"
                     value={stockStartDate}
                     onChange={(e) => setStockStartDate(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1816,7 +1816,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     type="date"
                     value={stockEndDate}
                     onChange={(e) => setStockEndDate(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
               </div>
@@ -1830,7 +1830,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     max={500}
                     value={stockTotalUnits}
                     onChange={(e) => setStockTotalUnits(Number(e.target.value || 1))}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1841,7 +1841,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     max={stockTotalUnits}
                     value={stockBookedUnits}
                     onChange={(e) => setStockBookedUnits(Number(e.target.value || 0))}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1851,7 +1851,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     min={1}
                     value={stockPrice}
                     onChange={(e) => setStockPrice(Number(e.target.value || 0))}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
               </div>
@@ -1863,7 +1863,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   required
                   value={stockCancellation}
                   onChange={(e) => setStockCancellation(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
 
@@ -1874,7 +1874,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     type="date"
                     value={stockExpiresAt}
                     onChange={(e) => setStockExpiresAt(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                   />
                 </div>
                 <div>
@@ -1884,7 +1884,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                     onChange={(e) =>
                       setStockStatus(e.target.value as 'active' | 'paused' | 'expired')
                     }
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                    className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                   >
                     <option value="active">Actif</option>
                     <option value="paused">En pause</option>
@@ -1902,7 +1902,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       e.target.value as 'pay_on_arrival_agreed' | 'online_gateway_required'
                     )
                   }
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
                 >
                   <option value="pay_on_arrival_agreed">
                     Règlement sur place convenu par contrat (compatible Niveau C)
@@ -1931,7 +1931,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   required
                   value={stockConfirmationSource}
                   onChange={(e) => setStockConfirmationSource(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)]"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)]"
                 />
               </div>
             </div>
@@ -1977,7 +1977,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                             ({st.unitCode})
                           </span>
                         </p>
-                        <p className="text-[11px] text-[var(--color-ink-muted)]">
+                        <p className="text-xs text-[var(--color-ink-muted)]">
                           Offre <span className="font-mono">{st.serviceId}</span> ·{' '}
                           <span className="capitalize">{st.cityId}</span> ·{' '}
                           {st.category === 'transport'
@@ -2000,7 +2000,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-[var(--color-sand-line)] font-mono tabular-nums text-[11px]">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-[var(--color-sand-line)] font-mono tabular-nums text-xs">
                       <div>
                         Dispo :{' '}
                         <strong className={remaining === 0 ? 'text-red-700' : 'text-emerald-800'}>
@@ -2019,7 +2019,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       </div>
                     </div>
 
-                    <p className="text-[11px] text-[var(--color-ink-muted)]">
+                    <p className="text-xs text-[var(--color-ink-muted)]">
                       {levelCEligible ? (
                         <span className="text-emerald-800 font-medium">
                           Éligible Niveau C (réservation instantanée active & anti-surbooking)
@@ -2086,17 +2086,17 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                         <p className="font-semibold text-sm text-[var(--color-ink-main)]">
                           {r.serviceTitle}
                         </p>
-                        <p className="font-mono tabular-nums text-[11px] text-[var(--color-ink-muted)] mt-0.5">
+                        <p className="font-mono tabular-nums text-xs text-[var(--color-ink-muted)] mt-0.5">
                           Réf. {r.id} · {r.scheduledDate} à {r.scheduledTime} · {r.participants}{' '}
                           pers. · Statut : {r.status}
                         </p>
                       </div>
-                      <span className="font-mono text-[11px] text-[var(--color-terracotta)] font-medium">
+                      <span className="font-mono text-xs text-[var(--color-terracotta)] font-medium">
                         {DISPATCH_STATUS_LABELS[dStatus]} · Relances : {r.followUpCount || 0}
                       </span>
                     </div>
 
-                    <p className="text-[11px] text-[var(--color-ink-muted)]">
+                    <p className="text-xs text-[var(--color-ink-muted)]">
                       Canal : <strong>{DISPATCH_CHANNEL_LABELS[channel]}</strong>
                       {r.responseDeadlineAt
                         ? ` · Échéance de réponse : ${r.responseDeadlineAt.slice(0, 16).replace('T', ' ')} UTC`
@@ -2110,7 +2110,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                       <button
                         type="button"
                         onClick={() => handleCopyText(summarySheet, `Fiche ${r.id}`)}
-                        className="min-h-[38px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                        className="min-h-[44px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                       >
                         <Copy className="w-3.5 h-3.5" />
                         Copier fiche prestataire
@@ -2126,7 +2126,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                             dispatchChannel: 'configured_email',
                           })
                         }
-                        className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                        className="min-h-[44px] px-3 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white font-medium inline-flex items-center gap-1.5 cursor-pointer"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Marquer transmise
@@ -2141,7 +2141,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                             action: 'admin_record_followup',
                           })
                         }
-                        className="min-h-[38px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                        className="min-h-[44px] px-3 py-1.5 rounded-lg border border-[var(--color-sand-line)] font-medium inline-flex items-center gap-1.5 cursor-pointer"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
                         Enregistrer une relance (+24h)
@@ -2156,7 +2156,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                             action: 'admin_mark_send_failed',
                           })
                         }
-                        className="min-h-[38px] px-3 py-1.5 rounded-lg border border-amber-300 text-amber-900 font-medium cursor-pointer"
+                        className="min-h-[44px] px-3 py-1.5 rounded-lg border border-amber-300 text-amber-900 font-medium cursor-pointer"
                       >
                         Signaler échec d’envoi
                       </button>
@@ -2171,7 +2171,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                               action: 'admin_mark_expired',
                             })
                           }
-                          className="min-h-[38px] px-3 py-1.5 rounded-lg border border-red-200 text-red-700 font-medium cursor-pointer"
+                          className="min-h-[44px] px-3 py-1.5 rounded-lg border border-red-200 text-red-700 font-medium cursor-pointer"
                         >
                           Clôturer délai expiré
                         </button>
@@ -2202,7 +2202,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
               <select
                 value={selectedKitPilotId}
                 onChange={(e) => setSelectedKitPilotId(e.target.value)}
-                className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
+                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] bg-white"
               >
                 <option value="">Modèle vierge paramétrable</option>
                 {pilotPartners.map((p) => (
@@ -2222,7 +2222,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   max={50}
                   value={kitCommissionPct}
                   onChange={(e) => setKitCommissionPct(Number(e.target.value || 0))}
-                  className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                 />
               </div>
               <div>
@@ -2233,7 +2233,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   max={72}
                   value={kitResponseHours}
                   onChange={(e) => setKitResponseHours(Number(e.target.value || 12))}
-                  className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--color-sand-line)] font-mono"
                 />
               </div>
             </div>
@@ -2254,7 +2254,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                   >
                     <p className="font-semibold text-xs">{tpl.title}</p>
                     <p
-                      className={`text-[11px] mt-0.5 ${
+                      className={`text-xs mt-0.5 ${
                         active ? 'text-white/80' : 'text-[var(--color-ink-muted)]'
                       }`}
                     >
@@ -2272,7 +2272,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <h5 className="font-serif text-base font-semibold">
                   {PROSPECTION_KIT_CATALOGUE.find((t) => t.id === selectedTemplateId)?.title}
                 </h5>
-                <p className="text-[11px] text-[var(--color-ink-muted)]">
+                <p className="text-xs text-[var(--color-ink-muted)]">
                   Document modifiable avant export · Aucun contrat pré-signé · Validation juridique
                   recommandée avant signature.
                 </p>
@@ -2281,7 +2281,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleCopyText(editableDocText, 'Document')}
-                  className="min-h-[40px] px-3.5 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[44px] px-3.5 py-1.5 rounded-lg bg-[var(--color-night-indigo)] text-white text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Copy className="w-3.5 h-3.5" />
                   Copier
@@ -2289,7 +2289,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDownloadDocument('txt')}
-                  className="min-h-[40px] px-3.5 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Export .TXT
@@ -2297,7 +2297,7 @@ export const PilotConventioningView: React.FC<PilotConventioningViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDownloadDocument('md')}
-                  className="min-h-[40px] px-3.5 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-[var(--color-sand-line)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <ClipboardCheck className="w-3.5 h-3.5" />
                   Export .MD

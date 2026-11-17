@@ -1,9 +1,10 @@
 import dotenv from 'dotenv';
-import express, { type Request, type Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createAmaroApp } from './src/server/createAmaroApp';
+import { register as registerTsx } from 'tsx/esm/api';
 
 dotenv.config();
 
@@ -25,6 +26,8 @@ function loadFirebaseAppletConfig(): { projectId: string; firestoreDatabaseId: s
 }
 
 async function startServer() {
+  registerTsx();
+  const { createAmaroApp } = await import('./src/server/createAmaroApp');
   const { projectId, firestoreDatabaseId } = loadFirebaseAppletConfig();
   const app = createAmaroApp({
     projectId,

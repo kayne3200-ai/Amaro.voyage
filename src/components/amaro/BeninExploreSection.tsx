@@ -167,7 +167,7 @@ export function BeninExploreSection({
                       {em.labelFr.split('(')[0].trim()} : {em.number}
                     </span>
                     {!em.verifiedByOwner && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-xs font-semibold">
                         numéro à confirmer
                       </span>
                     )}
@@ -301,7 +301,7 @@ export function BeninExploreSection({
                         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                           {dept.highlights}
                         </p>
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-xs text-slate-500">
                           <strong>Villes phares :</strong> {dept.keyCities.join(', ')}
                         </p>
                       </div>
@@ -330,7 +330,7 @@ export function BeninExploreSection({
                   <span className="block text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
                     {city.name}
                   </span>
-                  <span className="block text-[11px] text-slate-500 truncate">
+                  <span className="block text-xs text-slate-500 truncate">
                     {city.region}
                   </span>
                 </button>
@@ -361,7 +361,7 @@ export function BeninExploreSection({
                       <strong className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
                         {dish.dish}
                       </strong>
-                      <span className="text-[11px] font-medium text-teal-700 dark:text-teal-400">
+                      <span className="text-xs font-medium text-teal-700 dark:text-teal-400">
                         {dish.origin}
                       </span>
                     </div>
@@ -463,7 +463,7 @@ export function BeninExploreSection({
                             key={cid}
                             type="button"
                             onClick={() => onSelectCityFilter(cid)}
-                            className="min-h-[34px] px-2.5 py-1 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-teal-600 hover:text-white rounded-lg capitalize transition-colors"
+                            className="min-h-[44px] px-2.5 py-1 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-teal-600 hover:text-white rounded-lg capitalize transition-colors"
                           >
                             Explorer {cid} →
                           </button>
@@ -562,7 +562,7 @@ export function BeninExploreSection({
                   }`}
                 >
                   <strong className="block text-xs font-bold">{opt.label}</strong>
-                  <span className="block text-[11px] opacity-80">{opt.sub}</span>
+                  <span className="block text-xs opacity-80">{opt.sub}</span>
                 </button>
               ))}
             </div>

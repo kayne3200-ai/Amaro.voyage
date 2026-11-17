@@ -110,7 +110,7 @@ export function SharedFolderReadOnlyView({
           <button
             type="button"
             onClick={onExitShareView}
-            className="min-h-[42px] px-4 py-2 inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:border-slate-400"
+            className="min-h-[44px] px-4 py-2 inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:border-slate-400"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Découvrir AMARO.VOYAGE</span>
@@ -206,16 +206,16 @@ export function SharedFolderReadOnlyView({
                     onChange={(e) => setAuthorName(e.target.value)}
                     placeholder="Votre prénom"
                     maxLength={80}
-                    className="min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="min-h-[44px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
                   <input
                     type="text"
                     required
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Ex. Pensez à garder une matinée libre à Ouidah..."
+                    placeholder="Ex. Pensez à garder une matinée libre à Grand-Bassam..."
                     maxLength={500}
-                    className="sm:col-span-2 min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    className="sm:col-span-2 min-h-[44px] px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   />
                 </div>
                 {feedback && (
@@ -224,7 +224,7 @@ export function SharedFolderReadOnlyView({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 rounded-xl disabled:opacity-50"
+                  className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] hover:bg-slate-800 rounded-xl disabled:opacity-50"
                 >
                   {submitting ? 'Envoi...' : 'Envoyer ma suggestion'}
                 </button>

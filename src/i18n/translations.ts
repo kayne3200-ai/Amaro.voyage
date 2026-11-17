@@ -48,7 +48,7 @@ export const TRANSLATIONS: Record<
   fr: {
     nav: {
       explorer: 'Accueil',
-      discoverBenin: 'Guide & Formalités Bénin',
+      discoverBenin: 'Guide & Formalités du Pays',
       journey: 'Mon Voyage',
       assistant: 'Assistant',
       rescue: 'Urgences',

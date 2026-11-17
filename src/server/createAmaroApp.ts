@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import compression from 'compression';
 import express, { type Express, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
@@ -28,7 +29,12 @@ import {
   CENSUS_METHODOLOGY_SUMMARY,
 } from '../data/beninWebCensusSeed';
 import {
+  ALL_PUBLIC_DIRECTORIES,
+  COUNTRIES_REGISTRY,
+} from '../data/amaroRegistry';
+import {
   UN_193_COUNTRIES,
+  getEffectiveCountryState,
   getUNCountryByCode,
   type CountryOperationalState,
 } from '../data/unCountries';
@@ -243,6 +249,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
   const app = express();
   app.disable('x-powered-by');
+  app.use(compression());
   // Scoped payload allowance strictly for front+back compressed identity photographs (max 450 KB binary per side)
   app.use('/api/amaro/identity/submit', express.json({ limit: '1500kb' }));
   app.use(express.json({ limit: '256kb' }));
@@ -711,6 +718,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         return;
       }
 
+      const access = await checkCountryAccess(service.countryCode || 'CI', bearer);
+      if (!access.allowed) {
+        res.status(403).json({
+          error: 'Pas encore disponible — Pays en préparation',
+          countryCode: access.countryCode,
+          state: access.state,
+        });
+        return;
+      }
+
       const rawSelectedOffers: OfferSelectionInputLine[] = Array.isArray(req.body?.selectedOffers)
         ? req.body.selectedOffers
         : [];
@@ -891,7 +908,16 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       freeTimeBlocksPerDay?: number;
     } = {};
     try {
-      const setting = await store.getSystemSetting('BJ', extractBearerToken(req) || undefined);
+      const candCityId = String(candidate?.cityId || '').trim();
+      const inferredCountry = candCityId
+        ? COUNTRIES_REGISTRY.find((c) => c.cities.some((ct) => ct.id === candCityId))?.code
+        : undefined;
+      const brainCountry = String(
+        req.body?.countryCode || candidate?.countryCode || inferredCountry || 'CI'
+      )
+        .toUpperCase()
+        .trim();
+      const setting = await store.getSystemSetting(brainCountry || 'CI', extractBearerToken(req) || undefined);
       brainRules = {
         maxVisitsCityChangeDay: setting.maxVisitsCityChangeDay,
         maxVisitsSameCityDay: setting.maxVisitsSameCityDay,
@@ -1090,6 +1116,18 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         if (service.status !== 'published') {
           res.status(409).json({
             error: 'Prestation indisponible ou non publiée : réservation refusée.',
+          });
+          return;
+        }
+        const countryAccess = await checkCountryAccess(
+          service.countryCode || 'CI',
+          caller.rawIdToken
+        );
+        if (!countryAccess.allowed) {
+          res.status(403).json({
+            error: 'Pas encore disponible — Pays en préparation',
+            countryCode: countryAccess.countryCode,
+            state: countryAccess.state,
           });
           return;
         }
@@ -1638,6 +1676,45 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
   }
 
+  async function checkCountryAccess(
+    rawCode: string,
+    bearer?: string
+  ): Promise<{
+    countryCode: string;
+    state: CountryOperationalState;
+    allowed: boolean;
+    isAdmin: boolean;
+    overrides: Record<string, CountryOperationalState>;
+  }> {
+    const normCode = String(rawCode || 'CI').toUpperCase().trim() || 'CI';
+    let overrides: Record<string, CountryOperationalState> = {};
+    try {
+      const setting = await store.getSystemSetting('BJ', bearer).catch(() => null);
+      if (setting?.countryOperationalStates) {
+        overrides = setting.countryOperationalStates as Record<string, CountryOperationalState>;
+      }
+    } catch {}
+    const effectiveState = getEffectiveCountryState(normCode, overrides);
+    let isAdmin = false;
+    if (bearer && effectiveState === 'ouvert_admin_seulement') {
+      try {
+        const caller = await verifyToken(bearer);
+        if (caller) {
+          isAdmin = await isVerifiedAdminCaller({
+            ...caller,
+            rawIdToken: bearer,
+          });
+        }
+      } catch {
+        isAdmin = false;
+      }
+    }
+    const allowed =
+      effectiveState === 'ouvert' ||
+      (effectiveState === 'ouvert_admin_seulement' && isAdmin);
+    return { countryCode: normCode, state: effectiveState, allowed, isAdmin, overrides };
+  }
+
   app.post(
     '/api/amaro/reservations/:reservationId/transition',
     requireAuth,
@@ -1703,6 +1780,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         let updatedIsPartialAcceptance: boolean | undefined = undefined;
         let updatedRequestedUnitsTotal: number | undefined = undefined;
         let updatedAcceptedUnitsTotal: number | undefined = undefined;
+        let updatedClientTxRef: string | undefined = undefined;
+        let updatedPaymentMethodDeclared: string | undefined = undefined;
         let folderIdToMarkPartiallyConfirmed: string | undefined = undefined;
 
         const currentRes = existing;
@@ -1763,7 +1842,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           }
 
           const svc = await resolveServiceOrOfficial(currentRes.serviceId, caller.rawIdToken);
-          const setting = await store.getSystemSetting(svc?.countryCode || 'BJ', caller.rawIdToken);
+          const setting = await store.getSystemSetting(svc?.countryCode || 'CI', caller.rawIdToken);
           const recalcQuote = computeAuthoritativeQuote({
             unitPrice: svc?.priceAmount || 0,
             priceKnown:
@@ -1841,13 +1920,24 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             res.status(409).json({ error: 'Cette réservation est déjà réglée et confirmée.' });
             return;
           }
+          const rawTxRef = String(
+            req.body?.transactionRef || req.body?.transactionReference || ''
+          )
+            .trim()
+            .slice(0, 120);
+          const rawMethod = String(req.body?.paymentMethod || '')
+            .trim()
+            .slice(0, 80);
+          if (rawTxRef) updatedClientTxRef = rawTxRef;
+          if (rawMethod) updatedPaymentMethodDeclared = rawMethod;
           nextStatus = 'awaiting_payment';
           nextPaymentStatus = 'initiated';
           notifRecipientId = caller.uid;
           notifKind = 'payment';
-          notifTitle = `Demande de règlement enregistrée : ${existing.serviceTitle}`;
-          notifBody =
-            'Statut : Paiement en attente de vérification serveur AMARO. Aucun reçu définitif n’est émis tant que l’encaissement n’est pas vérifié.';
+          notifTitle = `Paiement en attente de validation : ${existing.serviceTitle}`;
+          notifBody = rawTxRef
+            ? `Référence reçue (${rawTxRef}). Paiement en attente de validation par l’équipe AMARO.`
+            : 'Paiement en attente de validation par l’équipe AMARO.';
         } else if (action === 'client_cancel') {
           if (!isClient && !isAdmin) {
             res.status(403).json({ error: 'Annulation réservée au voyageur titulaire ou à l’administration.' });
@@ -2142,6 +2232,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             isPartialAcceptance: updatedIsPartialAcceptance,
             requestedUnitsTotal: updatedRequestedUnitsTotal,
             acceptedUnitsTotal: updatedAcceptedUnitsTotal,
+            clientTxRef: updatedClientTxRef,
+            paymentMethodDeclared: updatedPaymentMethodDeclared,
             folderIdToMarkPartiallyConfirmed,
             cancelAffiliateReferral,
             releaseStock: shouldReleaseStock
@@ -2183,6 +2275,9 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           isPartialAcceptance: Boolean(updatedIsPartialAcceptance ?? existing.isPartialAcceptance),
           requestedUnitsTotal: updatedRequestedUnitsTotal ?? existing.requestedUnitsTotal ?? null,
           acceptedUnitsTotal: updatedAcceptedUnitsTotal ?? existing.acceptedUnitsTotal ?? null,
+          clientTxRef: updatedClientTxRef ?? (existing as any).clientTxRef ?? null,
+          paymentMethodDeclared:
+            updatedPaymentMethodDeclared ?? (existing as any).paymentMethodDeclared ?? null,
           ...(updatedTotalAmount !== undefined
             ? {
                 breakdown: {
@@ -2468,7 +2563,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
 
       try {
-        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const providerCountryCode = String(req.body?.countryCode || 'CI').toUpperCase().trim() || 'CI';
+        const setting = await store.getSystemSetting(providerCountryCode, caller.rawIdToken);
         const nowIso = new Date().toISOString();
         const providerId = `prv-${caller.uid.slice(0, 24)}`;
         if (store.registerProviderFromPromoteFlow) {
@@ -2479,7 +2575,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
               companyName,
               category,
               cityId,
-              countryCode: 'BJ',
+              countryCode: providerCountryCode,
               phone,
               contactEmail,
               description,
@@ -2543,7 +2639,13 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
 
       try {
-        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const folder = await store.getJourneyFolder(folderId, caller.rawIdToken);
+        if (folder && folder.ownerId !== caller.uid) {
+          res.status(403).json({ error: 'Accès refusé à ce dossier de voyage.' });
+          return;
+        }
+        const folderCountryCode = String(folder?.countryCode || 'CI').toUpperCase().trim() || 'CI';
+        const setting = await store.getSystemSetting(folderCountryCode, caller.rawIdToken);
         const result = await store.declareDossierFee(
           {
             folderId,
@@ -2723,7 +2825,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
 
     try {
-      const setting = await store.getSystemSetting('BJ', rawIdToken || undefined);
+      const evalCountry = String(req.body?.countryCode || 'CI').toUpperCase().trim() || 'CI';
+      const setting = await store.getSystemSetting(evalCountry, rawIdToken || undefined);
       const summary = await store.evaluateDeadlinesAndExpirations(
         {
           nowIso: typeof req.body?.nowIso === 'string' ? req.body.nowIso : undefined,
@@ -2809,9 +2912,13 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
     try {
       const bearer = extractBearerToken(req) || undefined;
-      const setting = await store.getSystemSetting('BJ', bearer);
       const catalogue = await resolveMergedPublishedCatalogue(bearer);
       const existingFailed = await resolveServiceOrOfficial(failedServiceId, bearer);
+      const altCountryCode =
+        existingFailed?.countryCode ||
+        String(req.body?.countryCode || '').toUpperCase().trim() ||
+        'CI';
+      const setting = await store.getSystemSetting(altCountryCode, bearer);
       const failedService: ServerServiceRecord = existingFailed
         ? {
             ...existingFailed,
@@ -2825,7 +2932,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
             ownerId: 'manual_concierge',
             title: 'Prestation à remplacer',
             category,
-            countryCode: 'BJ',
+            countryCode: altCountryCode,
             cityId,
             priceAmount: currentUnitPriceXof,
             priceKnown: currentUnitPriceXof > 0,
@@ -2896,7 +3003,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           res.status(403).json({ error: 'Accès refusé à ce dossier de voyage.' });
           return;
         }
-        const setting = await store.getSystemSetting(folder.countryCode || 'BJ', caller.rawIdToken);
+        const setting = await store.getSystemSetting(folder.countryCode || 'CI', caller.rawIdToken);
         const { scheduleSlots } = await store.listClientScheduleAndActiveReservations(
           folderId,
           caller.uid,
@@ -3100,7 +3207,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   app.post('/api/amaro/rescue/incident', async (req: Request, res: Response) => {
     // Bloc 3: Dynamic Rescue mode ("Signaler un imprévu")
     const incidentType = String(req.body?.incidentType || 'late_arrival').trim();
-    const requestedCountryCode = String(req.body?.countryCode || 'BJ').trim().toUpperCase();
+    const requestedCountryCode = String(req.body?.countryCode || 'CI').trim().toUpperCase();
     const cityId = String(req.body?.cityId || '').trim();
     const category = VALID_CATEGORIES.has(String(req.body?.category || ''))
       ? (req.body.category as ServiceCategory)
@@ -3111,6 +3218,15 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
     try {
       const bearer = extractBearerToken(req) || undefined;
+      const access = await checkCountryAccess(requestedCountryCode, bearer);
+      if (!access.allowed) {
+        res.status(403).json({
+          error: 'Pas encore disponible — Pays en préparation',
+          countryCode: access.countryCode,
+          state: access.state,
+        });
+        return;
+      }
       const setting = await store.getSystemSetting(requestedCountryCode, bearer);
       const catalogue = await resolveMergedPublishedCatalogue(bearer);
       const failedServiceId = String(req.body?.serviceId || '').trim();
@@ -3145,7 +3261,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         includeDemoData: Boolean(setting.includeDemoData),
       });
 
-      const whatsappMessage = `Bonjour AMARO, je signale un imprévu sur place (${incidentType}) à ${cityId} le ${scheduledDate}. ${note}`;
+      const whatsappMessage = `Bonjour AMARO, je signale un imprévu sur place (${incidentType}) à ${cityId} (${requestedCountryCode}) le ${scheduledDate}. ${note}`;
       const cleanWaNumber =
         setting.amaroWhatsappNumber && setting.amaroWhatsappNumber !== OWNER_PLACEHOLDER
           ? setting.amaroWhatsappNumber.replace(/[^0-9]/g, '')
@@ -3155,14 +3271,21 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           ? 'Nous vous proposons d’alléger la demi-journée et de reporter les visites non engagées sans toucher à votre hébergement.'
           : 'Voici les alternatives réelles disponibles dans la même zone ainsi que le contact direct de coordination AMARO.';
 
+      const countryDef = COUNTRIES_REGISTRY.find((c) => c.code === requestedCountryCode);
+      const emergencyNumbers =
+        countryDef?.emergencyNumbers?.length
+          ? countryDef.emergencyNumbers
+          : getEmergencyNumbersForCountry(requestedCountryCode);
+
       res.json({
         ok: true,
+        countryCode: requestedCountryCode,
         incidentType,
         guidance: impactSummary,
         impactSummary,
         alternatives: alt.alternatives,
         emptyReason: alt.honestEmptyMessage,
-        emergencyNumbers: DEFAULT_EMERGENCY_NUMBERS_BJ,
+        emergencyNumbers,
         whatsappContactConfigured: Boolean(cleanWaNumber),
         whatsappUrl: cleanWaNumber
           ? `https://wa.me/${cleanWaNumber}?text=${encodeURIComponent(whatsappMessage)}`
@@ -3233,7 +3356,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         return;
       }
       try {
-        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
+        const setting = await store.getSystemSetting('CI', caller.rawIdToken);
         const result = await store.deleteClientAccountCompliant(
           {
             userId: caller.uid,
@@ -3268,7 +3391,12 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       ...c,
       state: overrides[c.code] || c.state,
     }));
-    res.json({ ok: true, countries: list });
+    res.json({
+      ok: true,
+      total: list.length,
+      openCount: list.filter((c) => c.state === 'ouvert').length,
+      countries: list,
+    });
   });
 
   app.post(
@@ -3312,65 +3440,53 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       return;
     }
 
-    let effectiveState = unCountry.state;
-    try {
-      const setting = await store.getSystemSetting('BJ').catch(() => null);
-      if (setting?.countryOperationalStates && setting.countryOperationalStates[normCode]) {
-        effectiveState = setting.countryOperationalStates[normCode];
-      }
-    } catch {}
+    const bearer = extractBearerToken(req) || undefined;
+    const access = await checkCountryAccess(normCode, bearer);
 
-    // Règle de blocage serveur C5.3 :
-    // Si le pays n'est pas « Ouvert », toute demande de ses données est refusée par le serveur.
-    // Répondre « Pas encore disponible ».
-    let isAdmin = false;
-    const bearer = extractBearerToken(req);
-    if (bearer) {
-      const caller = await verifyToken(bearer);
-      if (caller) {
-        isAdmin = await isVerifiedAdminCaller({
-          ...caller,
-          rawIdToken: bearer,
-        });
-      }
-    }
-
-    const isAllowed =
-      effectiveState === 'ouvert' ||
-      (effectiveState === 'ouvert_admin_seulement' && isAdmin);
-
-    if (!isAllowed) {
+    if (!access.allowed) {
       res.status(403).json({
         error: 'Pas encore disponible',
         countryCode: normCode,
-        state: effectiveState,
+        state: access.state,
       });
       return;
     }
 
-    // Règle de non-contamination C5.5 :
-    // Quand la Côte d'Ivoire est affichée, aucune fiche, aucun numéro, aucun texte légal
-    // et aucune mention du Bénin ne doit apparaître.
-    if (normCode === 'CI') {
+    const countryDef = COUNTRIES_REGISTRY.find((c) => c.code === normCode);
+    const countryServices = ALL_PUBLIC_DIRECTORIES.filter(
+      (it) => it.countryCode === normCode && it.status === 'published' && it.dataOrigin !== 'demo_test'
+    );
+    const emergencyNumbers =
+      countryDef?.emergencyNumbers?.length
+        ? countryDef.emergencyNumbers
+        : getEmergencyNumbersForCountry(normCode);
+
+    if (normCode === 'CI' && countryDef) {
       res.json({
         ok: true,
         countryCode: 'CI',
-        countryName: 'Côte d’Ivoire',
-        currency: 'XOF',
-        emergencyNumbers: getEmergencyNumbersForCountry('CI'),
-        services: [],
-        legalTexts: 'Conditions générales et formalités d’entrée Côte d’Ivoire (en préparation).',
+        countryName: countryDef.nameFr,
+        currency: countryDef.currency,
+        languages: countryDef.languages,
+        protocols: countryDef.protocols,
+        paymentMethods: countryDef.paymentMethods,
+        cities: countryDef.cities,
+        emergencyNumbers,
+        services: countryServices,
+        legalTexts: unCountry.legalTexts || 'Conditions générales Amaro Côte d’Ivoire (XOF)',
         country: {
           code: 'CI',
-          name: 'Côte d’Ivoire',
-          currency: 'XOF',
-          timezone: 'Africa/Abidjan (UTC+0)',
+          name: countryDef.nameFr,
+          currency: countryDef.currency,
+          timezone: countryDef.timezone,
           dossierFeeAmount: 20000,
-          languages: ['Français'],
-          priorityCities: ['Abidjan', 'Yamoussoukro', 'Grand-Bassam', 'San-Pédro', 'Bouaké'],
-          emergencyNumbers: getEmergencyNumbersForCountry('CI'),
-          services: [],
-          legalTexts: 'Conditions générales et formalités d’entrée Côte d’Ivoire (en préparation).',
+          languages: countryDef.languages,
+          priorityCities: countryDef.cities.map((c) => c.name),
+          protocols: countryDef.protocols,
+          paymentMethods: countryDef.paymentMethods,
+          emergencyNumbers,
+          services: countryServices,
+          legalTexts: unCountry.legalTexts || 'Conditions générales Amaro Côte d’Ivoire (XOF)',
         },
       });
       return;
@@ -3378,8 +3494,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
 
     res.json({
       ok: true,
-      country: unCountry,
-      emergencyNumbers: getEmergencyNumbersForCountry(normCode),
+      countryCode: normCode,
+      country: countryDef || unCountry,
+      services: countryServices,
+      emergencyNumbers,
     });
   });
 
@@ -4196,15 +4314,25 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       res.status(429).json({ error: 'Trop de générations rapprochées.' });
       return;
     }
-    const requestedCountryCode = String(req.body?.countryCode || 'BJ').trim().toUpperCase();
+    const requestedCountryCode = String(req.body?.countryCode || 'CI').trim().toUpperCase();
+    const bearer = extractBearerToken(req) || undefined;
+    const countryAccess = await checkCountryAccess(requestedCountryCode, bearer);
+    if (!countryAccess.allowed) {
+      res.status(403).json({
+        error: 'Pas encore disponible — Pays en préparation',
+        countryCode: countryAccess.countryCode,
+        state: countryAccess.state,
+      });
+      return;
+    }
     const rawCitiesInput = Array.isArray(req.body?.preferredCities)
       ? req.body.preferredCities
       : Array.isArray(req.body?.cityIds)
       ? req.body.cityIds
       : req.body?.cityId
       ? [String(req.body.cityId)]
-      : requestedCountryCode === 'BJ'
-      ? ['cotonou', 'ouidah']
+      : requestedCountryCode === 'CI'
+      ? ['abidjan', 'grand-bassam']
       : [];
     const rawCities: string[] = rawCitiesInput.map(String).slice(0, 6);
     const daysCount = Math.max(2, Math.min(14, Number(req.body?.daysCount || 4)));
@@ -4313,10 +4441,20 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
         (rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
           ? (rawContext as Record<string, unknown>).countryCode || ''
           : '') ||
-        'BJ'
+        'CI'
     )
       .trim()
       .toUpperCase();
+
+    const assistantAccess = await checkCountryAccess(requestedCountryCode, bearer || undefined);
+    if (!assistantAccess.allowed) {
+      res.status(403).json({
+        error: 'Pas encore disponible — Pays en préparation',
+        countryCode: assistantAccess.countryCode,
+        state: assistantAccess.state,
+      });
+      return;
+    }
 
     const countrySetting = await store.getSystemSetting(requestedCountryCode).catch(() => null);
 

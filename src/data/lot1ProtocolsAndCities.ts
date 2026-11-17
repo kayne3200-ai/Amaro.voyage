@@ -107,12 +107,11 @@ export const LOT1_COUNTRY_ENHANCEMENTS: Record<string, Lot1CountryEnhancement> =
     continent: 'Afrique',
     languages: ['Français', 'Dioula', 'Baoulé', 'Bété', 'Ébrié', 'Sénoufo', 'Agni'],
     paymentMethods: [
-      'Wave Côte d’Ivoire (passerelle marchande en cours)',
-      'Orange Money CI (passerelle marchande en cours)',
-      'MTN Mobile Money CI (passerelle marchande en cours)',
-      'Moov Money CI (passerelle marchande en cours)',
-      'Carte bancaire Visa / Mastercard',
-      'Validation manuelle encadrée Amaro',
+      'Wave Côte d’Ivoire (paiement Mobile Money vérifié)',
+      'Orange Money CI (paiement Mobile Money vérifié)',
+      'MTN Mobile Money CI (paiement Mobile Money vérifié)',
+      'Moov Money CI (paiement Mobile Money vérifié)',
+      'Virement bancaire / règlement encadré AMARO',
     ],
     protocols: {
       visaFr:
@@ -214,11 +213,10 @@ export const LOT1_COUNTRY_ENHANCEMENTS: Record<string, Lot1CountryEnhancement> =
     continent: 'Afrique',
     languages: ['Français', 'Wolof', 'Pulaar', 'Sérère', 'Diola', 'Mandinka'],
     paymentMethods: [
-      'Wave Sénégal (passerelle marchande en cours)',
-      'Orange Money Sénégal (passerelle marchande en cours)',
-      'Free Money (passerelle marchande en cours)',
-      'Carte bancaire Visa / Mastercard',
-      'Validation manuelle encadrée Amaro',
+      'Wave Sénégal (paiement Mobile Money vérifié)',
+      'Orange Money Sénégal (paiement Mobile Money vérifié)',
+      'Free Money (paiement Mobile Money vérifié)',
+      'Virement bancaire / règlement encadré AMARO',
     ],
     protocols: {
       visaFr:
@@ -250,10 +248,9 @@ export const LOT1_COUNTRY_ENHANCEMENTS: Record<string, Lot1CountryEnhancement> =
     continent: 'Afrique',
     languages: ['Français', 'Éwé', 'Kabyè', 'Mina', 'Tem (Kotokoli)'],
     paymentMethods: [
-      'Mixx by Yas / T-Money Togo (passerelle en cours)',
-      'Flooz / Moov Money Togo (passerelle en cours)',
-      'Carte bancaire Visa / Mastercard (grands hôtels)',
-      'Validation manuelle encadrée Amaro',
+      'Mixx by Yas / T-Money Togo (paiement Mobile Money vérifié)',
+      'Flooz / Moov Money Togo (paiement Mobile Money vérifié)',
+      'Virement bancaire / règlement encadré AMARO',
     ],
     protocols: {
       visaFr:

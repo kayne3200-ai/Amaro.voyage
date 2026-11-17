@@ -1,4 +1,4 @@
-import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
   signOut,
@@ -25,73 +25,134 @@ import {
   verifyFirestoreConnectivity,
 } from './lib/firebase';
 import { authorizedFetch } from './lib/apiClient';
-import type {
-  AssistantDraftItinerary,
-  CatalogueItem,
-  CulturalStoryDoc,
-  CurrencyCode,
-  DataOriginType,
-  EmergencyNumberEntry,
-  FolderExpenseEntry,
-  FolderShareDoc,
-  IdentityVerificationDoc,
-  JournalEntryDoc,
-  JourneyFolderDoc,
-  JourneyIntentionDoc,
-  JourneyItemDoc,
-  LocaleCode,
-  NotificationDoc,
-  PartnerActivationLevel,
-  PartnerCommissionStatus,
-  PartnerProfileDoc,
-  PartnerReferralDoc,
-  PilotPartnerDoc,
-  PilotStockDoc,
-  PlatformContentDoc,
-  ProviderOfferDoc,
-  ProviderProfileDoc,
-  ProviderThankYouDoc,
-  ReservationDispatchChannel,
-  ReservationDoc,
-  ServiceCategory,
-  SystemSettingDoc,
-  TravelerReviewDoc,
-  UserSavedPreferencesDoc,
-  VerificationLevel,
+import {
+  PENDING_ASSISTANT_DRAFT_KEY,
+  type AssistantDraftItinerary,
+  type CatalogueItem,
+  type CulturalStoryDoc,
+  type CurrencyCode,
+  type DataOriginType,
+  type EmergencyNumberEntry,
+  type FolderExpenseEntry,
+  type FolderShareDoc,
+  type IdentityVerificationDoc,
+  type JournalEntryDoc,
+  type JourneyFolderDoc,
+  type JourneyIntentionDoc,
+  type JourneyItemDoc,
+  type LocaleCode,
+  type NotificationDoc,
+  type PartnerActivationLevel,
+  type PartnerCommissionStatus,
+  type PartnerProfileDoc,
+  type PartnerReferralDoc,
+  type PilotPartnerDoc,
+  type PilotStockDoc,
+  type PlatformContentDoc,
+  type ProviderOfferDoc,
+  type ProviderProfileDoc,
+  type ProviderThankYouDoc,
+  type ReservationDispatchChannel,
+  type ReservationDoc,
+  type ServiceCategory,
+  type SystemSettingDoc,
+  type TravelerReviewDoc,
+  type UserSavedPreferencesDoc,
+  type VerificationLevel,
 } from './types/amaro';
 import {
-  ALL_PUBLIC_DIRECTORIES,
-  BENIN_PUBLIC_DIRECTORY,
-  COUNTRIES_REGISTRY,
-  DEMO_REFERENCE_CATALOGUE,
-  EDITORIAL_IMAGES,
-  resolveItemEditorialImage,
-} from './data/amaroRegistry';
+  ArrowRight,
+  CheckCircle2,
+  Clock,
+  Compass,
+  Globe2,
+  Lock,
+  Search,
+} from 'lucide-react';
+import {
+  UN_193_COUNTRIES,
+  getEffectiveCountryState,
+  getUNCountryByCode,
+  isCountryOpen,
+  type CountryOperationalState,
+} from './data/unCountries';
 import {
   DEFAULT_EMERGENCY_NUMBERS_BJ,
   DEFAULT_PLATFORM_CONTENT,
 } from './data/amaroGovernanceDefaults';
 import { AmaroHeader, type AmaroTab } from './components/amaro/AmaroHeader';
-import {
-  ExplorerView,
-  type ExplorerBookingExtras,
-} from './components/amaro/ExplorerView';
-import { JourneyHubView } from './components/amaro/JourneyHubView';
-import {
-  AssistantRescueView,
-  PENDING_ASSISTANT_DRAFT_KEY,
-} from './components/amaro/AssistantRescueView';
-import { PromoteServicesView } from './components/amaro/PromoteServicesView';
-import { WorkspacesAdminView } from './components/amaro/WorkspacesAdminView';
-import { AuthModal } from './components/amaro/AuthModal';
-import {
-  LegalAndCharterModal,
-  type LegalDocKey,
-} from './components/amaro/LegalAndCharterModal';
-import { SharedFolderReadOnlyView } from './components/amaro/SharedFolderReadOnlyView';
+import type { ExplorerBookingExtras } from './components/amaro/ExplorerView';
+import type { LegalDocKey } from './components/amaro/LegalAndCharterModal';
+
+type AmaroRegistryModule = typeof import('./data/amaroRegistry');
+let cachedRegistryPromise: Promise<AmaroRegistryModule> | null = null;
+function loadAmaroRegistry(): Promise<AmaroRegistryModule> {
+  if (!cachedRegistryPromise) {
+    cachedRegistryPromise = import('./data/amaroRegistry');
+  }
+  return cachedRegistryPromise;
+}
+
+const ExplorerView = lazy(() =>
+  import('./components/amaro/ExplorerView').then((m) => ({ default: m.ExplorerView }))
+);
+const JourneyHubView = lazy(() =>
+  import('./components/amaro/JourneyHubView').then((m) => ({ default: m.JourneyHubView }))
+);
+const AssistantRescueView = lazy(() =>
+  import('./components/amaro/AssistantRescueView').then((m) => ({
+    default: m.AssistantRescueView,
+  }))
+);
+const PromoteServicesView = lazy(() =>
+  import('./components/amaro/PromoteServicesView').then((m) => ({
+    default: m.PromoteServicesView,
+  }))
+);
+const WorkspacesAdminView = lazy(() =>
+  import('./components/amaro/WorkspacesAdminView').then((m) => ({
+    default: m.WorkspacesAdminView,
+  }))
+);
+const AuthModal = lazy(() =>
+  import('./components/amaro/AuthModal').then((m) => ({ default: m.AuthModal }))
+);
+const LegalAndCharterModal = lazy(() =>
+  import('./components/amaro/LegalAndCharterModal').then((m) => ({
+    default: m.LegalAndCharterModal,
+  }))
+);
+const SharedFolderReadOnlyView = lazy(() =>
+  import('./components/amaro/SharedFolderReadOnlyView').then((m) => ({
+    default: m.SharedFolderReadOnlyView,
+  }))
+);
+
+const LazyViewFallback = (
+  <div className="py-16 px-4 text-center text-sm text-slate-600 dark:text-slate-300">
+    Chargement de l’espace…
+  </div>
+);
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'kayne3200@gmail.com';
 const REFERRAL_STORAGE_KEY = 'amaro_referral_attribution';
+
+function readRequestedCountryFromLocation(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const qCountry = (params.get('country') || params.get('pays') || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(qCountry)) return qCountry;
+
+    const pathMatch = window.location.pathname.match(/^\/(?:country|pays)\/([a-zA-Z]{2})(?:\/|$)/i);
+    if (pathMatch?.[1]) return pathMatch[1].toUpperCase();
+
+    const hashMatch = window.location.hash.match(/(?:^|[#&?])(?:country|pays)=([a-zA-Z]{2})\b/i);
+    if (hashMatch?.[1]) return hashMatch[1].toUpperCase();
+  } catch {
+    // ignore URL errors
+  }
+  return null;
+}
 
 function makeSafeId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -226,14 +287,28 @@ function AmaroPlatform() {
   } | null>(null);
   const [locale, setLocale] = useState<LocaleCode>('fr');
   const [currency, setCurrency] = useState<CurrencyCode>('XOF');
-  const [selectedCountryCode, setSelectedCountryCode] = useState<string>('BJ');
-  const handleSelectCountry = useCallback((nextCode: string) => {
-    setSelectedCountryCode(nextCode);
-    const targetCountry = COUNTRIES_REGISTRY.find((c) => c.code === nextCode);
-    if (targetCountry?.currency) {
-      setCurrency(targetCountry.currency);
-    }
-  }, []);
+  const [requestedUrlCountry, setRequestedUrlCountry] = useState<string | null>(() =>
+    readRequestedCountryFromLocation()
+  );
+  const [publicCountryStates, setPublicCountryStates] = useState<
+    Record<string, CountryOperationalState>
+  >({});
+  const [entryMode, setEntryMode] = useState<'home' | 'country' | 'locked_country'>(() => {
+    const req = readRequestedCountryFromLocation();
+    if (!req) return 'home';
+    return isCountryOpen(req) ? 'country' : 'locked_country';
+  });
+  const [lockedAttemptCode, setLockedAttemptCode] = useState<string | null>(() => {
+    const req = readRequestedCountryFromLocation();
+    return req && !isCountryOpen(req) ? req : null;
+  });
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(() => {
+    const req = readRequestedCountryFromLocation();
+    if (req && isCountryOpen(req)) return req;
+    return 'CI';
+  });
+  const [homeSearchQuery, setHomeSearchQuery] = useState<string>('');
+  const [homeContinentFilter, setHomeContinentFilter] = useState<string>('Tous');
   const [isDark, setIsDark] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocKey | null>(null);
@@ -275,6 +350,20 @@ function AmaroPlatform() {
     Record<string, PlatformContentDoc>
   >({});
   const [countrySetting, setCountrySetting] = useState<SystemSettingDoc | null>(null);
+  const [registryModule, setRegistryModule] = useState<AmaroRegistryModule | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadAmaroRegistry()
+      .then((mod) => {
+        if (!cancelled) setRegistryModule(mod);
+      })
+      .catch(() => {
+        // handled gracefully if offline
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [activeReferralCode, setActiveReferralCode] = useState<string | null>(() => {
     const existing = readValidStoredReferral(30);
     return existing?.code || null;
@@ -384,6 +473,138 @@ function AmaroPlatform() {
     authUser?.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
   const isAdmin = isBootstrappedAdmin || (Boolean(authUser?.emailVerified) && hasAdminDoc);
   const hasFirestoreSession = canUserAccessFirestore(authUser);
+
+  const effectiveCountryStates = useMemo<Record<string, CountryOperationalState>>(
+    () => ({
+      ...publicCountryStates,
+      ...(countrySetting?.countryOperationalStates || {}),
+    }),
+    [publicCountryStates, countrySetting?.countryOperationalStates]
+  );
+
+  // Sync public operational states from server on load & handle browser URL navigation
+  useEffect(() => {
+    let active = true;
+    fetch('/api/amaro/country-states')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active || !data?.countries || !Array.isArray(data.countries)) return;
+        const nextMap: Record<string, CountryOperationalState> = {};
+        for (const c of data.countries) {
+          if (c?.code && c?.state) {
+            nextMap[String(c.code).toUpperCase()] = c.state as CountryOperationalState;
+          }
+        }
+        setPublicCountryStates(nextMap);
+      })
+      .catch(() => {
+        // Offline fallback uses unCountries defaults + Firestore snapshot
+      });
+
+    const onUrlChange = () => {
+      const req = readRequestedCountryFromLocation();
+      setRequestedUrlCountry(req);
+    };
+    window.addEventListener('popstate', onUrlChange);
+    window.addEventListener('hashchange', onUrlChange);
+    return () => {
+      active = false;
+      window.removeEventListener('popstate', onUrlChange);
+      window.removeEventListener('hashchange', onUrlChange);
+    };
+  }, []);
+
+  // Enforce URL country lock dynamically when states or admin privileges change
+  useEffect(() => {
+    if (requestedUrlCountry) {
+      if (isCountryOpen(requestedUrlCountry, effectiveCountryStates, isAdmin)) {
+        setSelectedCountryCode(requestedUrlCountry);
+        setLockedAttemptCode(null);
+        setEntryMode('country');
+        const targetCountry = registryModule?.COUNTRIES_REGISTRY.find(
+          (c) => c.code === requestedUrlCountry
+        );
+        if (targetCountry?.currency) {
+          setCurrency(targetCountry.currency);
+        }
+      } else {
+        setLockedAttemptCode(requestedUrlCountry);
+        setEntryMode('locked_country');
+      }
+      return;
+    }
+
+    if (
+      entryMode === 'country' &&
+      !isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)
+    ) {
+      setLockedAttemptCode(selectedCountryCode);
+      setEntryMode('locked_country');
+    } else if (
+      entryMode === 'locked_country' &&
+      lockedAttemptCode &&
+      isCountryOpen(lockedAttemptCode, effectiveCountryStates, isAdmin)
+    ) {
+      setSelectedCountryCode(lockedAttemptCode);
+      setLockedAttemptCode(null);
+      setEntryMode('country');
+    }
+  }, [
+    requestedUrlCountry,
+    effectiveCountryStates,
+    isAdmin,
+    entryMode,
+    selectedCountryCode,
+    lockedAttemptCode,
+    registryModule,
+  ]);
+
+  const handleGoHome = useCallback(() => {
+    setRequestedUrlCountry(null);
+    setLockedAttemptCode(null);
+    setEntryMode('home');
+    setActiveTab('explorer');
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('country');
+      url.searchParams.delete('pays');
+      if (/^\/(?:country|pays)\/[a-zA-Z]{2}(?:\/|$)/i.test(url.pathname)) {
+        url.pathname = '/';
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore history errors
+    }
+  }, []);
+
+  const handleSelectCountry = useCallback(
+    (nextCode: string) => {
+      const norm = String(nextCode || '').toUpperCase().trim();
+      if (!isCountryOpen(norm, effectiveCountryStates, isAdmin)) {
+        showToast('Ce pays est actuellement « En préparation ». Ouverture progressive pays par pays.');
+        return;
+      }
+      setRequestedUrlCountry(norm);
+      setLockedAttemptCode(null);
+      setSelectedCountryCode(norm);
+      setEntryMode('country');
+      setActiveTab('explorer');
+      const targetCountry = registryModule?.COUNTRIES_REGISTRY.find((c) => c.code === norm);
+      if (targetCountry?.currency) {
+        setCurrency(targetCountry.currency);
+      } else if (norm === 'CI' || norm === 'BJ') {
+        setCurrency('XOF');
+      }
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('country', norm);
+        window.history.replaceState({}, '', url.toString());
+      } catch {
+        // ignore
+      }
+    },
+    [effectiveCountryStates, isAdmin, registryModule, showToast]
+  );
 
   const setSelectedFolderId = useCallback(
     (folderId: string) => {
@@ -616,18 +837,30 @@ function AmaroPlatform() {
     );
 
     const unsubSettings = onSnapshot(
-      doc(db, 'system_settings', 'BJ'),
-      (snap) => {
+      doc(db, 'system_settings', 'CI'),
+      async (snap) => {
         if (snap.exists()) {
           setCountrySetting({
             id: snap.id,
             ...(snap.data() as Omit<SystemSettingDoc, 'id'>),
           });
         } else {
-          setCountrySetting(null);
+          try {
+            const legacySnap = await getDoc(doc(db, 'system_settings', 'BJ'));
+            if (legacySnap.exists()) {
+              setCountrySetting({
+                id: legacySnap.id,
+                ...(legacySnap.data() as Omit<SystemSettingDoc, 'id'>),
+              });
+            } else {
+              setCountrySetting(null);
+            }
+          } catch {
+            setCountrySetting(null);
+          }
         }
       },
-      (err) => handleFirestoreError(err, OperationType.GET, 'system_settings/BJ')
+      (err) => handleFirestoreError(err, OperationType.GET, 'system_settings/CI')
     );
 
     const qActiveStocks = query(
@@ -1348,8 +1581,10 @@ function AmaroPlatform() {
         overriddenIds.add(s.id);
       }
     }
+    const staticDirectories = registryModule?.ALL_PUBLIC_DIRECTORIES || [];
+    const demoDirectory = registryModule?.DEMO_REFERENCE_CATALOGUE || [];
     const mergedPublished = publishedServices.map((s) => {
-      const staticMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === s.id);
+      const staticMatch = staticDirectories.find((b) => b.id === s.id);
       if (!staticMatch) return s;
       return {
         ...staticMatch,
@@ -1357,11 +1592,11 @@ function AmaroPlatform() {
         siteEditorial: staticMatch.siteEditorial,
       };
     });
-    const remainingDirectory = ALL_PUBLIC_DIRECTORIES.filter(
+    const remainingDirectory = staticDirectories.filter(
       (b) => !overriddenIds.has(b.id)
     );
     const remainingDemo = countrySetting?.includeDemoData
-      ? DEMO_REFERENCE_CATALOGUE.filter((d) => !overriddenIds.has(d.id))
+      ? demoDirectory.filter((d) => !overriddenIds.has(d.id))
       : [];
 
     const seenIds = new Set<string>();
@@ -1377,7 +1612,7 @@ function AmaroPlatform() {
       uniqueItems.push(item);
     }
     return uniqueItems;
-  }, [allCatalogueServices, countrySetting?.includeDemoData, publishedServices]);
+  }, [allCatalogueServices, countrySetting?.includeDemoData, publishedServices, registryModule]);
 
   // Merged Platform Content (Defaults + Firestore Admin Overrides)
   const platformContentMap = useMemo(() => {
@@ -1387,22 +1622,43 @@ function AmaroPlatform() {
     };
   }, [firestorePlatformContents]);
 
-  // Unified Benin Emergency Numbers (Bloc 3.2: single authoritative source)
+  // Dynamic Country-Isolated Emergency Numbers (zero Benin fallback on other countries)
   const emergencyNumbers = useMemo<EmergencyNumberEntry[]>(() => {
-    const docOverride = firestorePlatformContents['numeros_urgence_benin'];
-    const rawEmergencyJson = docOverride?.structuredJson || docOverride?.body;
-    if (rawEmergencyJson) {
-      try {
-        const parsed = JSON.parse(rawEmergencyJson);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+    if (selectedCountryCode === 'BJ') {
+      const docOverride = firestorePlatformContents['numeros_urgence_benin'];
+      const rawEmergencyJson = docOverride?.structuredJson || docOverride?.body;
+      if (rawEmergencyJson) {
+        try {
+          const parsed = JSON.parse(rawEmergencyJson);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        } catch {
+          // Fallback to BJ defaults below
         }
-      } catch {
-        // Fallback to default emergency registry
       }
+      return DEFAULT_EMERGENCY_NUMBERS_BJ;
     }
-    return DEFAULT_EMERGENCY_NUMBERS_BJ;
-  }, [firestorePlatformContents]);
+
+    const registries = registryModule?.COUNTRIES_REGISTRY || [];
+    const activeDef =
+      registries.find((c) => c.code === selectedCountryCode) ||
+      registries.find((c) => c.code === 'CI');
+    if (activeDef?.emergencyNumbers && activeDef.emergencyNumbers.length > 0) {
+      return activeDef.emergencyNumbers.map((em, idx) => ({
+        id: `${activeDef.code}-em-${idx}`,
+        labelFr: em.serviceFr,
+        zoneFr: activeDef.nameFr,
+        serviceFr: em.serviceFr,
+        serviceEn: em.serviceEn,
+        number: em.number,
+        source: em.sourceNote,
+        verifiedDate: '2026',
+        verifiedByOwner: !em.number.includes('vérifier'),
+      }));
+    }
+    return [];
+  }, [firestorePlatformContents, registryModule, selectedCountryCode]);
 
   // Real Local Contribution Total (Bloc 9.6: strictly from paid & verified reservations, never invented)
   const realLocalContributionTotalXof = useMemo(() => {
@@ -1518,9 +1774,11 @@ function AmaroPlatform() {
       }
 
       const folderId = makeSafeId('folder');
+      const { COUNTRIES_REGISTRY: loadedCountries } = await loadAmaroRegistry();
       const activeCountryDef =
-        COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
-        COUNTRIES_REGISTRY[0];
+        loadedCountries.find((c) => c.code === selectedCountryCode) ||
+        loadedCountries.find((c) => c.code === 'CI') ||
+        loadedCountries[0];
       const primaryCityId =
         draft.preferredCities?.[0] ||
         draft.cities?.[0] ||
@@ -1659,9 +1917,11 @@ function AmaroPlatform() {
     if (!authUser?.uid) throw new Error('Non authentifié');
 
     const newFolderId = makeSafeId('folder');
+    const { COUNTRIES_REGISTRY: loadedCountries } = await loadAmaroRegistry();
     const activeCountryDef =
-      COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
-      COUNTRIES_REGISTRY[0];
+      loadedCountries.find((c) => c.code === selectedCountryCode) ||
+      loadedCountries.find((c) => c.code === 'CI') ||
+      loadedCountries[0];
     try {
       await setDoc(doc(db, 'journey_folders', newFolderId), {
         ownerId: authUser.uid,
@@ -1781,8 +2041,8 @@ function AmaroPlatform() {
       await setDoc(doc(db, 'journey_folders', newFolderId), {
         ownerId: authUser.uid,
         title: `Copie modèle — ${sourceFolder.title}`.slice(0, 135),
-        countryCode: sourceFolder.countryCode || 'BJ',
-        primaryCityId: sourceFolder.primaryCityId || 'cotonou',
+        countryCode: sourceFolder.countryCode || 'CI',
+        primaryCityId: sourceFolder.primaryCityId || 'abidjan',
         startDate: sourceFolder.startDate,
         endDate: sourceFolder.endDate,
         travelersCount: sourceFolder.travelersCount || 2,
@@ -2410,14 +2670,25 @@ function AmaroPlatform() {
     }
   };
 
-  const handleClientInitiatePayment = async (res: ReservationDoc) => {
+  const handleClientInitiatePayment = async (
+    res: ReservationDoc,
+    paymentDetails?: { paymentMethod?: string; transactionRef?: string }
+  ) => {
     try {
       const resp = await authorizedFetch(
         `/api/amaro/reservations/${encodeURIComponent(res.id)}/transition`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'client_initiate_payment' }),
+          body: JSON.stringify({
+            action: 'client_initiate_payment',
+            ...(paymentDetails?.paymentMethod
+              ? { paymentMethod: paymentDetails.paymentMethod }
+              : {}),
+            ...(paymentDetails?.transactionRef
+              ? { transactionRef: paymentDetails.transactionRef }
+              : {}),
+          }),
         }
       );
       const data = await resp.json();
@@ -2425,9 +2696,7 @@ function AmaroPlatform() {
         showToast(data?.error || 'Demande de règlement refusée.');
         return;
       }
-      showToast(
-        'Demande de règlement enregistrée. En attente de vérification financière Amaro.'
-      );
+      showToast('Paiement en attente de validation par l’équipe AMARO.');
     } catch {
       showToast('Erreur de liaison avec le serveur de paiement.');
     }
@@ -2495,7 +2764,7 @@ function AmaroPlatform() {
           0,
           95
         ),
-        countryCode: 'BJ',
+        countryCode: selectedCountryCode || 'CI',
         cityId,
         title: title.slice(0, 155),
         story: story.slice(0, 2400),
@@ -2773,6 +3042,8 @@ function AmaroPlatform() {
     if (!authUser?.uid || !myProvider) return;
     const isVerifiedPartner = myProvider.verificationStatus === 'verified';
     const serviceId = draft.id || makeSafeId('srv');
+    const { COUNTRIES_REGISTRY: loadedCountries, resolveItemEditorialImage } =
+      await loadAmaroRegistry();
     const imgMeta = resolveItemEditorialImage({
       category: draft.category,
       cityId: draft.cityId,
@@ -2806,8 +3077,11 @@ function AmaroPlatform() {
         await setDoc(ref, {
           providerId: myProvider.id,
           ownerId: authUser.uid,
-          countryCode: 'BJ',
-          currency: 'XOF',
+          countryCode: myProvider.countryCode || selectedCountryCode || 'CI',
+          currency:
+            (loadedCountries.find(
+              (c) => c.code === (myProvider.countryCode || selectedCountryCode || 'CI')
+            )?.currency as CurrencyCode) || 'XOF',
           imageKey: imgMeta.key,
           imageLicense: imgMeta.license.slice(0, 195),
           ...commonFields,
@@ -2912,7 +3186,9 @@ function AmaroPlatform() {
   ) => {
     if (!authUser?.uid || !isAdmin) return;
     const cleanId = directoryServiceId.trim();
-    const staticMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === cleanId);
+    const { ALL_PUBLIC_DIRECTORIES: staticDirectories, resolveItemEditorialImage } =
+      await loadAmaroRegistry();
+    const staticMatch = staticDirectories.find((b) => b.id === cleanId);
     const existingDoc = allCatalogueServices.find((s) => s.id === cleanId);
     const baseItem = existingDoc || staticMatch;
     if (!baseItem) {
@@ -2930,7 +3206,7 @@ function AmaroPlatform() {
           ownerId: provider.ownerId,
           title: baseItem.title.slice(0, 155),
           category: baseItem.category,
-          countryCode: 'BJ',
+          countryCode: baseItem.countryCode || 'CI',
           cityId: baseItem.cityId,
           address: (baseItem.address || '').slice(0, 230),
           description: (baseItem.description || '').slice(0, 1900),
@@ -3072,9 +3348,10 @@ function AmaroPlatform() {
 
   const handleAdminSaveExtendedSettings = async (patch: Partial<SystemSettingDoc>) => {
     if (!authUser?.uid || !isAdmin) return;
-    const ref = doc(db, 'system_settings', 'BJ');
+    const refBj = doc(db, 'system_settings', 'BJ');
+    const refCi = doc(db, 'system_settings', 'CI');
     try {
-      const snap = await getDoc(ref);
+      const snap = await getDoc(refBj);
       const base = snap.exists()
         ? {}
         : {
@@ -3087,7 +3364,7 @@ function AmaroPlatform() {
           };
       const { id: _ignore, ...cleanPatch } = patch as any;
       await setDoc(
-        ref,
+        refBj,
         {
           ...base,
           ...cleanPatch,
@@ -3096,9 +3373,27 @@ function AmaroPlatform() {
         },
         { merge: true }
       );
+      // Sync platform legal, Mobile Money, and fee settings into active Côte d’Ivoire doc so backend CI reads match admin settings
+      const { countryCode: _cc, ...ciPatch } = cleanPatch;
+      await setDoc(
+        refCi,
+        {
+          countryCode: 'CI',
+          currency: 'XOF',
+          commissionPercent:
+            ciPatch.commissionPercent ?? countrySetting?.commissionPercent ?? 10,
+          serviceFeeFlat:
+            ciPatch.serviceFeeFlat ?? countrySetting?.serviceFeeFlat ?? 1_000,
+          taxPercent: ciPatch.taxPercent ?? countrySetting?.taxPercent ?? 0,
+          ...ciPatch,
+          updatedBy: authUser.uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
       await writeAuditLog(
-        'UPDATE_GOVERNANCE_SETTINGS_BJ',
-        'BJ',
+        'UPDATE_GOVERNANCE_SETTINGS',
+        'CI_BJ',
         `Paramètres étendus mis à jour (${Object.keys(cleanPatch).join(', ')})`
       );
       showToast('Paramètres opérationnels et juridiques enregistrés.');
@@ -3270,6 +3565,8 @@ function AmaroPlatform() {
       : makeSafeId('srv-adm');
     const cleanProvId =
       payload.providerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'dir-admin-benin';
+    const { COUNTRIES_REGISTRY: loadedCountries, resolveItemEditorialImage } =
+      await loadAmaroRegistry();
     const imgMeta = resolveItemEditorialImage({
       title: payload.title,
       category: payload.category,
@@ -3331,13 +3628,15 @@ function AmaroPlatform() {
           ownerId: 'manual_concierge',
           title: payload.title.slice(0, 155),
           category: payload.category,
-          countryCode: 'BJ',
+          countryCode: selectedCountryCode || 'CI',
           cityId: payload.cityId,
           address: payload.address.slice(0, 230),
           description: payload.description.slice(0, 1900),
           priceAmount: payload.priceKnown ? Math.max(0, Number(payload.priceAmount)) : 0,
           priceKnown: payload.priceKnown,
-          currency: 'XOF',
+          currency:
+            (loadedCountries.find((c) => c.code === (selectedCountryCode || 'CI'))
+              ?.currency as CurrencyCode) || 'XOF',
           durationMinutes: Math.max(0, Math.round(payload.durationMinutes)),
           capacity: Math.max(1, Math.round(payload.capacity)),
           dataOrigin: payload.dataOrigin,
@@ -3451,7 +3750,9 @@ function AmaroPlatform() {
       `srv-pilot-${params.pilot.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 90)}`;
     const cleanServiceId = rawServiceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
 
-    const staticDirMatch = ALL_PUBLIC_DIRECTORIES.find((b) => b.id === cleanServiceId);
+    const { ALL_PUBLIC_DIRECTORIES: staticDirectories, resolveItemEditorialImage } =
+      await loadAmaroRegistry();
+    const staticDirMatch = staticDirectories.find((b) => b.id === cleanServiceId);
     const existingCatalogueMatch = allCatalogueServices.find((s) => s.id === cleanServiceId);
     const fallbackImgKey =
       params.pilot.countryCode && params.pilot.countryCode !== 'BJ'
@@ -3518,7 +3819,7 @@ function AmaroPlatform() {
           ownerId: 'manual_concierge',
           title: (staticDirMatch?.title || params.pilot.businessName).slice(0, 155),
           category: params.pilot.category,
-          countryCode: 'BJ',
+          countryCode: params.pilot.countryCode || selectedCountryCode || 'CI',
           cityId: params.pilot.cityId,
           address: (params.pilot.businessAddress || staticDirMatch?.address || '').slice(0, 230),
           description: (
@@ -3726,19 +4027,21 @@ function AmaroPlatform() {
   if (sharedFolderToken) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-        <SharedFolderReadOnlyView
-          shareId={sharedFolderToken}
-          onExitShareView={() => {
-            try {
-              const url = new URL(window.location.href);
-              url.searchParams.delete('share');
-              window.history.replaceState({}, '', url.toString());
-            } catch {
-              // ignore
-            }
-            setSharedFolderToken(null);
-          }}
-        />
+        <Suspense fallback={LazyViewFallback}>
+          <SharedFolderReadOnlyView
+            shareId={sharedFolderToken}
+            onExitShareView={() => {
+              try {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('share');
+                window.history.replaceState({}, '', url.toString());
+              } catch {
+                // ignore
+              }
+              setSharedFolderToken(null);
+            }}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -3749,10 +4052,20 @@ function AmaroPlatform() {
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       <AmaroHeader
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={(tab) => {
+          if (tab === 'explorer' && entryMode === 'locked_country') {
+            handleGoHome();
+            return;
+          }
+          setActiveTab(tab);
+        }}
         locale={locale}
         selectedCountryCode={selectedCountryCode}
         onSelectCountry={handleSelectCountry}
+        entryMode={entryMode}
+        onGoHome={handleGoHome}
+        countryOperationalStates={effectiveCountryStates}
+        isAdmin={isAdmin}
         isSignedIn={Boolean(authUser)}
         isSigningIn={isSigningIn}
         unreadNotifications={unreadCount}
@@ -3777,229 +4090,517 @@ function AmaroPlatform() {
       )}
 
       <main className="flex-1">
-        {activeTab === 'explorer' && (
-          <ExplorerView
-            locale={locale}
-            onChangeLocale={setLocale}
-            currency={currency}
-            onChangeCurrency={setCurrency}
-            defaultCountryCode={selectedCountryCode}
-            onChangeCountryCode={handleSelectCountry}
-            rateInfo={rateInfo}
-            catalogue={combinedCatalogue}
-            pilotStocks={publicActiveStocks}
-            providerOffers={providerOffers}
-            culturalStories={approvedStories}
-            countrySetting={countrySetting}
-            isSignedIn={Boolean(authUser)}
-            smartJourneyCtaLabel={smartJourneyCtaLabel}
-            activeReferralCode={activeReferralCode}
-            onRequireSignIn={handleSignIn}
-            onOpenJourneyTab={() => setActiveTab('journey')}
-            onAddServiceToJourney={handleAddServiceToJourney}
-            onRequestReservation={handleRequestReservation}
-            onSubmitCulturalStory={handleSubmitCulturalStory}
-            approvedReviews={approvedReviews}
-            emergencyNumbers={emergencyNumbers}
-            realLocalContributionTotalXof={realLocalContributionTotalXof}
-            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
-            externalJump={explorerJump}
-          />
+        {entryMode === 'locked_country' && activeTab !== 'workspace' && (
+          <section className="max-w-3xl mx-auto px-4 md:px-8 py-16">
+            <div className="p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl text-center space-y-5 shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 flex items-center justify-center mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div className="space-y-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>En préparation</span>
+                </span>
+                <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+                  {getUNCountryByCode(lockedAttemptCode || '')?.name || lockedAttemptCode || 'Destination'} — En préparation
+                </h1>
+                <p className="text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto leading-relaxed">
+                  AMARO.VOYAGE déploie ses destinations pays par pays afin de garantir la véracité de chaque établissement, devise et protocole local. Aucune fiche, réservation ou estimation n’est ouverte pour ce pays pour le moment.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectCountry('CI')}
+                    className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0B192C] hover:bg-slate-800 text-white text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    <span>Explorer la Côte d’Ivoire (Ouvert)</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+                {isCountryOpen('BJ', effectiveCountryStates, isAdmin) && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectCountry('BJ')}
+                    className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-600 text-white text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    <span>Explorer le Bénin (Ouvert)</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleGoHome}
+                  className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                >
+                  <span>Retour à l’Accueil AMARO</span>
+                </button>
+              </div>
+            </div>
+          </section>
         )}
 
-        {activeTab === 'journey' && (
-          <JourneyHubView
-            locale={locale}
-            displayCurrency={currency}
-            rateInfo={rateInfo}
-            selectedCountryCode={selectedCountryCode}
-            isSignedIn={Boolean(authUser)}
-            onRequireSignIn={handleSignIn}
-            catalogue={combinedCatalogue}
-            folders={folders}
-            activeFolder={activeFolder}
-            onSelectFolder={setSelectedFolderId}
-            onCreateFolder={handleCreateFolder}
-            onUpdateFolderBudget={handleUpdateFolderBudget}
-            onUpdateFolderStatus={handleUpdateFolderStatus}
-            folderItems={folderItems}
-            onUpdateJourneyItem={handleUpdateJourneyItem}
-            onDeleteJourneyItem={handleDeleteJourneyItem}
-            journalEntries={journalEntries}
-            onSaveJournalEntry={handleSaveJournalEntry}
-            onDeleteJournalEntry={handleDeleteJournalEntry}
-            clientReservations={clientReservations}
-            onClientValidateReservation={handleClientValidateReservation}
-            onClientInitiatePayment={handleClientInitiatePayment}
-            onClientCancelReservation={handleClientCancelReservation}
-            onRequestAlternativeItem={handleRequestReservation}
-            providerOffers={providerOffers}
-            onClientUpdateReservationOffers={handleClientUpdateReservationOffers}
-            notifications={notifications}
-            onMarkNotificationRead={handleMarkNotificationRead}
-            onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
-            lastBrainDiagnostic={lastBrainDiagnostic}
-            identityByReservation={clientIdentityByRes}
-            onNotify={showToast}
-            countrySetting={countrySetting}
-            platformContentMap={platformContentMap}
-            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
-            folderIntention={folderIntention}
-            onSaveFolderIntention={handleSaveFolderIntention}
-            folderExpenses={folderExpenses}
-            onAddFolderExpense={handleAddFolderExpense}
-            folderShares={folderShares}
-            onCreateFolderShare={handleCreateFolderShare}
-            onRevokeFolderShare={handleRevokeFolderShare}
-            onDuplicateFolderAsTemplate={handleDuplicateFolderAsTemplate}
-            travelerReviews={mergedTravelerReviews}
-            onSubmitTravelerReview={handleSubmitTravelerReview}
-            onSendProviderThankYou={handleSendProviderThankYou}
-            sessionDraft={sessionDraft}
-            onApplyAssistantDraft={handleApplyAssistantDraft}
-            onOpenExplorer={(cityId, category, itemId) => {
-              setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
-              setActiveTab('explorer');
-            }}
-            onOpenAssistant={() => setActiveTab('assistant')}
-          />
+        {entryMode === 'home' && activeTab === 'explorer' && (
+          <div className="pb-20">
+            {/* Hero Général AMARO */}
+            <section className="bg-[#0B192C] text-white border-b border-slate-800">
+              <div className="max-w-7xl mx-auto px-4 md:px-8 py-12 md:py-16 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                <div className="lg:col-span-7 space-y-5">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold">
+                    <Globe2 className="w-3.5 h-3.5" />
+                    <span>AMARO.VOYAGE · Déploiement International Pays par Pays</span>
+                  </div>
+                  <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-[1.12]">
+                    Organisez vos séjours avec des repères vérifiés, pays par pays.
+                  </h1>
+                  <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl">
+                    AMARO.VOYAGE rassemble des hébergements, restaurants, transports, sites culturels et protocoles de voyage strictement isolés par destination. Chaque pays est vérifié avant ouverture pour éviter toute erreur ou information obsolète.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectCountry('CI')}
+                        className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-sm font-bold transition-colors"
+                      >
+                        <span>🇨🇮 Découvrir la Côte d’Ivoire (Ouvert)</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )}
+                    {isCountryOpen('BJ', effectiveCountryStates, isAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectCountry('BJ')}
+                        className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-sm font-bold transition-colors"
+                      >
+                        <span>🇧🇯 Découvrir le Bénin (Ouvert)</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )}
+                    <a
+                      href="#amaro-pays-monde"
+                      className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-slate-600 hover:border-slate-400 text-white text-sm font-semibold transition-colors"
+                    >
+                      <Compass className="w-4 h-4 text-teal-400" />
+                      <span>Voir les 193 pays recensés</span>
+                    </a>
+                  </div>
+                </div>
+
+                {/* Cartes destinations ouvertes */}
+                <div className="lg:col-span-5 space-y-3">
+                  {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
+                    <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/40 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Destination Ouverte</span>
+                        </span>
+                        <span className="text-xs font-mono text-amber-300">Devise : XOF</span>
+                      </div>
+                      <div>
+                        <h2 className="font-display text-xl font-bold text-white">
+                          🇨🇮 Côte d’Ivoire
+                        </h2>
+                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                          Abidjan · Yamoussoukro · Grand-Bassam · Assinie · San-Pédro · Bouaké · Korhogo · Man
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectCountry('CI')}
+                        className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs sm:text-sm font-bold transition-colors"
+                      >
+                        <span>Ouvrir la Côte d’Ivoire</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  {isCountryOpen('BJ', effectiveCountryStates, isAdmin) && (
+                    <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/40 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Destination Ouverte</span>
+                        </span>
+                        <span className="text-xs font-mono text-amber-300">Devise : XOF</span>
+                      </div>
+                      <div>
+                        <h2 className="font-display text-xl font-bold text-white">
+                          🇧🇯 Bénin
+                        </h2>
+                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                          Cotonou · Ouidah · Porto-Novo · Abomey · Grand-Popo · Parakou · Natitingou · Pendjari
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectCountry('BJ')}
+                        className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs sm:text-sm font-bold transition-colors"
+                      >
+                        <span>Ouvrir le Bénin</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {/* Répertoire global des 193 pays de l'ONU : ouverts cliquables, autres verrouillés "En préparation" */}
+            <section id="amaro-pays-monde" className="max-w-7xl mx-auto px-4 md:px-8 py-10 space-y-6">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+                    Couverture Mondiale AMARO · 193 États Membres de l’ONU
+                  </p>
+                  <h2 className="font-display text-2xl font-bold text-slate-900 dark:text-white">
+                    Calendrier d’ouverture des destinations
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+                    Seuls les pays marqués « Ouvert » donnent accès au catalogue, à la réservation et aux estimateurs de prix.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                  <div className="relative w-full sm:w-auto sm:min-w-[220px] flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={homeSearchQuery}
+                      onChange={(e) => setHomeSearchQuery(e.target.value)}
+                      placeholder="Rechercher un pays (ex: Côte d'Ivoire, France, Maroc...)"
+                      className="w-full min-h-[44px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+                  <select
+                    value={homeContinentFilter}
+                    onChange={(e) => setHomeContinentFilter(e.target.value)}
+                    aria-label="Filtrer par continent"
+                    className="w-full sm:w-auto min-h-[44px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  >
+                    <option value="Tous">Tous les continents (193)</option>
+                    <option value="Afrique">Afrique</option>
+                    <option value="Europe">Europe</option>
+                    <option value="Asie">Asie</option>
+                    <option value="Amériques">Amériques</option>
+                    <option value="Océanie">Océanie</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {[...UN_193_COUNTRIES]
+                  .sort((a, b) => {
+                    const aOpen = isCountryOpen(a.code, effectiveCountryStates, isAdmin) ? 0 : 1;
+                    const bOpen = isCountryOpen(b.code, effectiveCountryStates, isAdmin) ? 0 : 1;
+                    if (aOpen !== bOpen) return aOpen - bOpen;
+                    return a.name.localeCompare(b.name, 'fr');
+                  })
+                  .filter((c) => {
+                    if (homeContinentFilter !== 'Tous' && c.continent !== homeContinentFilter) {
+                      return false;
+                    }
+                    if (homeSearchQuery.trim()) {
+                      const q = homeSearchQuery.toLowerCase();
+                      return (
+                        c.name.toLowerCase().includes(q) ||
+                        c.code.toLowerCase().includes(q)
+                      );
+                    }
+                    return true;
+                  })
+                  .map((c) => {
+                    const effState = getEffectiveCountryState(c.code, effectiveCountryStates);
+                    const open = isCountryOpen(c.code, effectiveCountryStates, isAdmin);
+                    if (open) {
+                      return (
+                        <button
+                          key={c.code}
+                          type="button"
+                          onClick={() => handleSelectCountry(c.code)}
+                          className="min-h-[44px] text-left p-4 rounded-2xl bg-white dark:bg-slate-900 border-2 border-emerald-500/70 hover:border-emerald-600 shadow-sm transition-all flex flex-col justify-between gap-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-mono font-bold text-teal-700 dark:text-teal-400">
+                                {c.code} · {c.continent}
+                              </span>
+                              <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
+                                {c.name}
+                              </h3>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                              Ouvert
+                            </span>
+                          </div>
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                            <span>Explorer la destination</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <div
+                        key={c.code}
+                        aria-disabled="true"
+                        className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 flex flex-col justify-between gap-2 select-none cursor-not-allowed"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                              {c.code} · {c.continent}
+                            </span>
+                            <h3 className="font-display text-sm font-semibold text-slate-700 dark:text-slate-300">
+                              {c.name}
+                            </h3>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                            {effState === 'cache' ? 'Fermé' : 'En préparation'}
+                          </span>
+                        </div>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          Ouverture prochaine
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </section>
+          </div>
         )}
 
-        {(activeTab === 'assistant' || activeTab === 'rescue') && (
-          <AssistantRescueView
-            mode={activeTab}
-            locale={locale}
-            activeFolder={activeFolder}
-            folderItems={folderItems}
-            isSignedIn={Boolean(authUser)}
-            clientDisplayName={userPublic?.displayName || authUser?.displayName || ''}
-            emergencyNumbers={emergencyNumbers}
-            supportWhatsappNumber={countrySetting?.amaroWhatsappNumber}
-            sessionDraft={sessionDraft}
-            onUpdateSessionDraft={handleUpdateSessionDraft}
-            onOpenExplorer={(cityId, category, itemId) => {
-              setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
-              setActiveTab('explorer');
-            }}
-            onOpenJourney={() => setActiveTab('journey')}
-            onRequireSignIn={handleSignIn}
-            onApplyAssistantDraft={handleApplyAssistantDraft}
-            selectedCountryCode={selectedCountryCode}
-          />
-        )}
+        <Suspense fallback={LazyViewFallback}>
+          {entryMode === 'country' && activeTab === 'explorer' && (
+            <ExplorerView
+              locale={locale}
+              onChangeLocale={setLocale}
+              currency={currency}
+              onChangeCurrency={setCurrency}
+              defaultCountryCode={selectedCountryCode}
+              onChangeCountryCode={handleSelectCountry}
+              countryOperationalStates={effectiveCountryStates}
+              isAdmin={isAdmin}
+              onGoHome={handleGoHome}
+              rateInfo={rateInfo}
+              catalogue={combinedCatalogue}
+              pilotStocks={publicActiveStocks}
+              providerOffers={providerOffers}
+              culturalStories={approvedStories}
+              countrySetting={countrySetting}
+              isSignedIn={Boolean(authUser)}
+              smartJourneyCtaLabel={smartJourneyCtaLabel}
+              activeReferralCode={activeReferralCode}
+              onRequireSignIn={handleSignIn}
+              onOpenJourneyTab={() => setActiveTab('journey')}
+              onAddServiceToJourney={handleAddServiceToJourney}
+              onRequestReservation={handleRequestReservation}
+              onSubmitCulturalStory={handleSubmitCulturalStory}
+              approvedReviews={approvedReviews}
+              emergencyNumbers={emergencyNumbers}
+              realLocalContributionTotalXof={realLocalContributionTotalXof}
+              onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+              externalJump={explorerJump}
+            />
+          )}
 
-        {activeTab === 'promote' && (
-          <PromoteServicesView
-            isSignedIn={Boolean(authUser)}
-            currentUserEmail={authUser?.email || null}
-            onRequireSignIn={handleSignIn}
-            myProvider={myProvider}
-            myProviderPrivate={myProviderPrivate}
-            defaultCommissionPercent={countrySetting?.partnerMarginPercent ?? 10}
-            myServices={myServices}
-            providerOffers={providerOffers}
-            onRefreshOffers={() => void refreshProviderOffers()}
-            providerReservations={providerReservations}
-            providerThankYous={providerThankYous}
-            providerIdentityByRes={providerIdentityByRes}
-            vaultKeyConfirmedByOwner={Boolean(countrySetting?.vaultKeyConfirmedByOwner)}
-            platformContentMap={platformContentMap}
-            selectedCountryCode={selectedCountryCode}
-            onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
-            onNotify={showToast}
-            onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
-            onSaveProviderProfile={handleSaveProviderProfile}
-            onCreateOrUpdateProviderService={handleCreateOrUpdatePromoteService}
-            onProviderRespondReservation={async ({
-              reservation,
-              decision,
-              acceptedUnits,
-              alternativeProposal,
-              scheduledDate,
-              scheduledTime,
-            }) => {
-              const mapped =
-                decision === 'accept'
-                  ? 'accepted'
-                  : decision === 'partial_accept'
-                  ? 'partial_accepted'
-                  : decision === 'propose_alternative'
-                  ? 'alternative_proposed'
-                  : 'rejected';
-              await handleProviderRespondReservation(
+          {entryMode !== 'locked_country' && activeTab === 'journey' && (
+            <JourneyHubView
+              locale={locale}
+              displayCurrency={currency}
+              rateInfo={rateInfo}
+              selectedCountryCode={selectedCountryCode}
+              isSignedIn={Boolean(authUser)}
+              onRequireSignIn={handleSignIn}
+              catalogue={combinedCatalogue}
+              folders={folders}
+              activeFolder={activeFolder}
+              onSelectFolder={setSelectedFolderId}
+              onCreateFolder={handleCreateFolder}
+              onUpdateFolderBudget={handleUpdateFolderBudget}
+              onUpdateFolderStatus={handleUpdateFolderStatus}
+              folderItems={folderItems}
+              onUpdateJourneyItem={handleUpdateJourneyItem}
+              onDeleteJourneyItem={handleDeleteJourneyItem}
+              journalEntries={journalEntries}
+              onSaveJournalEntry={handleSaveJournalEntry}
+              onDeleteJournalEntry={handleDeleteJournalEntry}
+              clientReservations={clientReservations}
+              onClientValidateReservation={handleClientValidateReservation}
+              onClientInitiatePayment={handleClientInitiatePayment}
+              onClientCancelReservation={handleClientCancelReservation}
+              onRequestAlternativeItem={handleRequestReservation}
+              providerOffers={providerOffers}
+              onClientUpdateReservationOffers={handleClientUpdateReservationOffers}
+              notifications={notifications}
+              onMarkNotificationRead={handleMarkNotificationRead}
+              onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+              lastBrainDiagnostic={lastBrainDiagnostic}
+              identityByReservation={clientIdentityByRes}
+              onNotify={showToast}
+              countrySetting={countrySetting}
+              platformContentMap={platformContentMap}
+              onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+              folderIntention={folderIntention}
+              onSaveFolderIntention={handleSaveFolderIntention}
+              folderExpenses={folderExpenses}
+              onAddFolderExpense={handleAddFolderExpense}
+              folderShares={folderShares}
+              onCreateFolderShare={handleCreateFolderShare}
+              onRevokeFolderShare={handleRevokeFolderShare}
+              onDuplicateFolderAsTemplate={handleDuplicateFolderAsTemplate}
+              travelerReviews={mergedTravelerReviews}
+              onSubmitTravelerReview={handleSubmitTravelerReview}
+              onSendProviderThankYou={handleSendProviderThankYou}
+              sessionDraft={sessionDraft}
+              onApplyAssistantDraft={handleApplyAssistantDraft}
+              onOpenExplorer={(cityId, category, itemId) => {
+                setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
+                setActiveTab('explorer');
+              }}
+              onOpenAssistant={() => setActiveTab('assistant')}
+            />
+          )}
+
+          {entryMode !== 'locked_country' && (activeTab === 'assistant' || activeTab === 'rescue') && (
+            <AssistantRescueView
+              mode={activeTab}
+              locale={locale}
+              activeFolder={activeFolder}
+              folderItems={folderItems}
+              isSignedIn={Boolean(authUser)}
+              clientDisplayName={userPublic?.displayName || authUser?.displayName || ''}
+              emergencyNumbers={emergencyNumbers}
+              supportWhatsappNumber={countrySetting?.amaroWhatsappNumber}
+              sessionDraft={sessionDraft}
+              onUpdateSessionDraft={handleUpdateSessionDraft}
+              onOpenExplorer={(cityId, category, itemId) => {
+                setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
+                setActiveTab('explorer');
+              }}
+              onOpenJourney={() => setActiveTab('journey')}
+              onRequireSignIn={handleSignIn}
+              onApplyAssistantDraft={handleApplyAssistantDraft}
+              selectedCountryCode={selectedCountryCode}
+            />
+          )}
+
+          {entryMode !== 'locked_country' && activeTab === 'promote' && (
+            <PromoteServicesView
+              isSignedIn={Boolean(authUser)}
+              currentUserEmail={authUser?.email || null}
+              onRequireSignIn={handleSignIn}
+              myProvider={myProvider}
+              myProviderPrivate={myProviderPrivate}
+              defaultCommissionPercent={countrySetting?.partnerMarginPercent ?? 10}
+              myServices={myServices}
+              providerOffers={providerOffers}
+              onRefreshOffers={() => void refreshProviderOffers()}
+              providerReservations={providerReservations}
+              providerThankYous={providerThankYous}
+              providerIdentityByRes={providerIdentityByRes}
+              vaultKeyConfirmedByOwner={Boolean(countrySetting?.vaultKeyConfirmedByOwner)}
+              platformContentMap={platformContentMap}
+              selectedCountryCode={selectedCountryCode}
+              onOpenLegalDoc={(docKey) => setActiveLegalDoc(docKey)}
+              onNotify={showToast}
+              onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
+              onSaveProviderProfile={handleSaveProviderProfile}
+              onCreateOrUpdateProviderService={handleCreateOrUpdatePromoteService}
+              onProviderRespondReservation={async ({
                 reservation,
-                mapped,
-                alternativeProposal || '',
-                scheduledDate || reservation.scheduledDate,
-                scheduledTime || reservation.scheduledTime,
-                acceptedUnits
-              );
-            }}
-          />
-        )}
+                decision,
+                acceptedUnits,
+                alternativeProposal,
+                scheduledDate,
+                scheduledTime,
+              }) => {
+                const mapped =
+                  decision === 'accept'
+                    ? 'accepted'
+                    : decision === 'partial_accept'
+                    ? 'partial_accepted'
+                    : decision === 'propose_alternative'
+                    ? 'alternative_proposed'
+                    : 'rejected';
+                await handleProviderRespondReservation(
+                  reservation,
+                  mapped,
+                  alternativeProposal || '',
+                  scheduledDate || reservation.scheduledDate,
+                  scheduledTime || reservation.scheduledTime,
+                  acceptedUnits
+                );
+              }}
+            />
+          )}
 
-        {activeTab === 'workspace' && (
-          <WorkspacesAdminView
-            locale={locale}
-            isDark={isDark}
-            onToggleTheme={() => setIsDark((v) => !v)}
-            isSignedIn={Boolean(authUser)}
-            currentUserEmail={authUser?.email || null}
-            isAdmin={isAdmin}
-            onRequireSignIn={handleSignIn}
-            firestoreProbe={firestoreProbe}
-            onRecheckFirestore={runFirestoreProbe}
-            userPublic={userPublic}
-            userPrivate={userPrivate}
-            onSaveUserProfile={handleSaveUserProfile}
-            userSavedPrefs={userSavedPrefs}
-            onSaveUserPreferences={handleSaveUserPreferences}
-            onSignOutAfterDelete={handleSignOut}
-            onOpenPromoteServices={() => setActiveTab('promote')}
-            onOpenLegalDoc={(slug) => setActiveLegalDoc(slug as LegalDocKey)}
-            myProvider={myProvider}
-            myPartner={myPartner}
-            myReferrals={myReferrals}
-            allPartners={allPartners}
-            allReferrals={allReferrals}
-            onRegisterPartner={handleRegisterPartner}
-            onAdminUpdatePartnerStatus={handleAdminUpdatePartnerStatus}
-            onAdminUpdateReferral={handleAdminUpdateReferral}
-            countrySetting={countrySetting}
-            allCatalogueServices={allCatalogueServices}
-            allProviders={allProviders}
-            allReservations={allReservations}
-            allFolders={allFolders}
-            allStories={allStories}
-            auditLogs={auditLogs}
-            onAdminUpsertCatalogueService={handleAdminUpsertCatalogueService}
-            onAdminVerifyProvider={handleAdminVerifyProvider}
-            onAdminLinkProviderToDirectoryListing={handleAdminLinkProviderToDirectoryListing}
-            onAdminModerateStory={handleAdminModerateStory}
-            onAdminSaveExtendedSettings={handleAdminSaveExtendedSettings}
-            platformContents={platformContentMap}
-            onAdminSavePlatformContent={handleAdminSavePlatformContent}
-            allReviews={allReviews}
-            onAdminModerateReview={handleAdminModerateReview}
-            allThankYous={allThankYous}
-            onAdminUpdateThankYou={handleAdminUpdateThankYou}
-            adminsList={adminsList}
-            onAdminAddAdminUid={handleAdminAddAdminUid}
-            onAdminRemoveAdminUid={handleAdminRemoveAdminUid}
-            pilotPartners={adminPilotPartners}
-            pilotStocks={adminPilotStocks}
-            providerOffers={providerOffers}
-            onRefreshOffers={() => void refreshProviderOffers()}
-            onSavePilotPartner={handleSavePilotPartner}
-            onDeletePilotPartner={handleDeletePilotPartner}
-            onSyncPilotOfferActivation={handleSyncPilotOfferActivation}
-            onSavePilotStock={handleSavePilotStock}
-            onDeletePilotStock={handleDeletePilotStock}
-            onDispatchReservationAction={handleDispatchReservationAction}
-            adminIdentityByRes={adminIdentityByRes}
-            onNotify={showToast}
-          />
-        )}
+          {activeTab === 'workspace' && (
+            <WorkspacesAdminView
+              locale={locale}
+              isDark={isDark}
+              onToggleTheme={() => setIsDark((v) => !v)}
+              isSignedIn={Boolean(authUser)}
+              currentUserEmail={authUser?.email || null}
+              isAdmin={isAdmin}
+              onRequireSignIn={handleSignIn}
+              firestoreProbe={firestoreProbe}
+              onRecheckFirestore={runFirestoreProbe}
+              userPublic={userPublic}
+              userPrivate={userPrivate}
+              onSaveUserProfile={handleSaveUserProfile}
+              userSavedPrefs={userSavedPrefs}
+              onSaveUserPreferences={handleSaveUserPreferences}
+              onSignOutAfterDelete={handleSignOut}
+              onOpenPromoteServices={() => setActiveTab('promote')}
+              onOpenLegalDoc={(slug) => setActiveLegalDoc(slug as LegalDocKey)}
+              myProvider={myProvider}
+              myPartner={myPartner}
+              myReferrals={myReferrals}
+              allPartners={allPartners}
+              allReferrals={allReferrals}
+              onRegisterPartner={handleRegisterPartner}
+              onAdminUpdatePartnerStatus={handleAdminUpdatePartnerStatus}
+              onAdminUpdateReferral={handleAdminUpdateReferral}
+              countrySetting={countrySetting}
+              allCatalogueServices={allCatalogueServices}
+              allProviders={allProviders}
+              allReservations={allReservations}
+              allFolders={allFolders}
+              allStories={allStories}
+              auditLogs={auditLogs}
+              onAdminUpsertCatalogueService={handleAdminUpsertCatalogueService}
+              onAdminVerifyProvider={handleAdminVerifyProvider}
+              onAdminLinkProviderToDirectoryListing={handleAdminLinkProviderToDirectoryListing}
+              onAdminModerateStory={handleAdminModerateStory}
+              onAdminSaveExtendedSettings={handleAdminSaveExtendedSettings}
+              platformContents={platformContentMap}
+              onAdminSavePlatformContent={handleAdminSavePlatformContent}
+              allReviews={allReviews}
+              onAdminModerateReview={handleAdminModerateReview}
+              allThankYous={allThankYous}
+              onAdminUpdateThankYou={handleAdminUpdateThankYou}
+              adminsList={adminsList}
+              onAdminAddAdminUid={handleAdminAddAdminUid}
+              onAdminRemoveAdminUid={handleAdminRemoveAdminUid}
+              pilotPartners={adminPilotPartners}
+              pilotStocks={adminPilotStocks}
+              providerOffers={providerOffers}
+              onRefreshOffers={() => void refreshProviderOffers()}
+              onSavePilotPartner={handleSavePilotPartner}
+              onDeletePilotPartner={handleDeletePilotPartner}
+              onSyncPilotOfferActivation={handleSyncPilotOfferActivation}
+              onSavePilotStock={handleSavePilotStock}
+              onDeletePilotStock={handleDeletePilotStock}
+              onDispatchReservationAction={handleDispatchReservationAction}
+              adminIdentityByRes={adminIdentityByRes}
+              onNotify={showToast}
+            />
+          )}
+        </Suspense>
       </main>
 
       {/* Institutional, Ethical & Legal Footer (Blocs 9 & 10) */}
@@ -4014,94 +4615,92 @@ function AmaroPlatform() {
                 Exploration gratuite · Accompagnement et réservations vérifiées sur dossier · Devises locales &amp; conversions indicatives
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
               <button
                 type="button"
                 onClick={() => setActiveTab('promote')}
-                className="font-semibold text-[#0B192C] dark:text-amber-300 hover:underline"
+                className="min-h-[44px] inline-flex items-center px-1.5 font-semibold text-[#0B192C] dark:text-amber-300 hover:underline"
               >
                 Promouvoir mes services (Prestataires)
               </button>
-              <span aria-hidden="true">·</span>
               <button
                 type="button"
                 onClick={() => setActiveLegalDoc('vision_amaro')}
-                className="hover:underline"
+                className="min-h-[44px] inline-flex items-center px-1.5 hover:underline"
               >
                 Vision d’AMARO
               </button>
-              <span aria-hidden="true">·</span>
               <button
                 type="button"
                 onClick={() => setActiveLegalDoc('charte_voyage_respectueux')}
-                className="hover:underline"
+                className="min-h-[44px] inline-flex items-center px-1.5 hover:underline"
               >
                 Charte du voyage respectueux
               </button>
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-400">
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
             <button
               type="button"
               onClick={() => setActiveLegalDoc('comment_amaro_verifie')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Comment AMARO vérifie
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('ce_qu_amaro_garantit')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Ce qu’AMARO garantit (et limites)
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('cgv')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               CGV
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('politique_annulation')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Politique d’annulation
             </button>
-            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalDoc('politique_confidentialite')}
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+            >
+              Confidentialité &amp; données
+            </button>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('mentions_legales')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Mentions légales
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('assurance_voyage')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Assurance voyage
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('securite_regions')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Sécurité par région
             </button>
-            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={() => setActiveLegalDoc('partenaires_officiels')}
-              className="hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
+              className="min-h-[44px] inline-flex items-center px-1.5 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
             >
               Partenaires officiels
             </button>
@@ -4109,20 +4708,23 @@ function AmaroPlatform() {
         </div>
       </footer>
 
-      {showAuthModal && (
-        <AuthModal
-          onClose={() => setShowAuthModal(false)}
-          onSuccessMessage={(msg) => showToast(msg)}
-        />
-      )}
+      <Suspense fallback={null}>
+        {showAuthModal && (
+          <AuthModal
+            onClose={() => setShowAuthModal(false)}
+            onSuccessMessage={(msg) => showToast(msg)}
+          />
+        )}
 
-      {activeLegalDoc && (
-        <LegalAndCharterModal
-          docId={activeLegalDoc}
-          platformContentMap={platformContentMap}
-          onClose={() => setActiveLegalDoc(null)}
-        />
-      )}
+        {activeLegalDoc && (
+          <LegalAndCharterModal
+            docId={activeLegalDoc}
+            platformContentMap={platformContentMap}
+            countrySetting={countrySetting}
+            onClose={() => setActiveLegalDoc(null)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

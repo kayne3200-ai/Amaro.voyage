@@ -50,8 +50,10 @@ import type {
 } from '../../types/amaro';
 import { COUNTRIES_REGISTRY } from '../../data/amaroRegistry';
 import {
+  cleanClientSettingValue,
   HARMONIZED_FOLDER_STATUS_LABELS,
   INTENTION_OPTIONS_FR,
+  isConfiguredSettingValue,
   LOGBOOK_REFLECTION_QUESTIONS,
   OWNER_PLACEHOLDER,
 } from '../../data/amaroGovernanceDefaults';
@@ -168,7 +170,10 @@ interface JourneyHubViewProps {
   onDeleteJournalEntry: (entryId: string) => Promise<void>;
   clientReservations: ReservationDoc[];
   onClientValidateReservation: (reservation: ReservationDoc) => Promise<void>;
-  onClientInitiatePayment: (reservation: ReservationDoc) => Promise<void>;
+  onClientInitiatePayment: (
+    reservation: ReservationDoc,
+    paymentDetails?: { paymentMethod?: string; transactionRef?: string }
+  ) => Promise<void>;
   onClientCancelReservation: (reservation: ReservationDoc) => Promise<void>;
   onRequestAlternativeItem: (
     item: CatalogueItem,
@@ -276,8 +281,8 @@ const RESERVATION_STATUS_LABELS: Record<ReservationDoc['status'], string> = {
 
 const PAYMENT_STATUS_LABELS: Record<ReservationDoc['paymentStatus'], string> = {
   unpaid: 'Non payé',
-  initiated: 'Demande de règlement transmise (vérification requise)',
-  pending: 'Vérification en cours',
+  initiated: 'Paiement en attente de validation',
+  pending: 'Paiement en attente de validation',
   succeeded: 'Payé et vérifié',
   failed: 'Échec de paiement',
   refunded: 'Remboursé',
@@ -333,13 +338,14 @@ export function JourneyHubView({
   onApplyAssistantDraft,
   onOpenExplorer,
   onOpenAssistant,
-  selectedCountryCode = 'BJ',
+  selectedCountryCode = 'CI',
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
 
   const currentCountry = useMemo(() => {
     return (
       COUNTRIES_REGISTRY.find((c) => c.code === selectedCountryCode) ||
+      COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
       COUNTRIES_REGISTRY[0]
     );
   }, [selectedCountryCode]);
@@ -352,7 +358,7 @@ export function JourneyHubView({
   );
   const [countryCode, setCountryCode] = useState<string>(() => currentCountry.code);
   const [primaryCityId, setPrimaryCityId] = useState<string>(
-    () => currentCountry.cities[0]?.id || 'cotonou'
+    () => currentCountry.cities[0]?.id || 'abidjan'
   );
   const [startDate, setStartDate] = useState<string>('2026-11-15');
   const [endDate, setEndDate] = useState<string>('2026-11-21');
@@ -447,6 +453,8 @@ export function JourneyHubView({
   const [editDaily, setEditDaily] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
   const [busyReservationId, setBusyReservationId] = useState<string | null>(null);
+  const [resPayMethodByRes, setResPayMethodByRes] = useState<Record<string, string>>({});
+  const [resTxRefByRes, setResTxRefByRes] = useState<Record<string, string>>({});
   const [identityModalRes, setIdentityModalRes] = useState<ReservationDoc | null>(null);
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread'>('all');
   const [activeReceipt, setActiveReceipt] = useState<ElectronicReceiptData | null>(null);
@@ -482,7 +490,9 @@ export function JourneyHubView({
   const [customContactNote, setCustomContactNote] = useState<string>('');
 
   const selectedCountry =
-    COUNTRIES_REGISTRY.find((c) => c.code === countryCode) || COUNTRIES_REGISTRY[0];
+    COUNTRIES_REGISTRY.find((c) => c.code === countryCode) ||
+    COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+    COUNTRIES_REGISTRY[0];
 
   // Chronological sorting & daily city-change analysis (Amaro Journey Brain)
   const groupedDays = useMemo(() => {
@@ -1224,19 +1234,19 @@ export function JourneyHubView({
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
               <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
-                <span className="text-[11px] text-slate-500 block">Durée</span>
+                <span className="text-xs text-slate-500 block">Durée</span>
                 <strong className="font-mono text-sm">{sessionDraft.daysCount} jours</strong>
               </div>
               <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
-                <span className="text-[11px] text-slate-500 block">Voyageurs</span>
+                <span className="text-xs text-slate-500 block">Voyageurs</span>
                 <strong className="font-mono text-sm">{sessionDraft.travelersCount} pers.</strong>
               </div>
               <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 sm:col-span-2">
-                <span className="text-[11px] text-slate-500 block">Budget estimé</span>
+                <span className="text-xs text-slate-500 block">Budget estimé</span>
                 <strong className="font-mono text-sm text-teal-700 dark:text-teal-400">
                   {formatMoney(sessionDraft.estimatedTotalXof || 0, 'XOF')}
                 </strong>
-                <span className="text-[10px] text-slate-400 block truncate">
+                <span className="text-xs text-slate-400 block truncate">
                   {sessionDraft.hasPriceToVerify ? 'Prix à vérifier inclus' : 'Frais de dossier déductibles'}
                 </span>
               </div>
@@ -1259,7 +1269,7 @@ export function JourneyHubView({
                         {st.serviceTitle}
                       </span>
                     </div>
-                    <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                    <span className="shrink-0 px-2 py-0.5 rounded text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                       {st.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé, non vérifié'}
                     </span>
                   </div>
@@ -1375,8 +1385,8 @@ export function JourneyHubView({
             <strong className="font-mono text-slate-900 dark:text-slate-100 block">
               {activeFolder.startDate} → {activeFolder.endDate}
             </strong>
-            <span className="text-[11px] text-teal-700 dark:text-teal-400">
-              {currentCountry.timezone || 'Africa/Porto-Novo (UTC+1)'}
+            <span className="text-xs text-teal-700 dark:text-teal-400">
+              {currentCountry.timezone || 'Fuseau local'}
             </span>
           </div>
           <div>
@@ -1384,7 +1394,7 @@ export function JourneyHubView({
             <strong className="font-mono text-slate-900 dark:text-slate-100 block">
               {activeFolder.travelersCount} personne(s)
             </strong>
-            <span className="text-[11px] text-slate-400 capitalize">
+            <span className="text-xs text-slate-400 capitalize">
               Base : {activeFolder.primaryCityId}
             </span>
           </div>
@@ -1396,14 +1406,14 @@ export function JourneyHubView({
               }{' '}
               étape(s)
             </strong>
-            <span className="text-[11px] text-slate-400">Multi-étapes suivi</span>
+            <span className="text-xs text-slate-400">Multi-étapes suivi</span>
           </div>
           <div>
             <span className="text-slate-500 block">Transport principal</span>
             <strong className="text-slate-900 dark:text-slate-100 block truncate">
               {activeTransportProvider ? activeTransportProvider.title : 'Libre / Non défini'}
             </strong>
-            <span className="text-[11px] text-slate-400">Courses VTC permises</span>
+            <span className="text-xs text-slate-400">Courses VTC permises</span>
           </div>
           <div>
             <span className="text-slate-500 block">Réservations actives</span>
@@ -1415,7 +1425,7 @@ export function JourneyHubView({
               }{' '}
               active(s)
             </strong>
-            <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
+            <span className="text-xs text-emerald-700 dark:text-emerald-400">
               {
                 folderReservations.filter((r) => r.paymentStatus === 'succeeded').length
               }{' '}
@@ -1427,7 +1437,7 @@ export function JourneyHubView({
             <strong className="font-mono text-slate-900 dark:text-slate-100 block">
               {formatMoney(budgetBreakdown.remainingToPay, budgetBreakdown.targetCur)}
             </strong>
-            <span className="text-[11px] text-slate-400">Hors annulées / estimées</span>
+            <span className="text-xs text-slate-400">Hors annulées / estimées</span>
           </div>
         </section>
       )}
@@ -1452,7 +1462,7 @@ export function JourneyHubView({
             <button
               type="button"
               onClick={() => setSubTab('journal')}
-              className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
+              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
                 subTab === 'journal'
                   ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
                   : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
@@ -1467,7 +1477,7 @@ export function JourneyHubView({
             <button
               type="button"
               onClick={() => setSubTab('reservations')}
-              className={`min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
+              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
                 subTab === 'reservations'
                   ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
                   : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
@@ -1484,7 +1494,7 @@ export function JourneyHubView({
             <button
               type="button"
               onClick={() => window.print()}
-              className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
             >
               <Printer className="w-4 h-4" />
               <span>Exporter en PDF (Itinéraire / Carnet)</span>
@@ -1502,9 +1512,9 @@ export function JourneyHubView({
               const digits = rawWa.replace(/[^0-9]/g, '');
               if (digits.length < 8) {
                 return (
-                  <span className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-500 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                    <span>WhatsApp support : {OWNER_PLACEHOLDER}</span>
+                  <span className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <MessageCircle className="w-4 h-4 text-teal-600" />
+                    <span>Assistance dossier en ligne</span>
                   </span>
                 );
               }
@@ -1515,7 +1525,7 @@ export function JourneyHubView({
                   )}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
+                  className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
                 >
                   <MessageCircle className="w-4 h-4" />
                   <span>Support WhatsApp</span>
@@ -1588,7 +1598,7 @@ export function JourneyHubView({
                           skipped: true,
                         })
                       }
-                      className="text-[11px] underline text-slate-500 hover:text-slate-800"
+                      className="text-xs underline text-slate-500 hover:text-slate-800"
                     >
                       Passer cette étape
                     </button>
@@ -1622,7 +1632,7 @@ export function JourneyHubView({
                                 : [...currentList, opt];
                               setSelectedMotivations(next);
                             }}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
                               active
                                 ? 'bg-[#0B192C] text-white border-[#0B192C]'
                                 : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
@@ -1718,7 +1728,7 @@ export function JourneyHubView({
                   <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-300">
                     Frais d’ouverture &amp; de coordination de dossier ({formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')})
                   </h3>
-                  <span className="px-2.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-amber-300 text-[11px] font-bold">
+                  <span className="px-2.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-amber-300 text-xs font-bold">
                     Statut :{' '}
                     {budgetBreakdown.effectiveFeeStatus === 'validated'
                       ? 'Validé (déductible du total final)'
@@ -1739,12 +1749,79 @@ export function JourneyHubView({
                   <strong>intégralement déduits de votre facture finale</strong>, remboursés manuellement si AMARO n’obtient aucune prestation, et conservés uniquement si vous abandonnez le dossier après obtention des confirmations.
                 </p>
 
-                {countrySetting?.amaroMobileMoneyNumber && (
-                  <p className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                    Coordonnées Mobile Money AMARO :{' '}
-                    <strong>{countrySetting.amaroMobileMoneyNumber}</strong> (Titulaire :{' '}
-                    {countrySetting.amaroMobileMoneyHolder || OWNER_PLACEHOLDER})
-                  </p>
+                {(() => {
+                  const waveNum = cleanClientSettingValue(countrySetting?.waveNumber);
+                  const omNum = cleanClientSettingValue(countrySetting?.orangeMoneyNumber);
+                  const mtnNum = cleanClientSettingValue(countrySetting?.mtnMoneyNumber);
+                  const fallbackNum = cleanClientSettingValue(countrySetting?.amaroMobileMoneyNumber);
+                  const holder = cleanClientSettingValue(countrySetting?.amaroMobileMoneyHolder);
+                  const hasAnyNum = Boolean(waveNum || omNum || mtnNum || fallbackNum);
+                  return (
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 space-y-1.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-slate-900 dark:text-slate-100">
+                          Montant à régler : {formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')}
+                        </span>
+                        {holder && (
+                          <span className="text-slate-600 dark:text-slate-300">
+                            Titulaire : <strong>{holder}</strong>
+                          </span>
+                        )}
+                      </div>
+                      {hasAnyNum ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-slate-700 dark:text-slate-300">
+                          {waveNum && (
+                            <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                              <span className="font-sans text-slate-500 block">Wave</span>
+                              <strong>{waveNum}</strong>
+                            </div>
+                          )}
+                          {omNum && (
+                            <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                              <span className="font-sans text-slate-500 block">Orange Money</span>
+                              <strong>{omNum}</strong>
+                            </div>
+                          )}
+                          {mtnNum && (
+                            <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                              <span className="font-sans text-slate-500 block">MTN Money</span>
+                              <strong>{mtnNum}</strong>
+                            </div>
+                          )}
+                          {!waveNum && !omNum && !mtnNum && fallbackNum && (
+                            <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 sm:col-span-3">
+                              <span className="font-sans text-slate-500 block">Mobile Money AMARO</span>
+                              <strong>{fallbackNum}</strong>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-slate-600 dark:text-slate-400">
+                          Utilisez Wave, Orange Money ou MTN Mobile Money vers le numéro indiqué par votre conseiller AMARO, puis saisissez ci-dessous la référence de votre transaction.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {(budgetBreakdown.effectiveFeeStatus === 'declared' ||
+                  budgetBreakdown.effectiveFeeStatus === 'in_verification') && (
+                  <div className="p-3.5 rounded-xl bg-amber-100/80 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 text-xs text-amber-950 dark:text-amber-100 space-y-1">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-amber-700 dark:text-amber-300 shrink-0" />
+                      <span>Paiement en attente de validation</span>
+                    </p>
+                    <p>
+                      Votre règlement ({formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')})
+                      {activeFolder.dossierTxRef ? (
+                        <>
+                          {' '}
+                          sous la référence <strong className="font-mono">{activeFolder.dossierTxRef}</strong>
+                        </>
+                      ) : null}{' '}
+                      est bien enregistré. Notre équipe vérifie la réception puis débloque l’envoi de vos réservations.
+                    </p>
+                  </div>
                 )}
 
                 {['pending', 'not_required', 'rejected', 'unpaid'].includes(
@@ -1790,7 +1867,7 @@ export function JourneyHubView({
                           placeholder={`Téléphone émetteur (${currentCountry.protocols?.dialingCode || '+...'})`}
                           className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
                         />
-                        <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center justify-between text-xs">
                           {isPhoneVerified ? (
                             <span className="text-emerald-700 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" />
@@ -1817,7 +1894,7 @@ export function JourneyHubView({
                         className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
                       />
                     </div>
-                    <label className="flex items-start gap-2 text-[11px] text-slate-700 dark:text-slate-300">
+                    <label className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300">
                       <input
                         type="checkbox"
                         checked={acceptedCgvForFee}
@@ -1886,7 +1963,7 @@ export function JourneyHubView({
                     type="text"
                     value={incidentNote}
                     onChange={(e) => setIncidentNote(e.target.value)}
-                    placeholder="Ex. : Retard pluie à Ouidah, besoin de décaler la visite..."
+                    placeholder={`Ex. : Retard de trajet à ${currentCountry.cities[0]?.name || currentCountry.nameFr}, besoin de décaler la visite...`}
                     className="flex-1 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                   />
                   <button
@@ -2099,7 +2176,7 @@ export function JourneyHubView({
               <h3 className="font-display text-xs font-bold text-white">
                 Chronologie Automatique
               </h3>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-300 leading-relaxed">
                 Vos étapes s’ordonnent instantanément par jour et heure. Zéro risque de chevauchement.
               </p>
             </div>
@@ -2111,7 +2188,7 @@ export function JourneyHubView({
               <h3 className="font-display text-xs font-bold text-white">
                 Détecteur de Conflits
               </h3>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-300 leading-relaxed">
                 Diagnostic en direct sur les temps de trajet entre villes et les doublons de réservation.
               </p>
             </div>
@@ -2123,7 +2200,7 @@ export function JourneyHubView({
               <h3 className="font-display text-xs font-bold text-white">
                 Transporteur Unique
               </h3>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-300 leading-relaxed">
                 Un seul loueur principal attitré par séjour, avec courses urbaines libres (VTC/taxis).
               </p>
             </div>
@@ -2135,7 +2212,7 @@ export function JourneyHubView({
               <h3 className="font-display text-xs font-bold text-white">
                 Budget Réel &amp; PDF
               </h3>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-300 leading-relaxed">
                 Suivi transparent des 6 états de dépenses et carnet souvenir imprimable en un clic.
               </p>
             </div>
@@ -2159,7 +2236,7 @@ export function JourneyHubView({
               <button
                 type="button"
                 onClick={() => setShowNewFolderForm(false)}
-                className="min-h-[36px] px-2 text-xs text-slate-500"
+                className="min-h-[44px] px-2 text-xs text-slate-500"
               >
                 Fermer
               </button>
@@ -2411,7 +2488,7 @@ export function JourneyHubView({
                 <button
                   type="button"
                   onClick={startBudgetEdit}
-                  className="min-h-[36px] px-3 py-1 font-semibold text-[#0B192C] dark:text-amber-400 bg-slate-100 dark:bg-slate-800 rounded-lg"
+                  className="min-h-[44px] px-3 py-1 font-semibold text-[#0B192C] dark:text-amber-400 bg-slate-100 dark:bg-slate-800 rounded-lg"
                 >
                   Ajuster
                 </button>
@@ -2432,7 +2509,7 @@ export function JourneyHubView({
                     min={0}
                     value={editTotal}
                     onChange={(e) => setEditTotal(e.target.value)}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
                 <div>
@@ -2444,7 +2521,7 @@ export function JourneyHubView({
                     min={0}
                     value={editDaily}
                     onChange={(e) => setEditDaily(e.target.value)}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
                 <div>
@@ -2454,20 +2531,20 @@ export function JourneyHubView({
                     value={editNotes}
                     onChange={(e) => setEditNotes(e.target.value)}
                     maxLength={950}
-                    className="w-full min-h-[40px] px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                    className="w-full min-h-[44px] px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                   />
                 </div>
                 <div className="flex gap-2">
                   <button
                     type="submit"
-                    className="min-h-[40px] px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
+                    className="min-h-[44px] px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] rounded-lg"
                   >
                     Sauvegarder
                   </button>
                   <button
                     type="button"
                     onClick={() => setEditingBudget(false)}
-                    className="min-h-[40px] px-3 py-1.5 text-xs text-slate-500"
+                    className="min-h-[44px] px-3 py-1.5 text-xs text-slate-500"
                   >
                     Annuler
                   </button>
@@ -2479,7 +2556,7 @@ export function JourneyHubView({
             <div className="p-4 sm:p-5 rounded-2xl bg-[#0B192C] text-white dark:bg-slate-950 border border-slate-800 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
                 <div className="space-y-0.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
                     Transparence Financière Amaro · Deux Totaux Séparés
                   </span>
                   <h3 className="font-display text-base sm:text-lg font-bold text-white">
@@ -2503,7 +2580,7 @@ export function JourneyHubView({
                     </strong>
                   </div>
 
-                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                  <p className="text-xs text-slate-300 leading-relaxed">
                     Hôtel + Transport + Caution Restaurant + Frais de dossier (20 000 FCFA déductibles) + Frais de service Amaro.
                   </p>
 
@@ -2563,7 +2640,7 @@ export function JourneyHubView({
                     </strong>
                   </div>
 
-                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                  <p className="text-xs text-slate-300 leading-relaxed">
                     Repas restaurant selon choix + 70% Guide et entrées sites restant.
                   </p>
 
@@ -2574,13 +2651,13 @@ export function JourneyHubView({
                     </div>
                     <div className="flex justify-between">
                       <span className="font-sans text-slate-400">Repas Restaurant selon choix :</span>
-                      <span className="font-sans text-[11px] text-slate-300">
+                      <span className="font-sans text-xs text-slate-300">
                         À la carte (caution de 5 000 FCFA déduite sur place)
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="font-sans text-slate-400">Boissons &amp; Extras :</span>
-                      <span className="font-sans text-[11px] text-slate-300">Directement sur place</span>
+                      <span className="font-sans text-xs text-slate-300">Directement sur place</span>
                     </div>
                   </div>
                 </div>
@@ -2653,13 +2730,13 @@ export function JourneyHubView({
                   key={metric.label}
                   className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 rounded-xl space-y-1"
                 >
-                  <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 block">
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400 block">
                     {metric.label}
                   </span>
                   <span className="font-mono text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 block">
                     {formatMoney(metric.val, budgetBreakdown.targetCur)}
                   </span>
-                  <span className="text-[10px] text-slate-400 block">{metric.sub}</span>
+                  <span className="text-xs text-slate-400 block">{metric.sub}</span>
                 </div>
               ))}
             </div>
@@ -2697,7 +2774,7 @@ export function JourneyHubView({
                             )})`
                           : ''}
                       </span>
-                      <span className="text-[11px] text-slate-500 block truncate">{sc.detail}</span>
+                      <span className="text-xs text-slate-500 block truncate">{sc.detail}</span>
                     </div>
                   ))}
                 </div>
@@ -2721,7 +2798,7 @@ export function JourneyHubView({
                     </p>
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-10">
+                <p className="text-xs text-slate-500 dark:text-slate-400 pl-10">
                   Règles harmonisées : max {countrySetting?.maxVisitsCityChangeDay ?? 1} visite un jour de changement de ville · max {countrySetting?.maxVisitsSameCityDay ?? 2} visites/jour sans changement de ville · temps libre préservé chaque jour.
                 </p>
               </div>
@@ -2847,7 +2924,7 @@ export function JourneyHubView({
                                       }
                                     }}
                                     aria-label="Modifier la date ou l'horaire de l'étape"
-                                    className="min-h-[40px] px-2.5 inline-flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-[#0B192C] dark:hover:text-amber-400 rounded-lg"
+                                    className="min-h-[44px] px-2.5 inline-flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-[#0B192C] dark:hover:text-amber-400 rounded-lg"
                                   >
                                     <Edit3 className="w-3.5 h-3.5" />
                                     <span className="hidden sm:inline">
@@ -2859,7 +2936,7 @@ export function JourneyHubView({
                                   type="button"
                                   onClick={() => void onDeleteJourneyItem(it.id)}
                                   aria-label="Retirer de l'agenda"
-                                  className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center text-slate-400 hover:text-red-600 rounded-lg"
+                                  className="min-h-[44px] min-w-[40px] inline-flex items-center justify-center text-slate-400 hover:text-red-600 rounded-lg"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -2886,7 +2963,7 @@ export function JourneyHubView({
                                 className="pt-2 border-t border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end"
                               >
                                 <div>
-                                  <label className="block text-[11px] font-medium mb-1">
+                                  <label className="block text-xs font-medium mb-1">
                                     Nouvelle date
                                   </label>
                                   <input
@@ -2894,11 +2971,11 @@ export function JourneyHubView({
                                     value={stepEditDate}
                                     onChange={(e) => setStepEditDate(e.target.value)}
                                     required
-                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                    className="w-full min-h-[44px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                                   />
                                 </div>
                                 <div>
-                                  <label className="block text-[11px] font-medium mb-1">
+                                  <label className="block text-xs font-medium mb-1">
                                     Nouvel horaire
                                   </label>
                                   <input
@@ -2906,11 +2983,11 @@ export function JourneyHubView({
                                     value={stepEditTime}
                                     onChange={(e) => setStepEditTime(e.target.value)}
                                     required
-                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                    className="w-full min-h-[44px] px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                                   />
                                 </div>
                                 <div>
-                                  <label className="block text-[11px] font-medium mb-1">
+                                  <label className="block text-xs font-medium mb-1">
                                     Option / note
                                   </label>
                                   <input
@@ -2918,13 +2995,13 @@ export function JourneyHubView({
                                     value={stepEditNotes}
                                     onChange={(e) => setStepEditNotes(e.target.value)}
                                     maxLength={580}
-                                    className="w-full min-h-[38px] px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                    className="w-full min-h-[44px] px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                                   />
                                 </div>
                                 <button
                                   type="submit"
                                   disabled={savingStepEdit}
-                                  className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-lg"
+                                  className="min-h-[44px] px-3.5 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-lg"
                                 >
                                   {savingStepEdit ? 'Vérification...' : 'Revalider l’étape'}
                                 </button>
@@ -3037,7 +3114,7 @@ export function JourneyHubView({
                                 ? 'Marquer comme non effectuée'
                                 : 'Marquer cette étape comme effectuée'
                             }
-                            className={`min-h-[36px] min-w-[36px] mt-0.5 rounded-xl border flex items-center justify-center transition-colors ${
+                            className={`min-h-[44px] min-w-[36px] mt-0.5 rounded-xl border flex items-center justify-center transition-colors ${
                               row.completed
                                 ? 'bg-emerald-600 border-emerald-600 text-white'
                                 : 'bg-slate-50 dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-transparent'
@@ -3080,7 +3157,7 @@ export function JourneyHubView({
                                 setDraftProviderContact(row.providerContactNote);
                               }
                             }}
-                            className="min-h-[36px] px-3 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg"
+                            className="min-h-[44px] px-3 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg"
                           >
                             {isEditing ? 'Fermer' : 'Annoter / Souvenir'}
                           </button>
@@ -3089,7 +3166,7 @@ export function JourneyHubView({
                               type="button"
                               onClick={() => void onDeleteJournalEntry(row.entryId)}
                               aria-label="Supprimer cette note libre"
-                              className="min-h-[36px] px-2 text-slate-400 hover:text-red-600"
+                              className="min-h-[44px] px-2 text-slate-400 hover:text-red-600"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -3166,7 +3243,7 @@ export function JourneyHubView({
                                 onChange={(e) => setDraftPhotoUrl(e.target.value)}
                                 maxLength={580}
                                 placeholder="https://..."
-                                className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                                className="w-full min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                               />
                             </div>
                             <div>
@@ -3179,14 +3256,14 @@ export function JourneyHubView({
                                 onChange={(e) => setDraftProviderContact(e.target.value)}
                                 maxLength={380}
                                 placeholder="Nom du guide, horaire convenu..."
-                                className="w-full min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                                className="w-full min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                               />
                             </div>
                           </div>
                           <button
                             type="submit"
                             disabled={savingJournal}
-                            className="min-h-[40px] px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+                            className="min-h-[44px] px-4 py-1.5 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
                           >
                             {savingJournal ? 'Synchronisation...' : 'Enregistrer dans mon carnet'}
                           </button>
@@ -3240,12 +3317,12 @@ export function JourneyHubView({
                 required
                 maxLength={170}
                 placeholder="Ex: Coucher de soleil à la Bouche du Roy"
-                className="sm:col-span-1 min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="sm:col-span-1 min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
               <select
                 value={customCityId}
                 onChange={(e) => setCustomCityId(e.target.value)}
-                className="min-h-[42px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               >
                 {currentCountry.cities.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -3258,7 +3335,7 @@ export function JourneyHubView({
                 value={customDate}
                 onChange={(e) => setCustomDate(e.target.value)}
                 required
-                className="min-h-[42px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="min-h-[44px] px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
             </div>
 
@@ -3278,7 +3355,7 @@ export function JourneyHubView({
                 onChange={(e) => setCustomPhotoUrl(e.target.value)}
                 maxLength={580}
                 placeholder="URL photo souvenir (optionnel)"
-                className="min-h-[40px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
               <input
                 type="text"
@@ -3286,14 +3363,14 @@ export function JourneyHubView({
                 onChange={(e) => setCustomContactNote(e.target.value)}
                 maxLength={380}
                 placeholder="Contact local / artisan rencontré (optionnel)"
-                className="min-h-[40px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
             </div>
 
             <button
               type="submit"
               disabled={savingJournal}
-              className="min-h-[42px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+              className="min-h-[44px] px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
             >
               Ajouter à mon Carnet de Voyage
             </button>
@@ -3602,7 +3679,7 @@ export function JourneyHubView({
                           <strong className="capitalize">{res.cityId}</strong>
                         </span>
                         {res.referralCode && (
-                          <span className="font-mono text-[11px] text-teal-700 dark:text-teal-400">
+                          <span className="font-mono text-xs text-teal-700 dark:text-teal-400">
                             Code partenaire : {res.referralCode}
                           </span>
                         )}
@@ -3717,7 +3794,7 @@ export function JourneyHubView({
                                         : 'bg-slate-200 dark:bg-slate-800'
                                     }`}
                                   />
-                                  <span className="block text-[10px] text-slate-500 truncate">
+                                  <span className="block text-xs text-slate-500 truncate">
                                     {lbl}
                                   </span>
                                 </div>
@@ -3744,7 +3821,7 @@ export function JourneyHubView({
                           )}
                         </p>
                         {res.dispatchStatus && (
-                          <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                          <p className="text-xs text-slate-600 dark:text-slate-400">
                             Suivi transmission prestataire :{' '}
                             <strong>
                               {res.dispatchStatus === 'prepared'
@@ -3790,7 +3867,7 @@ export function JourneyHubView({
                             </>
                           )}
                         </p>
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-xs text-slate-500">
                           Conditions : annulation libre tant que la prestation n’est pas confirmée ; après règlement, conditions d’annulation/remboursement selon le barème de l’établissement.
                         </p>
                       </div>
@@ -3815,7 +3892,7 @@ export function JourneyHubView({
                               type="button"
                               disabled={loadingReceiptId === res.id}
                               onClick={() => void handleOpenElectronicReceipt(res)}
-                              className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
+                              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
                             >
                               <Printer className="w-3.5 h-3.5" />
                               <span>
@@ -3854,12 +3931,12 @@ export function JourneyHubView({
                                   <span>Identité voyageur :</span>
                                 </span>
                                 <span
-                                  className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold ${statusUi.badgeClass}`}
+                                  className={`px-2 py-0.5 rounded-md border text-xs font-semibold ${statusUi.badgeClass}`}
                                 >
                                   {statusUi.label}
                                 </span>
                               </div>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
                                 {isActionRequested
                                   ? 'Le prestataire demande un justificatif d’identité pour finaliser cette réservation.'
                                   : categoryMayNeedId
@@ -3875,7 +3952,7 @@ export function JourneyHubView({
                                 <button
                                   type="button"
                                   onClick={() => setIdentityModalRes(res)}
-                                  className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
+                                  className={`min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
                                     isActionRequested
                                       ? 'bg-amber-400 hover:bg-amber-300 text-slate-950'
                                       : 'bg-[#0B192C] hover:bg-slate-800 text-white'
@@ -3938,7 +4015,7 @@ export function JourneyHubView({
                                       setBusyReservationId(null);
                                     }
                                   }}
-                                  className="min-h-[38px] px-3.5 py-1.5 font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg"
+                                  className="min-h-[44px] px-3.5 py-1.5 font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg"
                                 >
                                   Demander cette alternative
                                 </button>
@@ -3962,7 +4039,7 @@ export function JourneyHubView({
                                 setBusyReservationId(null);
                               }
                             }}
-                            className="min-h-[40px] inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
+                            className="min-h-[44px] inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
                           >
                             <Check className="w-3.5 h-3.5" />
                             <span>Accepter l’alternative</span>
@@ -3970,23 +4047,129 @@ export function JourneyHubView({
                         )}
 
                         {(res.status === 'accepted' || res.status === 'awaiting_payment') &&
-                          res.paymentStatus === 'unpaid' && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={async () => {
-                                setBusyReservationId(res.id);
-                                try {
-                                  await onClientInitiatePayment(res);
-                                } finally {
-                                  setBusyReservationId(null);
-                                }
-                              }}
-                              className="min-h-[40px] px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
-                            >
-                              Demander le règlement encadré
-                            </button>
-                          )}
+                          res.paymentStatus === 'unpaid' && (() => {
+                            const waveNum = cleanClientSettingValue(countrySetting?.waveNumber);
+                            const omNum = cleanClientSettingValue(countrySetting?.orangeMoneyNumber);
+                            const mtnNum = cleanClientSettingValue(countrySetting?.mtnMoneyNumber);
+                            const fallbackNum = cleanClientSettingValue(countrySetting?.amaroMobileMoneyNumber);
+                            const holder = cleanClientSettingValue(countrySetting?.amaroMobileMoneyHolder);
+                            const selectedMethod = resPayMethodByRes[res.id] || 'Wave';
+                            const txRef = resTxRefByRes[res.id] || '';
+                            const activeOperatorNumber =
+                              selectedMethod === 'Wave'
+                                ? waveNum || fallbackNum
+                                : selectedMethod === 'Orange Money'
+                                ? omNum || fallbackNum
+                                : mtnNum || fallbackNum;
+                            const dueNow =
+                              res.payNowAmount !== undefined ? res.payNowAmount : res.totalAmount;
+
+                            return (
+                              <div className="w-full p-4 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 space-y-3 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-bold text-slate-900 dark:text-slate-100">
+                                    Règlement Mobile Money — Montant :{' '}
+                                    <span className="font-mono">
+                                      {formatMoney(dueNow, res.currency)}
+                                    </span>
+                                  </span>
+                                  {holder && (
+                                    <span className="text-slate-600 dark:text-slate-300">
+                                      Titulaire : <strong>{holder}</strong>
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                  <div>
+                                    <label className="block text-xs font-medium mb-1">
+                                      Opérateur utilisé
+                                    </label>
+                                    <select
+                                      value={selectedMethod}
+                                      onChange={(e) =>
+                                        setResPayMethodByRes((prev) => ({
+                                          ...prev,
+                                          [res.id]: e.target.value,
+                                        }))
+                                      }
+                                      className="w-full min-h-[44px] px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                                    >
+                                      <option value="Wave">Wave</option>
+                                      <option value="Orange Money">Orange Money</option>
+                                      <option value="MTN Mobile Money">MTN Mobile Money</option>
+                                    </select>
+                                  </div>
+
+                                  <div className="px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col justify-center">
+                                    <span className="text-xs text-slate-500">
+                                      Numéro {selectedMethod} AMARO
+                                    </span>
+                                    <strong className="font-mono text-slate-900 dark:text-slate-100">
+                                      {activeOperatorNumber ||
+                                        'Confirmé par votre conseiller AMARO'}
+                                    </strong>
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-medium mb-1">
+                                      Référence de la transaction *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={txRef}
+                                      onChange={(e) =>
+                                        setResTxRefByRes((prev) => ({
+                                          ...prev,
+                                          [res.id]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="Ex : TXN-CI-849201"
+                                      className="w-full min-h-[44px] px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={busy || txRef.trim().length < 3}
+                                  onClick={async () => {
+                                    setBusyReservationId(res.id);
+                                    try {
+                                      await onClientInitiatePayment(res, {
+                                        paymentMethod: selectedMethod,
+                                        transactionRef: txRef.trim(),
+                                      });
+                                    } finally {
+                                      setBusyReservationId(null);
+                                    }
+                                  }}
+                                  className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 rounded-xl"
+                                >
+                                  Envoyer ma référence de paiement
+                                </button>
+                              </div>
+                            );
+                          })()}
+
+                        {(res.paymentStatus === 'initiated' || res.paymentStatus === 'pending') && (
+                          <div className="w-full p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-100 space-y-1">
+                            <p className="font-bold flex items-center gap-1.5">
+                              <Clock className="w-4 h-4 text-amber-700 dark:text-amber-300 shrink-0" />
+                              <span>Paiement en attente de validation</span>
+                            </p>
+                            <p>
+                              Règlement déclaré ({res.paymentMethodDeclared || 'Mobile Money'})
+                              {res.clientTxRef ? (
+                                <>
+                                  {' '}
+                                  · Référence : <strong className="font-mono">{res.clientTxRef}</strong>
+                                </>
+                              ) : null}
+                              . L’administrateur AMARO valide votre paiement dès vérification.
+                            </p>
+                          </div>
+                        )}
 
                         {!['cancelled', 'refunded', 'confirmed', 'rejected'].includes(
                           res.status
@@ -4002,7 +4185,7 @@ export function JourneyHubView({
                                 setBusyReservationId(null);
                               }
                             }}
-                            className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 rounded-xl"
+                            className="min-h-[44px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 rounded-xl"
                           >
                             <X className="w-3.5 h-3.5" />
                             <span>Annuler</span>
@@ -4041,7 +4224,7 @@ export function JourneyHubView({
                                 setEditOfferCheckOutDate(res.checkOutDate || '');
                                 setEditingOffersResId(res.id);
                               }}
-                              className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-xl"
+                              className="min-h-[44px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-xl"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                               <span>
@@ -4055,7 +4238,7 @@ export function JourneyHubView({
                         <button
                           type="button"
                           onClick={() => void handleFetchSmartAlternatives(res, false)}
-                          className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-teal-800 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/40 rounded-xl"
+                          className="min-h-[44px] inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-teal-800 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/40 rounded-xl"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
                           <span>Voir jusqu’à 3 alternatives</span>
@@ -4110,7 +4293,7 @@ export function JourneyHubView({
                                         <strong className="block text-slate-900 dark:text-slate-100">
                                           {off.name}
                                         </strong>
-                                        <span className="text-[11px] text-slate-500 tabular-nums">
+                                        <span className="text-xs text-slate-500 tabular-nums">
                                           {off.priceState === 'price_on_request' ||
                                           off.priceAmount <= 0
                                             ? OFFER_PRICE_STATE_LABELS.price_on_request
@@ -4134,7 +4317,7 @@ export function JourneyHubView({
                                               return copy;
                                             })
                                           }
-                                          className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center disabled:opacity-35"
+                                          className="min-h-[44px] min-w-[28px] inline-flex items-center justify-center disabled:opacity-35"
                                         >
                                           <Minus className="w-3 h-3" />
                                         </button>
@@ -4149,7 +4332,7 @@ export function JourneyHubView({
                                               [off.id]: Math.min(20, (prev[off.id] || 0) + 1),
                                             }))
                                           }
-                                          className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center"
+                                          className="min-h-[44px] min-w-[28px] inline-flex items-center justify-center"
                                         >
                                           <Plus className="w-3 h-3" />
                                         </button>
@@ -4161,7 +4344,7 @@ export function JourneyHubView({
 
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div>
-                                  <label className="block text-[11px] font-medium mb-1">
+                                  <label className="block text-xs font-medium mb-1">
                                     Nombre de voyageurs
                                   </label>
                                   <input
@@ -4174,19 +4357,19 @@ export function JourneyHubView({
                                         Math.max(1, Number(e.target.value) || 1)
                                       )
                                     }
-                                    className="w-full min-h-[38px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                    className="w-full min-h-[44px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                                   />
                                 </div>
                                 {res.category === 'accommodation' && (
                                   <div>
-                                    <label className="block text-[11px] font-medium mb-1">
+                                    <label className="block text-xs font-medium mb-1">
                                       Date de départ
                                     </label>
                                     <input
                                       type="date"
                                       value={editOfferCheckOutDate}
                                       onChange={(e) => setEditOfferCheckOutDate(e.target.value)}
-                                      className="w-full min-h-[38px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                      className="w-full min-h-[44px] px-2.5 py-1 font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
                                     />
                                   </div>
                                 )}
@@ -4196,7 +4379,7 @@ export function JourneyHubView({
                                 <button
                                   type="submit"
                                   disabled={savingOfferEdit || payloadOffers.length === 0}
-                                  className="min-h-[38px] px-4 py-1.5 font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 disabled:opacity-45 rounded-lg"
+                                  className="min-h-[44px] px-4 py-1.5 font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 disabled:opacity-45 rounded-lg"
                                 >
                                   {savingOfferEdit
                                     ? 'Mise à jour...'
@@ -4205,7 +4388,7 @@ export function JourneyHubView({
                                 <button
                                   type="button"
                                   onClick={() => setEditingOffersResId(null)}
-                                  className="min-h-[38px] px-3 py-1.5 text-slate-500"
+                                  className="min-h-[44px] px-3 py-1.5 text-slate-500"
                                 >
                                   Annuler
                                 </button>
@@ -4344,7 +4527,7 @@ export function JourneyHubView({
                 <button
                   type="button"
                   onClick={() => setNotifFilter('all')}
-                  className={`min-h-[34px] px-3 py-1 rounded-lg font-semibold ${
+                  className={`min-h-[44px] px-3 py-1 rounded-lg font-semibold ${
                     notifFilter === 'all'
                       ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -4355,7 +4538,7 @@ export function JourneyHubView({
                 <button
                   type="button"
                   onClick={() => setNotifFilter('unread')}
-                  className={`min-h-[34px] px-3 py-1 rounded-lg font-semibold ${
+                  className={`min-h-[44px] px-3 py-1 rounded-lg font-semibold ${
                     notifFilter === 'unread'
                       ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -4365,7 +4548,7 @@ export function JourneyHubView({
                 </button>
               </div>
 
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Canal actif : Notifications applicatives temps réel · Canaux externes (e-mail, SMS, WhatsApp) : architecture prête, connecteurs tiers non activés.
               </p>
 
@@ -4394,7 +4577,7 @@ export function JourneyHubView({
                             <button
                               type="button"
                               onClick={() => void onMarkNotificationRead(n.id)}
-                              className="text-[11px] font-semibold text-[#0B192C] dark:text-amber-400 underline shrink-0"
+                              className="text-xs font-semibold text-[#0B192C] dark:text-amber-400 underline shrink-0"
                             >
                               Marquer lu
                             </button>
@@ -4429,7 +4612,7 @@ export function JourneyHubView({
               <button
                 type="button"
                 onClick={() => setActiveReceipt(null)}
-                className="no-print min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                className="no-print min-h-[44px] min-w-[38px] inline-flex items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -4479,7 +4662,7 @@ export function JourneyHubView({
               </div>
             </div>
 
-            <p className="text-[11px] text-slate-500 leading-relaxed">
+            <p className="text-xs text-slate-500 leading-relaxed">
               {activeReceipt.conditionsSummary} · Émis le {activeReceipt.issuedAt}.
             </p>
 
@@ -4487,14 +4670,14 @@ export function JourneyHubView({
               <button
                 type="button"
                 onClick={() => setActiveReceipt(null)}
-                className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400"
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400"
               >
                 Fermer
               </button>
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="min-h-[42px] inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
+                className="min-h-[44px] inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-teal-500 dark:text-slate-950 rounded-xl"
               >
                 <Printer className="w-4 h-4" />
                 <span>Imprimer / Enregistrer en PDF</span>
