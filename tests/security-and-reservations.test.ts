@@ -16,10 +16,14 @@ import {
 } from '../src/server/domainEngine';
 import {
   ConflictError,
+  ForbiddenError,
   type AdminServiceUpsertInput,
   type AmaroServerStore,
   type AtomicReferralPayload,
   type AtomicReservationPayload,
+  type ProviderCommercialPrivateRecord,
+  type ProviderServiceUpsertInput,
+  type ProviderWithPrivateBundle,
   type ServerFolderRecord,
   type ServerIdentityAccessLogInput,
   type ServerIdentityMetadataRecord,
@@ -84,7 +88,10 @@ import type {
   JourneyFolderStatus,
   NotificationDispatchDoc,
   PaymentStatus,
+  PhotoIndicatorType,
+  ProviderApplicationPhoto,
   ProviderOfferDoc,
+  ProviderProfileDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ReservationStatus,
@@ -137,6 +144,9 @@ class InMemoryTestStore implements AmaroServerStore {
   readonly usedDossierTxRefs = new Set<string>();
   readonly providerOffers = new Map<string, ProviderOfferDoc>();
   readonly censusListings = new Map<string, CensusListingDoc>();
+  readonly userAccountTypes = new Map<string, 'traveler' | 'provider'>();
+  readonly providerProfiles = new Map<string, ProviderProfileDoc & { trustedPartner?: boolean }>();
+  readonly providerPrivateCommercial = new Map<string, ProviderCommercialPrivateRecord>();
   readonly verifiedProviders = new Map<
     string,
     { ownerId: string; verificationStatus: 'pending' | 'verified' | 'rejected' }
@@ -199,14 +209,42 @@ class InMemoryTestStore implements AmaroServerStore {
     this.usedDossierTxRefs.clear();
     this.providerOffers.clear();
     this.censusListings.clear();
+    this.userAccountTypes.clear();
+    this.providerProfiles.clear();
+    this.providerPrivateCommercial.clear();
     this.verifiedProviders.clear();
     this.systemSettingUpdates.length = 0;
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
 
+    this.userAccountTypes.set('traveler-uid-1', 'traveler');
+    this.userAccountTypes.set('TEST-client-uid', 'traveler');
+    this.userAccountTypes.set('provider-owner-uid', 'provider');
+    this.userAccountTypes.set('other-provider-uid', 'provider');
+
     this.verifiedProviders.set('prov-cotonou-1', {
       ownerId: 'provider-owner-uid',
       verificationStatus: 'verified',
+    });
+    this.providerProfiles.set('prov-cotonou-1', {
+      id: 'prov-cotonou-1',
+      ownerId: 'provider-owner-uid',
+      businessName: 'Hôtel Partenaire Lagune',
+      category: 'accommodation',
+      countryCode: 'BJ',
+      cityId: 'cotonou',
+      description: 'Hôtel partenaire vérifié à Cotonou.',
+      verificationStatus: 'verified',
+      trustedPartner: false,
+      agreedCommissionPercent: 10,
+    });
+    this.providerPrivateCommercial.set('prov-cotonou-1', {
+      ownerId: 'provider-owner-uid',
+      contactEmail: 'hotel.lagune@example.com',
+      contactPhone: '+22901020304',
+      payoutChannel: 'Wave',
+      payoutNumber: '+22901020304',
+      registrationRef: '',
     });
     for (const rec of INITIAL_BENIN_WEB_CENSUS_RECORDS) {
       this.censusListings.set(rec.id, structuredClone(rec));
@@ -382,6 +420,9 @@ class InMemoryTestStore implements AmaroServerStore {
         : {}),
       ...(payload.photoVerified !== undefined || (existing as any)?.photoVerified !== undefined
         ? { photoVerified: payload.photoVerified ?? (existing as any)?.photoVerified }
+        : {}),
+      ...(payload.photoIndicator !== undefined || (existing as any)?.photoIndicator !== undefined
+        ? { photoIndicator: payload.photoIndicator ?? (existing as any)?.photoIndicator }
         : {}),
       ...(payload.photoSource !== undefined || (existing as any)?.photoSource !== undefined
         ? { photoSource: payload.photoSource ?? (existing as any)?.photoSource }
@@ -827,18 +868,338 @@ class InMemoryTestStore implements AmaroServerStore {
     companyName: string;
     category: ServiceCategory;
     cityId: string;
+    publicZone?: string;
     countryCode: string;
     phone: string;
+    whatsapp?: string;
     contactEmail: string;
     description: string;
+    payoutMethod?: string;
+    payoutNumber?: string;
+    registrationRef?: string;
+    photos?: ProviderApplicationPhoto[];
+    claimDirectoryServiceId?: string;
     conventionVersion: string;
     conventionAcceptedAt: string;
   }): Promise<{ providerId: string; verificationStatus: 'pending' }> {
+    const cleanPhotos = Array.isArray(params.photos)
+      ? params.photos.slice(0, 6).map((p) => ({
+          url: String(p.url || '').trim(),
+          sourceUrl: String(p.sourceUrl || '').trim(),
+        }))
+      : [];
     this.registeredProviders.set(params.providerId, {
       ...params,
       verificationStatus: 'pending',
     });
+    this.providerProfiles.set(params.providerId, {
+      id: params.providerId,
+      ownerId: params.ownerId,
+      businessName: params.companyName,
+      category: params.category,
+      countryCode: params.countryCode || 'CI',
+      cityId: params.cityId,
+      publicZone: params.publicZone || params.cityId,
+      description: params.description,
+      whatsapp: params.whatsapp || params.phone,
+      applicationPhotos: cleanPhotos,
+      verificationStatus: 'pending',
+      trustedPartner: false,
+      rejectionReason: '',
+      clarificationNote: '',
+      agreedCommissionPercent: 10,
+      conventionAcceptedAt: params.conventionAcceptedAt,
+      conventionVersionAccepted: params.conventionVersion,
+      ...(params.claimDirectoryServiceId
+        ? { linkedDirectoryServiceId: params.claimDirectoryServiceId }
+        : {}),
+    });
+    this.providerPrivateCommercial.set(params.providerId, {
+      ownerId: params.ownerId,
+      contactEmail: params.contactEmail,
+      contactPhone: params.whatsapp || params.phone,
+      payoutChannel: params.payoutMethod || 'Wave',
+      payoutNumber: params.payoutNumber || '',
+      registrationRef: params.registrationRef || '',
+    });
+    this.verifiedProviders.set(params.providerId, {
+      ownerId: params.ownerId,
+      verificationStatus: 'pending',
+    });
+    this.notificationDispatches.push({
+      id: `notif-prov-req-${params.providerId}`,
+      recipientId: 'admin-inbox',
+      reservationId: params.providerId,
+      folderId: params.providerId,
+      channel: 'in_app',
+      status: 'sent',
+      title: 'Nouvelle demande partenaire',
+      summary: `${params.companyName} (${params.cityId}) demande à devenir partenaire.`,
+      createdAtIso: new Date().toISOString(),
+    });
     return { providerId: params.providerId, verificationStatus: 'pending' };
+  }
+
+  async getProviderWithPrivate(providerId: string): Promise<ProviderWithPrivateBundle | null> {
+    const prov = this.providerProfiles.get(providerId);
+    if (!prov) return null;
+    const priv = this.providerPrivateCommercial.get(providerId) || null;
+    return {
+      provider: structuredClone(prov),
+      privateCommercial: priv ? structuredClone(priv) : null,
+    };
+  }
+
+  async listAllProvidersWithPrivate(): Promise<ProviderWithPrivateBundle[]> {
+    return Array.from(this.providerProfiles.values()).map((prov) => ({
+      provider: structuredClone(prov),
+      privateCommercial: this.providerPrivateCommercial.get(prov.id)
+        ? structuredClone(this.providerPrivateCommercial.get(prov.id)!)
+        : null,
+    }));
+  }
+
+  async adminReviewProvider(params: {
+    providerId: string;
+    action: 'accept' | 'reject' | 'request_clarification' | 'set_trust';
+    reason?: string;
+    note?: string;
+    trustedPartner?: boolean;
+    adminUid: string;
+  }): Promise<ProviderWithPrivateBundle> {
+    const existing = this.providerProfiles.get(params.providerId);
+    if (!existing) {
+      throw new Error('Dossier prestataire introuvable.');
+    }
+    const next: ProviderProfileDoc & { trustedPartner?: boolean } = {
+      ...existing,
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: params.adminUid,
+    };
+    if (params.action === 'accept') {
+      next.verificationStatus = 'verified';
+      next.rejectionReason = '';
+      next.clarificationNote = '';
+      if (typeof params.trustedPartner === 'boolean') next.trustedPartner = params.trustedPartner;
+      this.userAccountTypes.set(existing.ownerId, 'provider');
+      this.verifiedProviders.set(existing.id, {
+        ownerId: existing.ownerId,
+        verificationStatus: 'verified',
+      });
+    } else if (params.action === 'reject') {
+      next.verificationStatus = 'rejected';
+      next.rejectionReason = String(params.reason || '').trim();
+      next.clarificationNote = '';
+      next.trustedPartner = false;
+      this.userAccountTypes.set(existing.ownerId, 'traveler');
+      this.verifiedProviders.set(existing.id, {
+        ownerId: existing.ownerId,
+        verificationStatus: 'rejected',
+      });
+      for (const [sid, srv] of this.services.entries()) {
+        if (srv.providerId === existing.id) {
+          this.services.set(sid, {
+            ...srv,
+            status: 'draft',
+            dataOrigin: 'pending_verification',
+            verificationStatus: 'unverified',
+          });
+        }
+      }
+    } else if (params.action === 'request_clarification') {
+      next.verificationStatus = 'clarification_requested';
+      next.clarificationNote = String(params.note || '').trim();
+    } else {
+      next.trustedPartner = Boolean(params.trustedPartner);
+    }
+    this.providerProfiles.set(existing.id, next);
+    this.notificationDispatches.push({
+      id: `notif-prov-rev-${existing.id}-${Date.now()}`,
+      recipientId: existing.ownerId,
+      reservationId: existing.id,
+      folderId: existing.id,
+      channel: 'in_app',
+      status: 'sent',
+      title: `Décision partenaire : ${params.action}`,
+      summary: next.businessName,
+      createdAtIso: new Date().toISOString(),
+    });
+    return (await this.getProviderWithPrivate(existing.id))!;
+  }
+
+  async providerUpsertOwnService(
+    payload: ProviderServiceUpsertInput,
+    callerUid: string
+  ): Promise<{ service: ServerServiceRecord; requiresAdminValidation: boolean }> {
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    const bundle = await this.getProviderWithPrivate(providerId);
+    if (!bundle || bundle.provider.ownerId !== callerUid) {
+      throw new ForbiddenError('Aucun profil partenaire trouvé pour ce compte (403).');
+    }
+    if (bundle.provider.verificationStatus !== 'verified') {
+      throw new ForbiddenError(
+        'Votre demande partenaire doit d’abord être acceptée par l’administrateur avant de publier des prestations (403).'
+      );
+    }
+    const cleanId = payload.id
+      ? payload.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
+      : `srv-prv-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 6)}`;
+    const existing = this.services.get(cleanId) || OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId] || null;
+    if (OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId] && (!existing || existing.ownerId !== callerUid)) {
+      throw new ForbiddenError('Accès refusé sur fiche répertoire (403).');
+    }
+    if (existing && (existing.ownerId !== callerUid || existing.providerId !== providerId)) {
+      throw new ForbiddenError('Accès refusé : vous ne pouvez modifier que vos propres prestations (403).');
+    }
+
+    const customPhotoUrl = String(payload.customPhotoUrl ?? existing?.customPhotoUrl ?? '').trim();
+    const photoSource = String(payload.photoSource ?? existing?.photoSource ?? '').trim();
+    const hasPhoto = customPhotoUrl.length >= 10 && /^https?:\/\//i.test(customPhotoUrl);
+    if (customPhotoUrl.length > 0 && !hasPhoto) {
+      throw new Error('Le lien de la photo doit être une adresse internet valide.');
+    }
+    if (hasPhoto && photoSource.length < 5) {
+      throw new Error('Indiquez obligatoirement le lien de la page d’origine de chaque photo.');
+    }
+    if (hasPhoto) {
+      const norm = customPhotoUrl.toLowerCase();
+      for (const s of this.services.values()) {
+        if (s.id !== cleanId && String(s.customPhotoUrl || '').trim().toLowerCase() === norm) {
+          throw new ConflictError(
+            `Cette photo est déjà utilisée par « ${s.title} ». Règle AMARO : une photo = une seule prestation, aucun doublon.`
+          );
+        }
+      }
+    }
+
+    const title = payload.title.trim();
+    const priceAmount = Math.max(0, Math.round(Number(payload.priceAmount || 0)));
+    const isMajorChange =
+      !existing ||
+      title !== existing.title ||
+      payload.category !== existing.category ||
+      payload.cityId !== existing.cityId ||
+      priceAmount !== existing.priceAmount ||
+      payload.description.trim() !== String((existing as any).description || '') ||
+      customPhotoUrl !== String(existing.customPhotoUrl || '') ||
+      photoSource !== String(existing.photoSource || '');
+
+    const canAutoPublish = Boolean(bundle.provider.trustedPartner) && hasPhoto && photoSource.length >= 5;
+    let nextStatus: 'draft' | 'published' = 'draft';
+    let nextOrigin: 'verified_partner' | 'pending_verification' = 'pending_verification';
+    let nextVerif: 'verified' | 'unverified' = 'unverified';
+    let nextPhotoVerified = false;
+    const nextPhotoIndicator: PhotoIndicatorType = hasPhoto ? 'propre_etablissement' : 'photo_a_ajouter';
+
+    if (!hasPhoto) {
+      nextStatus = 'draft';
+    } else if (canAutoPublish) {
+      nextStatus = 'published';
+      nextOrigin = 'verified_partner';
+      nextVerif = 'verified';
+      nextPhotoVerified = true;
+    } else if (!isMajorChange && existing?.status === 'published') {
+      nextStatus = 'published';
+      nextOrigin = 'verified_partner';
+      nextVerif = 'verified';
+      nextPhotoVerified = Boolean(existing.photoVerified);
+    }
+
+    const saved: ServerServiceRecord & { description?: string } = {
+      id: cleanId,
+      providerId,
+      ownerId: callerUid,
+      title,
+      category: payload.category,
+      countryCode: bundle.provider.countryCode || 'CI',
+      cityId: payload.cityId,
+      address: payload.address || payload.cityId,
+      description: payload.description.trim(),
+      priceAmount,
+      priceKnown: priceAmount > 0,
+      currency: 'XOF',
+      durationMinutes: Number(payload.durationMinutes ?? existing?.durationMinutes ?? 120),
+      capacity: Number(payload.capacity ?? existing?.capacity ?? 2),
+      status: nextStatus,
+      dataOrigin: nextOrigin,
+      verificationStatus: nextVerif,
+      customPhotoUrl,
+      photoSource,
+      photoVerified: nextPhotoVerified,
+      photoIndicator: nextPhotoIndicator,
+      blockedDates: Array.isArray(payload.blockedDates)
+        ? payload.blockedDates
+        : existing?.blockedDates || [],
+    };
+    this.services.set(cleanId, saved);
+    const requiresAdminValidation = nextStatus === 'draft';
+    if (requiresAdminValidation) {
+      this.notificationDispatches.push({
+        id: `notif-srv-val-${cleanId}`,
+        recipientId: 'admin-inbox',
+        reservationId: cleanId,
+        folderId: cleanId,
+        channel: 'in_app',
+        status: 'sent',
+        title: 'Prestation partenaire à valider',
+        summary: `${bundle.provider.businessName} — ${title}`,
+        createdAtIso: new Date().toISOString(),
+      });
+    }
+    return { service: structuredClone(saved), requiresAdminValidation };
+  }
+
+  async providerDeleteOwnService(serviceId: string, callerUid: string): Promise<{ deleted: boolean }> {
+    const cleanId = serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    const existing = this.services.get(cleanId);
+    if (!existing) throw new Error('Prestation introuvable.');
+    if (existing.ownerId !== callerUid || existing.providerId !== providerId) {
+      throw new ForbiddenError('Vous ne pouvez supprimer que vos propres prestations (403).');
+    }
+    this.services.delete(cleanId);
+    return { deleted: true };
+  }
+
+  async listProviderOwnData(callerUid: string) {
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    const bundle = await this.getProviderWithPrivate(providerId);
+    if (!bundle || bundle.provider.ownerId !== callerUid) {
+      throw new ForbiddenError('Aucun espace prestataire associé à ce compte (403).');
+    }
+    const myServices = Array.from(this.services.values())
+      .filter((s) => s.ownerId === callerUid && s.providerId === providerId)
+      .map((s) => structuredClone(s));
+    const myReservations = Array.from(this.reservations.values())
+      .filter((r) => r.providerOwnerId === callerUid)
+      .map((r) => ({
+        id: r.reservationId,
+        folderId: r.folderId,
+        clientId: r.clientId,
+        providerOwnerId: r.providerOwnerId,
+        providerId: r.providerId,
+        serviceId: r.serviceId,
+        serviceTitle: r.serviceTitle,
+        category: r.category,
+        cityId: r.cityId,
+        scheduledDate: r.scheduledDate,
+        scheduledTime: r.scheduledTime,
+        participants: r.participants,
+        status: r.status,
+        paymentStatus: r.paymentStatus,
+        providerPrice: r.providerPrice,
+        totalAmount: r.totalAmount,
+      }));
+    const confirmedRevenueXof = myReservations
+      .filter((r) => r.paymentStatus === 'succeeded' && r.status === 'confirmed')
+      .reduce((acc, r) => acc + Number(r.providerPrice || 0), 0);
+    return {
+      provider: bundle.provider,
+      privateCommercial: bundle.privateCommercial,
+      services: myServices,
+      reservations: myReservations,
+      confirmedRevenueXof,
+    };
   }
 
   async listAllPublishedServices(): Promise<ServerServiceRecord[]> {
@@ -3495,7 +3856,17 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
         companyName: 'Résidence Océane Ouidah',
         category: 'accommodation',
         cityId: 'ouidah',
+        publicZone: 'Plage Ouidah',
         phone: '+22901970000',
+        whatsapp: '+22901970000',
+        payoutMethod: 'Wave',
+        payoutNumber: '+22901970000',
+        photos: [
+          {
+            url: 'https://example.org/residence-oceane-ouidah.jpg',
+            sourceUrl: 'https://example.org/page-residence-oceane',
+          },
+        ],
         description: 'Maison d’hôtes calme proche de la plage.',
       }),
     });
@@ -6546,6 +6917,508 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     store.pilotStocks.delete(stockId);
     store.services.delete(serviceId);
     store.financialArchives.delete(`arch-folder-${folderId}`);
+  });
+
+  it('55. Parcours Prestataire complet : demande client -> validation Admin (précisions, refus avec motif, acceptation) -> ajout prestation en attente -> publication -> anti-doublon photo -> cloisonnement strict -> suppression TEST', async () => {
+    store.reset();
+
+    // 0. Sécurité : un client simple n'a accès ni à l'espace Admin partenaires ni à l'espace Prestataire
+    const clientAdminList = await fetch(`${baseUrl}/api/amaro/admin/providers`, {
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(clientAdminList.status, 403);
+
+    const clientProviderData = await fetch(`${baseUrl}/api/amaro/provider/my-data`, {
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(clientProviderData.status, 403);
+
+    const clientUpsertDenied = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Tentative Client Non Partenaire',
+        category: 'site',
+        cityId: 'abidjan',
+        description: 'Description de test suffisamment longue.',
+        priceAmount: 10000,
+      }),
+    });
+    assert.equal(clientUpsertDenied.status, 403);
+
+    // 1. Compte client TEST soumet une demande incomplète (sans photo) -> 400
+    const missingPhotoReq = await fetch(`${baseUrl}/api/amaro/providers/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sourceFlow: 'promote_services',
+        conventionAccepted: true,
+        companyName: 'TEST Laguna Lodge Assinie',
+        category: 'accommodation',
+        cityId: 'assinie',
+        whatsapp: '+2250700112233',
+        payoutMethod: 'Wave',
+        payoutNumber: '+2250700112233',
+        description: 'Chambres en bord de lagune pour les séjours côtiers.',
+        photos: [],
+      }),
+    });
+    assert.equal(missingPhotoReq.status, 400);
+
+    // 2. Compte client TEST soumet une demande complète avec photo + lien d'origine + Wave -> 201 (Demande en attente)
+    store.notificationDispatches.length = 0;
+    const validAppReq = await fetch(`${baseUrl}/api/amaro/providers/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sourceFlow: 'promote_services',
+        conventionAccepted: true,
+        companyName: 'TEST Laguna Lodge Assinie',
+        category: 'accommodation',
+        cityId: 'assinie',
+        publicZone: 'Assinie KM 12',
+        countryCode: 'CI',
+        whatsapp: '+2250700112233',
+        payoutMethod: 'Wave',
+        payoutNumber: '+2250700998877',
+        description: 'Chambres calmes au bord de la lagune d’Assinie avec petit-déjeuner.',
+        photos: [
+          {
+            url: 'https://test-partner.example.org/laguna-front.jpg',
+            sourceUrl: 'https://test-partner.example.org/galerie-laguna',
+          },
+        ],
+      }),
+    });
+    assert.equal(validAppReq.status, 201);
+    const validAppJson: any = await validAppReq.json();
+    const testProviderId = String(validAppJson.providerId);
+    assert.equal(validAppJson.verificationStatus, 'pending');
+    assert.equal(validAppJson.publiclyBookable, false);
+
+    // Notification dans l'inbox Admin
+    assert.ok(
+      store.notificationDispatches.some(
+        (n) => n.recipientId === 'admin-inbox' && n.summary.includes('TEST Laguna Lodge Assinie')
+      ),
+      'Une notification admin-inbox doit avertir l’administrateur de la nouvelle demande'
+    );
+
+    // 3. L'administrateur voit la demande dans GET /api/amaro/admin/providers (avec numéro de réception confidentiel)
+    const adminListRes = await fetch(`${baseUrl}/api/amaro/admin/providers`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(adminListRes.status, 200);
+    const adminListJson: any = await adminListRes.json();
+    const testBundle = adminListJson.providers.find((p: any) => p.provider.id === testProviderId);
+    assert.ok(testBundle);
+    assert.equal(testBundle.provider.verificationStatus, 'pending');
+    assert.equal(testBundle.privateCommercial.payoutNumber, '+2250700998877');
+
+    // Tant qu'il est en attente, le client TEST ne peut pas publier/ajouter de prestations -> 403
+    const pendingCreateService = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Chambre Lagune TEST',
+        category: 'accommodation',
+        cityId: 'assinie',
+        description: 'Grande chambre vue lagune avec terrasse privée.',
+        priceAmount: 45000,
+        customPhotoUrl: 'https://test-partner.example.org/room-1.jpg',
+        photoSource: 'https://test-partner.example.org/room-1-page',
+      }),
+    });
+    assert.equal(pendingCreateService.status, 403);
+
+    // 4. L'administrateur demande des précisions -> statut clarification_requested
+    const clarifyRes = await fetch(
+      `${baseUrl}/api/amaro/admin/providers/${encodeURIComponent(testProviderId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'request_clarification',
+          note: 'Merci de préciser le tarif de base par nuitée.',
+        }),
+      }
+    );
+    assert.equal(clarifyRes.status, 200);
+    assert.equal(
+      store.providerProfiles.get(testProviderId)?.verificationStatus,
+      'clarification_requested'
+    );
+
+    // Un refus sans motif est bloqué (400)
+    const rejectNoReason = await fetch(
+      `${baseUrl}/api/amaro/admin/providers/${encodeURIComponent(testProviderId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reject', reason: '' }),
+      }
+    );
+    assert.equal(rejectNoReason.status, 400);
+
+    // Un client simple ne peut pas approuver lui-même sa demande -> 403
+    const selfApproveDenied = await fetch(
+      `${baseUrl}/api/amaro/admin/providers/${encodeURIComponent(testProviderId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-client-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'accept' }),
+      }
+    );
+    assert.equal(selfApproveDenied.status, 403);
+
+    // 5. L'administrateur accepte la demande -> verificationStatus='verified' et compte passé en 'provider'
+    const acceptRes = await fetch(
+      `${baseUrl}/api/amaro/admin/providers/${encodeURIComponent(testProviderId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'accept' }),
+      }
+    );
+    assert.equal(acceptRes.status, 200);
+    assert.equal(store.providerProfiles.get(testProviderId)?.verificationStatus, 'verified');
+    assert.equal(store.userAccountTypes.get('TEST-client-uid'), 'provider');
+
+    // 6. Devenu prestataire, il ajoute une prestation SANS photo -> enregistrée en 'draft' et 'photo_a_ajouter', cachée au public
+    const noPhotoSvcRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Bungalow TEST Sans Photo',
+        category: 'accommodation',
+        cityId: 'assinie',
+        description: 'Bungalow bois en attente de photographie officielle.',
+        priceAmount: 35000,
+      }),
+    });
+    assert.equal(noPhotoSvcRes.status, 200);
+    const noPhotoJson: any = await noPhotoSvcRes.json();
+    const noPhotoSvcId = String(noPhotoJson.service.id);
+    assert.equal(noPhotoJson.service.status, 'draft');
+    assert.equal(noPhotoJson.service.photoIndicator, 'photo_a_ajouter');
+    assert.equal(noPhotoJson.requiresAdminValidation, true);
+
+    // 7. Il ajoute une prestation AVEC photo unique + lien d'origine -> 'En attente de validation' (draft), INVISIBLE aux clients
+    const uniquePhotoUrl = 'https://test-partner.example.org/suite-lagune-unique.jpg';
+    const withPhotoRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Suite Lagune TEST Vérifiable',
+        category: 'accommodation',
+        cityId: 'assinie',
+        address: 'Assinie KM 12',
+        description: 'Suite climatisée avec accès direct à la lagune et ponton.',
+        priceAmount: 60000,
+        capacity: 2,
+        durationMinutes: 720,
+        customPhotoUrl: uniquePhotoUrl,
+        photoSource: 'https://test-partner.example.org/suite-lagune-page',
+        blockedDates: ['2026-12-31'],
+      }),
+    });
+    assert.equal(withPhotoRes.status, 200);
+    const withPhotoJson: any = await withPhotoRes.json();
+    const publishedTestSvcId = String(withPhotoJson.service.id);
+    assert.equal(withPhotoJson.service.status, 'draft');
+    assert.equal(withPhotoJson.requiresAdminValidation, true);
+
+    // Vérification côté client (anonyme / client) : AUCUNE de ces 2 prestations n'est visible dans le catalogue CI
+    const ciPublicBefore = await fetch(`${baseUrl}/api/amaro/countries/CI/data`);
+    assert.equal(ciPublicBefore.status, 200);
+    const ciBeforeJson: any = await ciPublicBefore.json();
+    assert.equal(
+      ciBeforeJson.services.some((s: any) => s.id === publishedTestSvcId || s.id === noPhotoSvcId),
+      false,
+      'Une prestation non validée par l’admin doit rester invisible aux clients'
+    );
+
+    // L'administrateur valide et publie la prestation avec photo via POST /api/amaro/admin/services/upsert
+    const adminPublishRes = await fetch(`${baseUrl}/api/amaro/admin/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: publishedTestSvcId,
+        status: 'published',
+        verificationStatus: 'verified',
+        photoVerified: true,
+        dataOrigin: 'verified_partner',
+      }),
+    });
+    assert.equal(adminPublishRes.status, 200);
+
+    // Maintenant la prestation est visible dans le catalogue CI client, mais celle sans photo reste cachée
+    const ciPublicAfter = await fetch(`${baseUrl}/api/amaro/countries/CI/data`);
+    const ciAfterJson: any = await ciPublicAfter.json();
+    assert.equal(
+      ciAfterJson.services.some((s: any) => s.id === publishedTestSvcId),
+      true,
+      'La prestation validée par l’administrateur devient visible aux clients'
+    );
+    assert.equal(
+      ciAfterJson.services.some((s: any) => s.id === noPhotoSvcId),
+      false,
+      'La fiche sans photo doit rester cachée aux clients'
+    );
+
+    // Modification majeure (prix/titre) par un partenaire non encore "de confiance" repasse la fiche en attente de validation
+    const majorEditRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: publishedTestSvcId,
+        title: 'Suite Lagune TEST Modifiée',
+        category: 'accommodation',
+        cityId: 'assinie',
+        description: 'Suite climatisée avec accès direct à la lagune et ponton.',
+        priceAmount: 75000,
+        customPhotoUrl: uniquePhotoUrl,
+        photoSource: 'https://test-partner.example.org/suite-lagune-page',
+      }),
+    });
+    assert.equal(majorEditRes.status, 200);
+    const majorEditJson: any = await majorEditRes.json();
+    assert.equal(majorEditJson.service.status, 'draft');
+
+    // Règle anti-doublon photo : réutiliser la même photo sur une seconde prestation -> 409 Conflict
+    const dupPhotoRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-client-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Deuxième Chambre Photo Doublon TEST',
+        category: 'accommodation',
+        cityId: 'assinie',
+        description: 'Tentative de réutiliser la même photo.',
+        priceAmount: 40000,
+        customPhotoUrl: uniquePhotoUrl,
+        photoSource: 'https://test-partner.example.org/doublon',
+      }),
+    });
+    assert.equal(dupPhotoRes.status, 409);
+
+    // 8. Second compte prestataire TEST : cloisonnement strict (ne peut ni voir ni modifier ni supprimer les fiches du premier)
+    const otherProvReg = await fetch(`${baseUrl}/api/amaro/providers/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sourceFlow: 'promote_services',
+        conventionAccepted: true,
+        companyName: 'TEST Second Prestataire Abidjan',
+        category: 'translation',
+        cityId: 'abidjan',
+        countryCode: 'CI',
+        whatsapp: '+2250102030405',
+        payoutMethod: 'Orange Money',
+        payoutNumber: '+2250102030405',
+        description: 'Visites guidées du Plateau et de Cocody avec un guide certifié.',
+        photos: [
+          {
+            url: 'https://test-other.example.org/guide-abidjan.jpg',
+            sourceUrl: 'https://test-other.example.org/page-guide',
+          },
+        ],
+      }),
+    });
+    assert.equal(otherProvReg.status, 201);
+    const otherProvJson: any = await otherProvReg.json();
+    const otherProviderId = String(otherProvJson.providerId);
+
+    // Admin accepte aussi le second prestataire TEST + lui active Partenaire de confiance pour vérifier l'option
+    await fetch(
+      `${baseUrl}/api/amaro/admin/providers/${encodeURIComponent(otherProviderId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-admin-owner-jwt',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'accept', trustedPartner: true }),
+      }
+    );
+
+    // Partenaire de confiance : publie directement avec bonne photo, mais reste caché sans photo
+    const trustedDirectRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Visite Plateau TEST Confiance',
+        category: 'translation',
+        cityId: 'abidjan',
+        description: 'Circuit guidé du Plateau avec photo unique et lien source.',
+        priceAmount: 25000,
+        customPhotoUrl: 'https://test-other.example.org/visite-plateau-unique.jpg',
+        photoSource: 'https://test-other.example.org/visite-plateau-page',
+      }),
+    });
+    assert.equal(trustedDirectRes.status, 200);
+    const trustedDirectJson: any = await trustedDirectRes.json();
+    const trustedDirectSvcId = String(trustedDirectJson.service.id);
+    assert.equal(trustedDirectJson.service.status, 'published');
+    assert.equal(trustedDirectJson.requiresAdminValidation, false);
+
+    const trustedNoPhotoRes = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Visite Confiance Sans Photo TEST',
+        category: 'translation',
+        cityId: 'abidjan',
+        description: 'Sans photo, même un partenaire de confiance reste caché.',
+        priceAmount: 20000,
+      }),
+    });
+    assert.equal(trustedNoPhotoRes.status, 200);
+    const trustedNoPhotoJson: any = await trustedNoPhotoRes.json();
+    const trustedNoPhotoSvcId = String(trustedNoPhotoJson.service.id);
+    assert.equal(trustedNoPhotoJson.service.status, 'draft');
+    assert.equal(trustedNoPhotoJson.service.photoIndicator, 'photo_a_ajouter');
+
+    // Le second prestataire essaie de modifier puis supprimer la fiche du premier -> 403
+    const crossEdit = await fetch(`${baseUrl}/api/amaro/provider/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: publishedTestSvcId,
+        title: 'Piratage fiche concurrent',
+        category: 'accommodation',
+        cityId: 'assinie',
+        description: 'Tentative modification inter-prestataire.',
+        priceAmount: 1000,
+      }),
+    });
+    assert.equal(crossEdit.status, 403);
+
+    const crossDelete = await fetch(
+      `${baseUrl}/api/amaro/provider/services/${encodeURIComponent(publishedTestSvcId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer other-provider-jwt' },
+      }
+    );
+    assert.equal(crossDelete.status, 403);
+
+    // GET /api/amaro/provider/my-data du second prestataire ne contient ni les prestations ni le numéro de réception du premier
+    const otherMyDataRes = await fetch(`${baseUrl}/api/amaro/provider/my-data`, {
+      headers: { Authorization: 'Bearer other-provider-jwt' },
+    });
+    assert.equal(otherMyDataRes.status, 200);
+    const otherMyData: any = await otherMyDataRes.json();
+    assert.equal(
+      otherMyData.services.some((s: any) => s.id === publishedTestSvcId || s.id === noPhotoSvcId),
+      false
+    );
+    assert.notEqual(otherMyData.privateCommercial?.payoutNumber, '+2250700998877');
+
+    // 9. Suppression propre de toutes les prestations et comptes TEST créés durant le scénario
+    const ownDel1 = await fetch(
+      `${baseUrl}/api/amaro/provider/services/${encodeURIComponent(publishedTestSvcId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer test-client-jwt' },
+      }
+    );
+    assert.equal(ownDel1.status, 200);
+
+    const ownDel2 = await fetch(
+      `${baseUrl}/api/amaro/provider/services/${encodeURIComponent(noPhotoSvcId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer test-client-jwt' },
+      }
+    );
+    assert.equal(ownDel2.status, 200);
+
+    const ownDel3 = await fetch(
+      `${baseUrl}/api/amaro/provider/services/${encodeURIComponent(trustedDirectSvcId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer other-provider-jwt' },
+      }
+    );
+    assert.equal(ownDel3.status, 200);
+
+    const ownDel4 = await fetch(
+      `${baseUrl}/api/amaro/provider/services/${encodeURIComponent(trustedNoPhotoSvcId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer other-provider-jwt' },
+      }
+    );
+    assert.equal(ownDel4.status, 200);
+
+    store.providerProfiles.delete(testProviderId);
+    store.providerPrivateCommercial.delete(testProviderId);
+    store.registeredProviders.delete(testProviderId);
+    store.verifiedProviders.delete(testProviderId);
+    store.userAccountTypes.delete('TEST-client-uid');
+
+    store.providerProfiles.delete(otherProviderId);
+    store.providerPrivateCommercial.delete(otherProviderId);
+    store.registeredProviders.delete(otherProviderId);
+    store.verifiedProviders.delete(otherProviderId);
+
+    assert.equal(store.services.has(publishedTestSvcId), false);
+    assert.equal(store.services.has(noPhotoSvcId), false);
+    assert.equal(store.services.has(trustedDirectSvcId), false);
+    assert.equal(store.services.has(trustedNoPhotoSvcId), false);
+    assert.equal(store.providerProfiles.has(testProviderId), false);
+    assert.equal(store.providerProfiles.has(otherProviderId), false);
   });
 });
 

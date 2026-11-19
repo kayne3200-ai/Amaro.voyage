@@ -4213,7 +4213,7 @@ export function WorkspacesAdminView({
                                     disabled={!hasPhoto}
                                     onClick={() =>
                                       void onAdminUpsertCatalogueService({
-                                        id: s.id,
+                                        serviceId: s.id,
                                         status: 'published',
                                         dataOrigin: 'verified_partner',
                                         verificationStatus: 'verified',

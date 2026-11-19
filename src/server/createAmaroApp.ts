@@ -2564,7 +2564,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           url: String(p.url || '').trim().slice(0, 600),
           sourceUrl: String(p.sourceUrl || '').trim().slice(0, 500),
         }))
-        .filter((p) => p.url.length > 0);
+        .filter((p: { url: string; sourceUrl: string }) => p.url.length > 0);
 
       // Bloc 1: "Promouvoir mes services" (onglet Pro) is the ONLY authorized provider registration entry point
       if (sourceFlow !== 'promote_services') {
@@ -2931,7 +2931,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
               (r.paymentStatus === 'succeeded' ||
                 r.status === 'confirmed' ||
                 r.status === 'pending_provider' ||
-                r.status === 'pending_payment')
+                r.status === 'awaiting_payment')
           );
           if (hasActiveBooking) {
             res.status(409).json({

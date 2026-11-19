@@ -290,7 +290,7 @@ export interface ProviderServiceUpsertInput {
   title: string;
   category: ServiceCategory;
   cityId: string;
-  address: string;
+  address?: string;
   description: string;
   priceAmount: number;
   capacity?: number;
@@ -429,7 +429,7 @@ export interface AmaroServerStore {
     provider: (ProviderProfileDoc & { trustedPartner?: boolean }) | null;
     privateCommercial: ProviderCommercialPrivateRecord | null;
     services: ServerServiceRecord[];
-    reservations: Array<ServerReservationRecord & { serviceTitle?: string; scheduledDate?: string; totalAmount?: number; providerPrice?: number; status?: string }>;
+    reservations: ServerReservationRecord[];
     confirmedRevenueXof: number;
   }>;
   getIdentityMetadata?(
@@ -6637,26 +6637,28 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     const allServices = await this.listAllServices(rawIdToken);
     const myServices = allServices.filter((s) => s.ownerId === callerUid && s.providerId === providerId);
 
-    const myReservations: Array<ServerReservationRecord & { serviceTitle?: string; scheduledDate?: string; totalAmount?: number; providerPrice?: number; status?: string }> = [];
+    const myReservations: ServerReservationRecord[] = [];
     if (this.hasServiceAccount) {
       const snap = await this.getAdminDb().collection('reservations').where('providerOwnerId', '==', callerUid).limit(300).get();
       for (const d of snap.docs) {
         const raw = d.data() || {};
         myReservations.push({
-          reservationId: d.id,
+          id: d.id,
           folderId: String(raw.folderId || ''),
           clientId: String(raw.clientId || ''),
           providerOwnerId: String(raw.providerOwnerId || ''),
           providerId: String(raw.providerId || ''),
           serviceId: String(raw.serviceId || ''),
           serviceTitle: String(raw.serviceTitle || ''),
+          category: (raw.category || 'site') as ServiceCategory,
+          cityId: String(raw.cityId || ''),
           scheduledDate: String(raw.scheduledDate || ''),
+          scheduledTime: String(raw.scheduledTime || ''),
           status: (raw.status || 'pending_provider') as ReservationStatus,
           paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
           providerPrice: Number(raw.providerPrice ?? 0),
           totalAmount: Number(raw.totalAmount ?? 0),
           participants: Number(raw.participants ?? 1),
-          scheduledTime: String(raw.scheduledTime || ''),
         });
       }
     } else if (rawIdToken) {
@@ -6685,20 +6687,22 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           const id = String(docItem.name).split('/').pop() || '';
           const raw = decodeFirestoreFields(docItem.fields);
           myReservations.push({
-            reservationId: id,
+            id,
             folderId: String(raw.folderId || ''),
             clientId: String(raw.clientId || ''),
             providerOwnerId: String(raw.providerOwnerId || ''),
             providerId: String(raw.providerId || ''),
             serviceId: String(raw.serviceId || ''),
             serviceTitle: String(raw.serviceTitle || ''),
+            category: (raw.category || 'site') as ServiceCategory,
+            cityId: String(raw.cityId || ''),
             scheduledDate: String(raw.scheduledDate || ''),
+            scheduledTime: String(raw.scheduledTime || ''),
             status: (raw.status || 'pending_provider') as ReservationStatus,
             paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
             providerPrice: Number(raw.providerPrice ?? 0),
             totalAmount: Number(raw.totalAmount ?? 0),
             participants: Number(raw.participants ?? 1),
-            scheduledTime: String(raw.scheduledTime || ''),
           });
         }
       }
