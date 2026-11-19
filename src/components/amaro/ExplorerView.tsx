@@ -8,7 +8,10 @@ import {
   Car,
   CheckCircle2,
   Compass,
+  DollarSign,
+  Edit3,
   Eye,
+  EyeOff,
   Globe,
   Languages,
   Landmark,
@@ -18,6 +21,7 @@ import {
   Scale,
   Search,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import type {
   CatalogueItem,
@@ -68,6 +72,11 @@ import {
   validateAndPriceOfferSelection,
 } from '../../lib/offerEngine';
 import type { LegalDocKey } from './LegalAndCharterModal';
+import {
+  AdminCatalogueModal,
+  type AdminCatalogueModalMode,
+  type AdminCatalogueUpsertInput,
+} from './AdminCatalogueModal';
 
 interface RateInfo {
   rates: Record<'EUR' | 'XOF' | 'USD', number>;
@@ -95,6 +104,11 @@ interface ExplorerViewProps {
   onChangeCountryCode?: (code: string) => void;
   countryOperationalStates?: Record<string, CountryOperationalState>;
   isAdmin?: boolean;
+  isAdminPreview?: boolean;
+  onAdminPreviewCountry?: (code: string) => void;
+  onExitAdminPreview?: () => void;
+  onAdminUpsertCatalogueService?: (payload: AdminCatalogueUpsertInput) => Promise<boolean | void>;
+  onAdminDeleteCatalogueService?: (serviceId: string) => Promise<boolean | void>;
   onGoHome?: () => void;
   rateInfo: RateInfo | null;
   catalogue: CatalogueItem[];
@@ -210,6 +224,11 @@ export function ExplorerView({
   onChangeCountryCode,
   countryOperationalStates,
   isAdmin = false,
+  isAdminPreview = false,
+  onAdminPreviewCountry,
+  onExitAdminPreview,
+  onAdminUpsertCatalogueService,
+  onAdminDeleteCatalogueService,
   onGoHome,
   rateInfo,
   catalogue,
@@ -259,6 +278,24 @@ export function ExplorerView({
   const [detailItem, setDetailItem] = useState<CatalogueItem | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [showCompareModal, setShowCompareModal] = useState<boolean>(false);
+
+  // Admin-only catalogue modal & delete confirm state
+  const [adminModalState, setAdminModalState] = useState<{
+    isOpen: boolean;
+    mode: AdminCatalogueModalMode;
+    item: CatalogueItem | null;
+    cityId?: string;
+  }>({ isOpen: false, mode: 'edit', item: null });
+  const [adminDeleteConfirmItem, setAdminDeleteConfirmItem] = useState<CatalogueItem | null>(null);
+  const [adminActionBusyId, setAdminActionBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!detailItem) return;
+    const latest = catalogue.find((c) => c.id === detailItem.id);
+    if (latest && latest !== detailItem) {
+      setDetailItem(latest);
+    }
+  }, [catalogue, detailItem]);
 
   // Inline booking / folder modal drawer state
   const [selectedItemForAction, setSelectedItemForAction] = useState<{
@@ -342,7 +379,7 @@ export function ExplorerView({
       const target = catalogue.find(
         (c) =>
           c.id === externalJump.itemId &&
-          isCountryOpen(c.countryCode || 'CI', effectiveCountryStates, isAdmin)
+          (isAdmin || isCountryOpen(c.countryCode || 'CI', effectiveCountryStates, isAdmin))
       );
       if (target) {
         setDetailItem(target);
@@ -375,14 +412,20 @@ export function ExplorerView({
   }, [space, selectedCategory]);
 
   const filteredItems = useMemo(() => {
-    if (!isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)) {
+    const canViewCountry =
+      isAdmin || isAdminPreview || isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin);
+    if (!canViewCountry) {
       return [];
     }
     const list = catalogue.filter((item) => {
       // 5.8: Completely hide demo_test listings in production unless explicitly enabled by Admin
-      if (item.dataOrigin === 'demo_test' && !allowDemoData) return false;
+      if (item.dataOrigin === 'demo_test' && !allowDemoData && !isAdmin) return false;
       if (item.countryCode !== selectedCountryCode) return false;
-      if (!isCountryOpen(item.countryCode || selectedCountryCode, effectiveCountryStates, isAdmin)) {
+      if (
+        !isAdmin &&
+        !isAdminPreview &&
+        !isCountryOpen(item.countryCode || selectedCountryCode, effectiveCountryStates, isAdmin)
+      ) {
         return false;
       }
       if (selectedCityId !== 'all' && item.cityId !== selectedCityId) return false;
@@ -454,6 +497,7 @@ export function ExplorerView({
     selectedCountryCode,
     effectiveCountryStates,
     isAdmin,
+    isAdminPreview,
     selectedCityId,
     effectiveCategoryFilter,
     originFilter,
@@ -637,10 +681,85 @@ export function ExplorerView({
       catalogue.filter(
         (it) =>
           it.countryCode === selectedCountryCode &&
-          isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)
+          (isAdmin ||
+            isAdminPreview ||
+            isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin))
       ),
-    [catalogue, selectedCountryCode, effectiveCountryStates, isAdmin]
+    [catalogue, selectedCountryCode, effectiveCountryStates, isAdmin, isAdminPreview]
   );
+
+  const handleQuickAdminToggleStatus = async (item: CatalogueItem) => {
+    if (!isAdmin || !onAdminUpsertCatalogueService) return;
+    setAdminActionBusyId(item.id);
+    try {
+      const nextStatus = item.status === 'published' ? 'draft' : 'published';
+      await onAdminUpsertCatalogueService({
+        serviceId: item.id,
+        providerId: item.providerId,
+        countryCode: item.countryCode || selectedCountryCode,
+        title: item.title,
+        category: item.category,
+        cityId: item.cityId,
+        address: item.address,
+        description: item.description,
+        priceAmount: item.priceAmount,
+        priceKnown: item.priceKnown !== false,
+        durationMinutes: item.durationMinutes,
+        capacity: item.capacity,
+        dataOrigin: item.dataOrigin,
+        verificationStatus: item.verificationStatus || 'to_confirm',
+        status: nextStatus,
+        imageKey: item.imageKey || 'photo_a_ajouter',
+        customPhotoUrl: item.customPhotoUrl,
+        photoVerified: item.photoVerified,
+        photoSource: item.photoSource,
+        photoUsageRights: item.photoUsageRights,
+        sourceName: item.sourceName,
+        sourceUrl: item.sourceUrl,
+        verifiedAt: item.verifiedAt,
+        contactPhone: item.contactPhone,
+      });
+    } finally {
+      setAdminActionBusyId(null);
+    }
+  };
+
+  const handleQuickAdminToggleVerify = async (item: CatalogueItem) => {
+    if (!isAdmin || !onAdminUpsertCatalogueService) return;
+    setAdminActionBusyId(item.id);
+    try {
+      const nextVerif =
+        item.verificationStatus === 'verified' ? 'to_confirm' : 'verified';
+      await onAdminUpsertCatalogueService({
+        serviceId: item.id,
+        providerId: item.providerId,
+        countryCode: item.countryCode || selectedCountryCode,
+        title: item.title,
+        category: item.category,
+        cityId: item.cityId,
+        address: item.address,
+        description: item.description,
+        priceAmount: item.priceAmount,
+        priceKnown: item.priceKnown !== false,
+        durationMinutes: item.durationMinutes,
+        capacity: item.capacity,
+        dataOrigin: item.dataOrigin,
+        verificationStatus: nextVerif,
+        status: item.status || 'published',
+        imageKey: item.imageKey || 'photo_a_ajouter',
+        customPhotoUrl: item.customPhotoUrl,
+        photoVerified: item.photoVerified,
+        photoSource: item.photoSource,
+        photoUsageRights: item.photoUsageRights,
+        sourceName: item.sourceName,
+        sourceUrl: item.sourceUrl,
+        verifiedAt: new Date().toISOString().slice(0, 10),
+        contactPhone: item.contactPhone,
+      });
+    } finally {
+      setAdminActionBusyId(null);
+    }
+  };
 
   const catalogueCounts = useMemo(
     () => computeDynamicCatalogueCounts(activeCountryCatalogue, allowDemoData),
@@ -977,10 +1096,13 @@ export function ExplorerView({
                   value={selectedCountryCode}
                   onChange={(e) => {
                     const next = e.target.value;
-                    if (!isCountryOpen(next, effectiveCountryStates, isAdmin)) return;
-                    setSelectedCountryCode(next);
-                    setSelectedCityId('all');
-                    onChangeCountryCode?.(next);
+                    if (isCountryOpen(next, effectiveCountryStates, isAdmin)) {
+                      setSelectedCountryCode(next);
+                      setSelectedCityId('all');
+                      onChangeCountryCode?.(next);
+                    } else if (isAdmin && onAdminPreviewCountry) {
+                      onAdminPreviewCountry(next);
+                    }
                   }}
                   className="min-h-[44px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
                 >
@@ -995,8 +1117,13 @@ export function ExplorerView({
                       const effState = getEffectiveCountryState(c.code, effectiveCountryStates);
                       const open = isCountryOpen(c.code, effectiveCountryStates, isAdmin);
                       return (
-                        <option key={c.code} value={c.code} disabled={!open}>
-                          {c.name} ({c.code}) — {open ? 'Ouvert' : effState === 'cache' ? 'Fermé' : 'En préparation'}
+                        <option key={c.code} value={c.code} disabled={!open && !isAdmin}>
+                          {c.name} ({c.code}) —{' '}
+                          {open
+                            ? 'Ouvert'
+                            : `${effState === 'cache' ? 'Fermé' : 'En préparation'}${
+                                isAdmin ? ' (Aperçu Admin)' : ''
+                              }`}
                         </option>
                       );
                     })}
@@ -1012,24 +1139,39 @@ export function ExplorerView({
                         <button
                           key={c.code}
                           type="button"
-                          disabled={!open}
-                          title={open ? `${c.nameFr} (Ouvert)` : `${c.nameFr} — En préparation`}
+                          disabled={!open && !isAdmin}
+                          title={
+                            open
+                              ? `${c.nameFr} (Ouvert)`
+                              : isAdmin
+                              ? `${c.nameFr} — Aperçu Admin (pays fermé au public)`
+                              : `${c.nameFr} — En préparation`
+                          }
                           onClick={() => {
-                            if (!open) return;
-                            setSelectedCountryCode(c.code);
-                            setSelectedCityId('all');
-                            onChangeCountryCode?.(c.code);
+                            if (open) {
+                              setSelectedCountryCode(c.code);
+                              setSelectedCityId('all');
+                              onChangeCountryCode?.(c.code);
+                            } else if (isAdmin && onAdminPreviewCountry) {
+                              onAdminPreviewCountry(c.code);
+                            }
                           }}
                           className={`min-h-[44px] px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                            !open
+                            !open && !isAdmin
                               ? 'opacity-60 cursor-not-allowed text-slate-400 dark:text-slate-500 bg-slate-100/70 dark:bg-slate-800/40'
                               : selectedCountryCode === c.code
                               ? 'bg-[#0B192C] text-white'
+                              : !open && isAdmin
+                              ? 'text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800'
                               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                           }`}
                         >
                           {locale === 'fr' ? c.nameFr : c.nameEn}
-                          {!open && <span className="ml-1 text-xs font-normal">(En préparation)</span>}
+                          {!open && (
+                            <span className="ml-1 text-xs font-normal">
+                              ({isAdmin ? 'Aperçu Admin' : 'En préparation'})
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -1037,35 +1179,77 @@ export function ExplorerView({
               </div>
             </div>
 
-            {/* Quick City Selector */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              <button
-                type="button"
-                onClick={() => setSelectedCityId('all')}
-                className={`min-h-[44px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
-                  selectedCityId === 'all'
-                    ? 'bg-teal-700 text-white'
-                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                Toutes les villes ({activeCountry.cities.length})
-              </button>
-              {activeCountry.cities.map((city) => (
+            {isAdmin && isAdminPreview && (
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <span className="font-semibold text-amber-950 dark:text-amber-200">
+                  Aperçu administrateur actif sur « {activeCountry.nameFr} » — Ce pays reste strictement « En préparation » pour les clients.
+                </span>
+                {onExitAdminPreview && (
+                  <button
+                    type="button"
+                    onClick={onExitAdminPreview}
+                    className="min-h-[44px] px-3 py-1.5 font-semibold rounded-lg bg-[#0B192C] text-white"
+                  >
+                    Quitter l’aperçu pays fermé
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Quick City Selector + Admin Add Per City */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
                 <button
-                  key={city.id}
                   type="button"
-                  onClick={() =>
-                    setSelectedCityId((prev) => (prev === city.id ? 'all' : city.id))
-                  }
+                  onClick={() => setSelectedCityId('all')}
                   className={`min-h-[44px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
-                    selectedCityId === city.id
+                    selectedCityId === 'all'
                       ? 'bg-teal-700 text-white'
-                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-teal-600'
+                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
                   }`}
                 >
-                  {city.name}
+                  Toutes les villes ({activeCountry.cities.length})
                 </button>
-              ))}
+                {activeCountry.cities.map((city) => (
+                  <button
+                    key={city.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedCityId((prev) => (prev === city.id ? 'all' : city.id))
+                    }
+                    className={`min-h-[44px] px-3.5 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-colors ${
+                      selectedCityId === city.id
+                        ? 'bg-teal-700 text-white'
+                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-teal-600'
+                    }`}
+                  >
+                    {city.name}
+                  </button>
+                ))}
+              </div>
+              {isAdmin && onAdminUpsertCatalogueService && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAdminModalState({
+                      isOpen: true,
+                      mode: 'edit',
+                      item: null,
+                      cityId:
+                        selectedCityId !== 'all'
+                          ? selectedCityId
+                          : activeCountry.cities[0]?.id || 'abidjan',
+                    })
+                  }
+                  className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>
+                    Ajouter une prestation
+                    {selectedCityId !== 'all' ? ` (${selectedCityId})` : ''}
+                  </span>
+                </button>
+              )}
             </div>
           </section>
 
@@ -1297,9 +1481,17 @@ export function ExplorerView({
                                 </span>
                               </div>
                             ) : (
-                              <div className="absolute top-2.5 left-2.5">
+                              <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1.5">
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-black/60 text-slate-200 border border-white/10 backdrop-blur-xs">
                                   Photo d'illustration
+                                </span>
+                              </div>
+                            )}
+                            {isAdmin && item.status !== 'published' && (
+                              <div className="absolute top-2.5 right-2.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-rose-900/90 text-white border border-rose-500/40">
+                                  <EyeOff className="w-3 h-3" />
+                                  <span>Masquée ({item.status})</span>
                                 </span>
                               </div>
                             )}
@@ -1436,6 +1628,97 @@ export function ExplorerView({
                                 ? '✓ Sélectionné dans le comparateur'
                                 : '+ Comparer cet hébergement'}
                             </button>
+                          )}
+
+                          {isAdmin && onAdminUpsertCatalogueService && (
+                            <div className="pt-2.5 border-t border-amber-200 dark:border-amber-900/60 space-y-1.5">
+                              <span className="block text-xs font-bold text-amber-800 dark:text-amber-300">
+                                Actions administrateur · {item.verificationStatus === 'verified' ? 'Vérifié' : 'À vérifier'}
+                              </span>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdminModalState({
+                                      isOpen: true,
+                                      mode: 'edit',
+                                      item,
+                                    })
+                                  }
+                                  className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-[#0B192C] text-white"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Modifier</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={adminActionBusyId === item.id}
+                                  onClick={() => void handleQuickAdminToggleStatus(item)}
+                                  className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                                >
+                                  {item.status === 'published' ? (
+                                    <>
+                                      <EyeOff className="w-3.5 h-3.5" />
+                                      <span>Masquer</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>Afficher</span>
+                                    </>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={adminActionBusyId === item.id}
+                                  onClick={() => void handleQuickAdminToggleVerify(item)}
+                                  className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>
+                                    {item.verificationStatus === 'verified' ? 'À vérifier' : 'Vérifié'}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdminModalState({
+                                      isOpen: true,
+                                      mode: 'price',
+                                      item,
+                                    })
+                                  }
+                                  className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Prix</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdminModalState({
+                                      isOpen: true,
+                                      mode: 'photo',
+                                      item,
+                                    })
+                                  }
+                                  className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <span>Photo</span>
+                                </button>
+                                {onAdminDeleteCatalogueService && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setAdminDeleteConfirmItem(item)}
+                                    className="min-h-[44px] inline-flex items-center justify-center gap-1 px-2 py-1.5 font-semibold rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Supprimer</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           )}
                         </div>
                       </article>
@@ -1702,7 +1985,71 @@ export function ExplorerView({
         onClose={() => setDetailItem(null)}
         onAddToJourney={(it, prefill) => openActionModal(it, 'folder', prefill)}
         onRequestBooking={(it, prefill) => openActionModal(it, 'booking', prefill)}
+        isAdmin={isAdmin}
+        onAdminEdit={(it) => setAdminModalState({ isOpen: true, mode: 'edit', item: it })}
+        onAdminToggleStatus={(it) => void handleQuickAdminToggleStatus(it)}
+        onAdminToggleVerify={(it) => void handleQuickAdminToggleVerify(it)}
+        onAdminEditPrice={(it) => setAdminModalState({ isOpen: true, mode: 'price', item: it })}
+        onAdminEditPhoto={(it) => setAdminModalState({ isOpen: true, mode: 'photo', item: it })}
+        onAdminDelete={(it) => setAdminDeleteConfirmItem(it)}
       />
+
+      {isAdmin && onAdminUpsertCatalogueService && (
+        <AdminCatalogueModal
+          isOpen={adminModalState.isOpen}
+          mode={adminModalState.mode}
+          item={adminModalState.item}
+          defaultCountryCode={selectedCountryCode}
+          defaultCityId={
+            adminModalState.cityId ||
+            (selectedCityId !== 'all' ? selectedCityId : activeCountry.cities[0]?.id)
+          }
+          onClose={() => setAdminModalState((prev) => ({ ...prev, isOpen: false }))}
+          onSave={onAdminUpsertCatalogueService}
+          onDelete={onAdminDeleteCatalogueService}
+        />
+      )}
+
+      {isAdmin && adminDeleteConfirmItem && onAdminDeleteCatalogueService && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+            <h3 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+              Confirmer la suppression
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+              Voulez-vous supprimer ou archiver la prestation «{' '}
+              <strong>{adminDeleteConfirmItem.title}</strong> » ?
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAdminDeleteConfirmItem(null)}
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = adminDeleteConfirmItem;
+                  setAdminDeleteConfirmItem(null);
+                  const ok = await onAdminDeleteCatalogueService(target.id);
+                  if (ok && detailItem?.id === target.id) {
+                    setDetailItem(null);
+                  }
+                }}
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl bg-rose-700 hover:bg-rose-800 text-white"
+              >
+                Confirmer la suppression
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Side-by-Side Accommodation Comparator Modal */}
       {showCompareModal && (

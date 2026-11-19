@@ -14,6 +14,11 @@ import {
   Plus,
   AlertTriangle,
   Camera,
+  Edit3,
+  Eye,
+  EyeOff,
+  DollarSign,
+  Trash2,
 } from 'lucide-react';
 import type {
   CatalogueItem,
@@ -88,6 +93,13 @@ interface ServiceDetailModalProps {
   onClose: () => void;
   onAddToJourney: (item: CatalogueItem, prefill?: ServiceBookingPrefill) => void;
   onRequestBooking: (item: CatalogueItem, prefill?: ServiceBookingPrefill) => void;
+  isAdmin?: boolean;
+  onAdminEdit?: (item: CatalogueItem) => void;
+  onAdminToggleStatus?: (item: CatalogueItem) => void;
+  onAdminToggleVerify?: (item: CatalogueItem) => void;
+  onAdminEditPrice?: (item: CatalogueItem) => void;
+  onAdminEditPhoto?: (item: CatalogueItem) => void;
+  onAdminDelete?: (item: CatalogueItem) => void;
 }
 
 function addDaysIso(isoDate: string, days: number): string {
@@ -108,6 +120,13 @@ export function ServiceDetailModal({
   onClose,
   onAddToJourney,
   onRequestBooking,
+  isAdmin = false,
+  onAdminEdit,
+  onAdminToggleStatus,
+  onAdminToggleVerify,
+  onAdminEditPrice,
+  onAdminEditPhoto,
+  onAdminDelete,
 }: ServiceDetailModalProps) {
   const defaultDate = useMemo(() => addDaysIso(new Date().toISOString().slice(0, 10), 7), []);
   const [prefillDate, setPrefillDate] = useState<string>(defaultDate);
@@ -346,6 +365,96 @@ export function ServiceDetailModal({
         </div>
 
         <div className="p-5 sm:p-6 space-y-6">
+          {isAdmin && (
+            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="font-bold text-amber-900 dark:text-amber-200">
+                  Mode administrateur · Statut :{' '}
+                  {item.status === 'published'
+                    ? 'Affichée aux clients'
+                    : `Masquée (${item.status})`}
+                  {' · '}
+                  {item.verificationStatus === 'verified' ? 'Vérifiée' : 'À vérifier'}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {onAdminEdit && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminEdit(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-[#0B192C] text-white"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Modifier</span>
+                  </button>
+                )}
+                {onAdminToggleStatus && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminToggleStatus(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                  >
+                    {item.status === 'published' ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" />
+                        <span>Masquer</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Afficher</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                {onAdminToggleVerify && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminToggleVerify(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>
+                      {item.verificationStatus === 'verified'
+                        ? 'Marquer « à vérifier »'
+                        : 'Marquer « vérifié »'}
+                    </span>
+                  </button>
+                )}
+                {onAdminEditPrice && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminEditPrice(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>Changer le prix</span>
+                  </button>
+                )}
+                {onAdminEditPhoto && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminEditPhoto(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Gérer la photo</span>
+                  </button>
+                )}
+                {onAdminDelete && (
+                  <button
+                    type="button"
+                    onClick={() => onAdminDelete(item)}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Supprimer</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Price & Transparency Summary */}
           <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-0.5">

@@ -42,6 +42,8 @@ interface AmaroHeaderProps {
   onGoHome?: () => void;
   countryOperationalStates?: Record<string, CountryOperationalState>;
   isAdmin?: boolean;
+  isAdminPreview?: boolean;
+  onAdminPreviewCountry?: (code: string) => void;
   isSignedIn: boolean;
   isSigningIn: boolean;
   unreadNotifications: number;
@@ -63,6 +65,8 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
   onGoHome,
   countryOperationalStates,
   isAdmin = false,
+  isAdminPreview = false,
+  onAdminPreviewCountry,
   isSignedIn,
   isSigningIn,
   unreadNotifications,
@@ -304,11 +308,18 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
 
               {/* Dynamic dropdown for all 193 UN countries */}
               <select
-                value={isCountryOpen(selectedCountryCode, countryOperationalStates, isAdmin) ? selectedCountryCode : 'CI'}
+                value={
+                  isAdminPreview ||
+                  isCountryOpen(selectedCountryCode, countryOperationalStates, isAdmin)
+                    ? selectedCountryCode
+                    : 'CI'
+                }
                 onChange={(e) => {
                   const next = e.target.value;
                   if (isCountryOpen(next, countryOperationalStates, isAdmin)) {
                     onSelectCountry(next);
+                  } else if (isAdmin && onAdminPreviewCountry) {
+                    onAdminPreviewCountry(next);
                   }
                 }}
                 aria-label="Changer de pays de destination"
@@ -321,10 +332,21 @@ export const AmaroHeader: React.FC<AmaroHeaderProps> = ({
                     <option
                       key={c.code}
                       value={c.code}
-                      disabled={!open}
-                      className={open ? 'bg-slate-900 text-white' : 'bg-slate-950 text-slate-500'}
+                      disabled={!open && !isAdmin}
+                      className={
+                        open
+                          ? 'bg-slate-900 text-white'
+                          : isAdmin
+                          ? 'bg-slate-900 text-amber-300'
+                          : 'bg-slate-950 text-slate-500'
+                      }
                     >
-                      {c.name} ({c.code}) — {open ? 'Ouvert' : effState === 'cache' ? 'Fermé' : 'En préparation'}
+                      {c.name} ({c.code}) —{' '}
+                      {open
+                        ? 'Ouvert'
+                        : `${effState === 'cache' ? 'Fermé' : 'En préparation'}${
+                            isAdmin ? ' (Aperçu Admin)' : ''
+                          }`}
                     </option>
                   );
                 })}

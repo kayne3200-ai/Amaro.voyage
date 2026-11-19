@@ -407,6 +407,11 @@ export interface CategoryPaymentSchedule {
   commissionCircuitB?: number;
 }
 
+export interface ProviderApplicationPhoto {
+  url: string;
+  sourceUrl: string;
+}
+
 export interface ProviderProfileDoc {
   id: string;
   ownerId: string;
@@ -414,14 +419,22 @@ export interface ProviderProfileDoc {
   category: ServiceCategory;
   countryCode: string;
   cityId: string;
+  publicZone?: string;
   description: string;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
+  whatsapp?: string;
+  verificationStatus: 'pending' | 'clarification_requested' | 'verified' | 'rejected';
+  rejectionReason?: string;
+  clarificationNote?: string;
+  trustedPartner?: boolean;
+  applicationPhotos?: ProviderApplicationPhoto[];
   contactName?: string;
   businessPhone?: string;
   businessEmail?: string;
   address?: string;
   conventionVersionAccepted?: string;
   conventionAcceptedAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
   linkedDirectoryServiceId?: string;
   adminConventionStage?: 'non_contacte' | 'en_discussion' | 'signe';
   agreedCommissionPercent?: number;

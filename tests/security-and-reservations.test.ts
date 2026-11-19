@@ -16,6 +16,7 @@ import {
 } from '../src/server/domainEngine';
 import {
   ConflictError,
+  type AdminServiceUpsertInput,
   type AmaroServerStore,
   type AtomicReferralPayload,
   type AtomicReservationPayload,
@@ -140,6 +141,11 @@ class InMemoryTestStore implements AmaroServerStore {
     string,
     { ownerId: string; verificationStatus: 'pending' | 'verified' | 'rejected' }
   >();
+  readonly systemSettingUpdates: Array<{
+    countryCode: string;
+    updatedBy?: string;
+    patch: Partial<ServerSystemSetting>;
+  }> = [];
   private readonly inFlight = new Set<string>();
   artificialCommitDelayMs = 0;
 
@@ -194,6 +200,7 @@ class InMemoryTestStore implements AmaroServerStore {
     this.providerOffers.clear();
     this.censusListings.clear();
     this.verifiedProviders.clear();
+    this.systemSettingUpdates.length = 0;
     this.inFlight.clear();
     this.artificialCommitDelayMs = 0;
 
@@ -335,6 +342,79 @@ class InMemoryTestStore implements AmaroServerStore {
     return this.services.get(serviceId) || OFFICIAL_PUBLIC_AND_DEMO_SERVICES[serviceId] || null;
   }
 
+  async listAllServices(): Promise<ServerServiceRecord[]> {
+    return Array.from(this.services.values()).map((s) => ({ ...s }));
+  }
+
+  async adminUpsertService(
+    payload: AdminServiceUpsertInput,
+    _callerUid: string
+  ): Promise<ServerServiceRecord> {
+    const cleanId = payload.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    const existing = this.services.get(cleanId) || OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId];
+    const next: ServerServiceRecord = {
+      id: cleanId,
+      providerId: payload.providerId ?? existing?.providerId ?? `dir-${cleanId}`,
+      ownerId: payload.ownerId ?? existing?.ownerId ?? 'manual_concierge',
+      title: payload.title ?? existing?.title ?? 'Prestation AMARO',
+      category: payload.category ?? existing?.category ?? 'site',
+      countryCode: (payload.countryCode ?? existing?.countryCode ?? 'CI').toUpperCase().trim(),
+      cityId: payload.cityId ?? existing?.cityId ?? 'abidjan',
+      address: payload.address ?? existing?.address ?? 'Abidjan, Côte d’Ivoire',
+      priceAmount:
+        payload.priceKnown === false
+          ? 0
+          : payload.priceAmount ?? existing?.priceAmount ?? 0,
+      priceKnown:
+        payload.priceKnown !== undefined
+          ? Boolean(payload.priceKnown)
+          : existing?.priceKnown ?? Number(payload.priceAmount ?? existing?.priceAmount ?? 0) > 0,
+      currency: payload.currency ?? existing?.currency ?? 'XOF',
+      durationMinutes: payload.durationMinutes ?? existing?.durationMinutes ?? 120,
+      capacity: payload.capacity ?? existing?.capacity ?? 4,
+      status: payload.status ?? existing?.status ?? 'published',
+      dataOrigin: payload.dataOrigin ?? existing?.dataOrigin ?? 'public_directory',
+      ...(payload.verificationStatus !== undefined || (existing as any)?.verificationStatus !== undefined
+        ? { verificationStatus: payload.verificationStatus ?? (existing as any)?.verificationStatus }
+        : {}),
+      ...(payload.customPhotoUrl !== undefined || (existing as any)?.customPhotoUrl !== undefined
+        ? { customPhotoUrl: payload.customPhotoUrl ?? (existing as any)?.customPhotoUrl }
+        : {}),
+      ...(payload.photoVerified !== undefined || (existing as any)?.photoVerified !== undefined
+        ? { photoVerified: payload.photoVerified ?? (existing as any)?.photoVerified }
+        : {}),
+      ...(payload.photoSource !== undefined || (existing as any)?.photoSource !== undefined
+        ? { photoSource: payload.photoSource ?? (existing as any)?.photoSource }
+        : {}),
+      ...(payload.sourceName !== undefined || existing?.sourceName !== undefined
+        ? { sourceName: payload.sourceName ?? existing?.sourceName }
+        : {}),
+      ...(payload.sourceUrl !== undefined || existing?.sourceUrl !== undefined
+        ? { sourceUrl: payload.sourceUrl ?? existing?.sourceUrl }
+        : {}),
+      ...(payload.verifiedAt !== undefined || existing?.verifiedAt !== undefined
+        ? { verifiedAt: payload.verifiedAt ?? existing?.verifiedAt }
+        : {}),
+      ...(payload.contactPhone !== undefined || existing?.contactPhone !== undefined
+        ? { contactPhone: payload.contactPhone ?? existing?.contactPhone }
+        : {}),
+    } as ServerServiceRecord;
+    this.services.set(cleanId, next);
+    return { ...next };
+  }
+
+  async adminDeleteService(
+    serviceId: string
+  ): Promise<{ deleted: boolean; archivedStatic?: boolean }> {
+    const cleanId = serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    if (OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId]) {
+      await this.adminUpsertService({ id: cleanId, status: 'archived' }, 'admin');
+      return { deleted: true, archivedStatic: true };
+    }
+    this.services.delete(cleanId);
+    return { deleted: true, archivedStatic: false };
+  }
+
   async listActivePilotStocksForService(
     serviceId: string
   ): Promise<ServerPilotStockRecord[]> {
@@ -371,7 +451,15 @@ class InMemoryTestStore implements AmaroServerStore {
     patch: Partial<ServerSystemSetting> & { countryCode?: string; updatedBy?: string },
     _rawIdToken?: string
   ): Promise<ServerSystemSetting> {
+    if (!patch.updatedBy) {
+      throw new Error('Mise à jour configuration système refusée (403).');
+    }
     const code = (patch.countryCode || 'BJ').toUpperCase().trim();
+    this.systemSettingUpdates.push({
+      countryCode: code,
+      updatedBy: patch.updatedBy,
+      patch: { ...patch },
+    });
     const existing = await this.getSystemSetting(code);
     const merged: ServerSystemSetting = {
       ...existing,
@@ -1052,6 +1140,123 @@ class InMemoryTestStore implements AmaroServerStore {
     };
   }
 
+  async deleteJourneyFolderCascade(params: {
+    folderId: string;
+    callerUid: string;
+    isAdmin: boolean;
+    retentionPolicyLabel: string;
+  }) {
+    const folder = this.folders.get(params.folderId);
+    if (!folder) {
+      throw new ConflictError('Dossier introuvable.');
+    }
+    if (!params.isAdmin && folder.ownerId !== params.callerUid) {
+      throw new Error('Forbidden');
+    }
+
+    const folderRes = Array.from(this.reservations.values()).filter(
+      (r) => r.folderId === params.folderId
+    );
+
+    if (!params.isAdmin) {
+      const blocked = folderRes.find(
+        (r) =>
+          r.paymentStatus === 'initiated' ||
+          r.paymentStatus === 'succeeded' ||
+          r.paymentStatus === 'refunded'
+      );
+      if (blocked) {
+        throw new ConflictError(
+          `Suppression bloquée pour protéger vos paiements : la réservation « ${blocked.serviceTitle} » a un paiement en cours de vérification, payé ou remboursé.`
+        );
+      }
+      if (folder.dossierFeeStatus === 'in_verification') {
+        throw new ConflictError(
+          'Suppression bloquée pendant la vérification administrative de vos frais de dossier.'
+        );
+      }
+    }
+
+    let releasedStockUnitsCount = 0;
+    for (const r of folderRes) {
+      const units = Number(r.allocatedUnits || 0);
+      if (r.allocatedStockId && units > 0 && !['cancelled', 'rejected'].includes(r.status)) {
+        const stock = this.pilotStocks.get(r.allocatedStockId);
+        if (stock) {
+          this.pilotStocks.set(r.allocatedStockId, {
+            ...stock,
+            bookedUnits: Math.max(0, stock.bookedUnits - units),
+          });
+        }
+        releasedStockUnitsCount += units;
+      }
+      if (r.providerOwnerId && r.providerOwnerId !== 'manual_concierge') {
+        this.notificationDispatches.push({
+          id: `notif-fdel-${r.reservationId}`,
+          recipientId: r.providerOwnerId,
+          reservationId: r.reservationId,
+          folderId: params.folderId,
+          channel: 'in_app',
+          status: 'sent',
+          title: 'Dossier supprimé par le voyageur',
+          summary: `La demande pour « ${r.serviceTitle} » a été annulée suite à la suppression du dossier.`,
+          createdAtIso: new Date().toISOString(),
+        });
+      }
+      const ref = this.referrals.get(r.reservationId);
+      if (ref) {
+        this.referrals.set(r.reservationId, {
+          ...ref,
+          status: 'cancelled',
+        });
+      }
+    }
+
+    let deletedIdentityVaultCount = 0;
+    for (const r of folderRes) {
+      if (this.identityMeta.has(r.reservationId) || this.identityVaults.has(r.reservationId)) {
+        deletedIdentityVaultCount += 1;
+      }
+      this.identityMeta.delete(r.reservationId);
+      this.identityVaults.delete(r.reservationId);
+      this.reservations.delete(r.reservationId);
+    }
+
+    const deletedItemsCount = (this.itemsByFolder.get(params.folderId) || []).length;
+    this.itemsByFolder.delete(params.folderId);
+
+    let archivedDossierFeeTrace = false;
+    const cleanTx = String(folder.dossierTxRef || '').trim();
+    if (cleanTx.length >= 3) {
+      const archId = `arch-folder-${params.folderId}`;
+      if (!this.financialArchives.has(archId)) {
+        archivedDossierFeeTrace = true;
+        this.financialArchives.set(archId, {
+          id: archId,
+          reservationOrFolderRef: params.folderId,
+          recordKind: 'dossier_fee',
+          transactionRef: cleanTx,
+          amount: Number(folder.dossierFeeAmountXof || 0),
+          currency: folder.currency || 'XOF',
+          recordedDate: folder.dossierDeclaredAt || new Date().toISOString().slice(0, 10),
+          retentionPolicyLabel: params.retentionPolicyLabel,
+          anonymizedAtIso: new Date().toISOString(),
+        });
+      }
+    }
+
+    this.folders.delete(params.folderId);
+    return {
+      deletedFolderId: params.folderId,
+      deletedFolderTitle: folder.title || 'Dossier de voyage',
+      deletedReservationsCount: folderRes.length,
+      deletedItemsCount,
+      deletedIdentityVaultCount,
+      releasedStockUnitsCount,
+      archivedDossierFeeTrace,
+    };
+  }
+
   async isVerifiedProviderOwner(providerId: string, uid: string): Promise<boolean> {
     const p = this.verifiedProviders.get(providerId);
     return Boolean(p && p.ownerId === uid && p.verificationStatus === 'verified');
@@ -1261,6 +1466,18 @@ const TEST_TOKENS: Record<
   'other-provider-jwt': {
     uid: 'other-provider-uid',
     email: 'autre.prestataire@example.com',
+    emailVerified: true,
+    aud: 'gen-lang-client-0368830750',
+  },
+  'mixed-case-admin-jwt': {
+    uid: 'owner-admin-uid',
+    email: '  Kayne3200@Gmail.Com ',
+    emailVerified: true,
+    aud: 'gen-lang-client-0368830750',
+  },
+  'test-client-jwt': {
+    uid: 'TEST-client-uid',
+    email: 'test.client@example.com',
     emailVerified: true,
     aud: 'gen-lang-client-0368830750',
   },
@@ -5836,7 +6053,502 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(store.folders.has(testFolderId), false);
     assert.equal(store.services.has(testServiceId), false);
   });
+
+  it('53. Droits Admin (403 corrigé : updatedBy UID réel + normalisation email), Aperçu Admin pays fermé, Gestion catalogue CRUD/lot, et Refus 403 pour client TEST et partenaire', async () => {
+    store.reset(['CI']);
+
+    // 1. /auth/whoami avec email admin en majuscules/espaces et emailVerified: true
+    const whoAdmin = await fetch(`${baseUrl}/api/amaro/auth/whoami`, {
+      headers: { Authorization: 'Bearer mixed-case-admin-jwt' },
+    });
+    assert.equal(whoAdmin.status, 200);
+    const whoAdminJson: any = await whoAdmin.json();
+    assert.equal(whoAdminJson.isAdmin, true);
+    assert.equal(whoAdminJson.emailVerified, true);
+
+    // Email non vérifié refusé dès requireAuth (403)
+    const whoUnverified = await fetch(`${baseUrl}/api/amaro/auth/whoami`, {
+      headers: { Authorization: 'Bearer unverified-email-jwt' },
+    });
+    assert.equal(whoUnverified.status, 403);
+
+    // Client TEST et Partenaire ne sont PAS admin
+    const whoTestClient = await fetch(`${baseUrl}/api/amaro/auth/whoami`, {
+      headers: { Authorization: 'Bearer test-client-jwt' },
+    });
+    assert.equal(whoTestClient.status, 200);
+    assert.equal(((await whoTestClient.json()) as any).isAdmin, false);
+
+    // 2. Test changement d'état d'un pays sans risque (SN -> ouvert puis remis immédiatement en bientot)
+    // Vérifie aussi que updatedBy === caller.uid (et JAMAIS 'admin_owner')
+    store.systemSettingUpdates.length = 0;
+    const openSn = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer mixed-case-admin-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'SN', state: 'ouvert' }),
+    });
+    assert.equal(openSn.status, 200);
+    const openSnJson: any = await openSn.json();
+    assert.equal(openSnJson.countryOperationalStates.SN, 'ouvert');
+    assert.equal(openSnJson.countryOperationalStates.CI, 'ouvert');
+    assert.ok(store.systemSettingUpdates.length >= 2);
+    for (const upd of store.systemSettingUpdates) {
+      assert.equal(upd.updatedBy, 'owner-admin-uid', 'updatedBy doit correspondre exactement à caller.uid (et jamais admin_owner)');
+    }
+
+    // Remise immédiate du Sénégal en 'bientot' pour ne laisser que CI ouverte
+    const restoreSn = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'SN', state: 'bientot' }),
+    });
+    assert.equal(restoreSn.status, 200);
+    const restoreSnJson: any = await restoreSn.json();
+    assert.equal(restoreSnJson.countryOperationalStates.SN, 'bientot');
+    assert.equal(restoreSnJson.countryOperationalStates.CI, 'ouvert');
+    assert.notEqual(restoreSnJson.countryOperationalStates.BJ, 'ouvert');
+
+    // 3. Enregistrement identité légale & Mobile Money via route serveur sécurisée
+    const saveSettings = await fetch(`${baseUrl}/api/amaro/admin/system-settings`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        legalCompanyName: 'AMARO VOYAGE SARL',
+        legalRccm: 'CI-ABJ-2026-B-001',
+        legalIfu: '2600001-X',
+        legalAddress: 'Abidjan Plateau, Côte d’Ivoire',
+        legalContact: 'kayne3200@gmail.com',
+        waveNumber: '+225 07 00 00 00 01',
+        orangeMoneyNumber: '+225 07 00 00 00 02',
+        mtnMoneyNumber: '+225 05 00 00 00 03',
+        amaroMobileMoneyNumber: '+225 07 00 00 00 01',
+        amaroMobileMoneyHolder: 'AMARO VOYAGE SARL',
+      }),
+    });
+    assert.equal(saveSettings.status, 200);
+    const savedSettingsJson: any = await saveSettings.json();
+    assert.equal(savedSettingsJson.setting.legalCompanyName, 'AMARO VOYAGE SARL');
+    assert.equal(savedSettingsJson.setting.waveNumber, '+225 07 00 00 00 01');
+    assert.equal(savedSettingsJson.setting.updatedBy, 'owner-admin-uid');
+
+    // 4. Aperçu administrateur sur un pays fermé (BJ) sans l'ouvrir aux clients
+    const publicBjPreviewTry = await fetch(`${baseUrl}/api/amaro/countries/BJ/data?adminPreview=1`);
+    assert.equal(publicBjPreviewTry.status, 403, 'Le public ne peut pas contourner via ?adminPreview=1');
+
+    const clientBjPreviewTry = await fetch(`${baseUrl}/api/amaro/countries/BJ/data?adminPreview=1`, {
+      headers: { Authorization: 'Bearer test-client-jwt' },
+    });
+    assert.equal(clientBjPreviewTry.status, 403, 'Un client TEST ne peut pas accéder à l’aperçu admin d’un pays fermé');
+
+    const adminBjPreview = await fetch(`${baseUrl}/api/amaro/countries/BJ/data?adminPreview=1`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(adminBjPreview.status, 200);
+    const adminBjJson: any = await adminBjPreview.json();
+    assert.equal(adminBjJson.countryCode, 'BJ');
+    assert.equal(adminBjJson.isAdminPreview, true);
+    assert.ok(Array.isArray(adminBjJson.services) && adminBjJson.services.length > 0);
+
+    // Confirmer que BJ reste bloqué pour les clients après l'aperçu admin
+    const publicBjStillLocked = await fetch(`${baseUrl}/api/amaro/countries/BJ/data`);
+    assert.equal(publicBjStillLocked.status, 403);
+
+    // 5. CRUD Admin Catalogue + Photo avec lien d'origine + Masquage + Batch + Suppression
+    const testCreatedId = 'TEST-adm-ci-abidjan-new';
+    const createSvc = await fetch(`${baseUrl}/api/amaro/admin/services/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: testCreatedId,
+        title: 'Visite TEST Galerie Cocody',
+        category: 'site',
+        countryCode: 'CI',
+        cityId: 'abidjan',
+        priceAmount: 12_000,
+        priceKnown: true,
+        status: 'published',
+        verificationStatus: 'to_confirm',
+        customPhotoUrl: 'https://commons.wikimedia.org/wiki/Special:FilePath/Abidjan_test_example.jpg',
+        photoSource: 'https://commons.wikimedia.org/wiki/File:Abidjan_test_example.jpg',
+        sourceUrl: 'https://commons.wikimedia.org/wiki/File:Abidjan_test_example.jpg',
+        imageLicense: 'CC BY-SA 4.0',
+        photoVerified: true,
+      }),
+    });
+    assert.equal(createSvc.status, 200);
+    const createdSvcJson: any = await createSvc.json();
+    assert.equal(createdSvcJson.service.id, testCreatedId);
+    assert.equal(createdSvcJson.service.priceAmount, 12_000);
+    assert.equal(createdSvcJson.service.photoSource, 'https://commons.wikimedia.org/wiki/File:Abidjan_test_example.jpg');
+
+    // Masquer en lot + Marquer vérifié en lot
+    const batchVerify = await fetch(`${baseUrl}/api/amaro/admin/services/batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ serviceIds: [testCreatedId], action: 'mark_verified' }),
+    });
+    assert.equal(batchVerify.status, 200);
+    assert.equal((store.services.get(testCreatedId) as any)?.verificationStatus, 'verified');
+
+    const batchHide = await fetch(`${baseUrl}/api/amaro/admin/services/batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ serviceIds: [testCreatedId], action: 'hide' }),
+    });
+    assert.equal(batchHide.status, 200);
+    assert.equal(store.services.get(testCreatedId)?.status, 'draft');
+
+    // Vérifier qu'un client ne voit pas la fiche masquée mais que l'admin la voit en preview
+    const clientCiData: any = await (await fetch(`${baseUrl}/api/amaro/countries/CI/data`)).json();
+    assert.equal(
+      clientCiData.services.some((s: any) => s.id === testCreatedId),
+      false,
+      'Une fiche masquée (draft) ne doit pas être visible par les clients'
+    );
+    const adminCiData: any = await (
+      await fetch(`${baseUrl}/api/amaro/countries/CI/data?adminPreview=1`, {
+        headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+      })
+    ).json();
+    assert.equal(
+      adminCiData.services.some((s: any) => s.id === testCreatedId),
+      true,
+      'L’administrateur doit voir la fiche masquée dans le catalogue admin'
+    );
+
+    // 6. Vérifier que le client TEST et le partenaire reçoivent bien 403 sur TOUTES les actions admin
+    const blockedActors = ['test-client-jwt', 'valid-provider-jwt', 'unverified-email-jwt'];
+    for (const actorToken of blockedActors) {
+      const r1 = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${actorToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countryCode: 'BJ', state: 'ouvert' }),
+      });
+      assert.equal(r1.status, 403, `${actorToken} doit recevoir 403 sur /admin/country-state`);
+
+      const r2 = await fetch(`${baseUrl}/api/amaro/admin/system-settings`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${actorToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ legalCompanyName: 'HACK SARL' }),
+      });
+      assert.equal(r2.status, 403, `${actorToken} doit recevoir 403 sur /admin/system-settings`);
+
+      const r3 = await fetch(`${baseUrl}/api/amaro/admin/services/upsert`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${actorToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceId: testCreatedId, priceAmount: 1 }),
+      });
+      assert.equal(r3.status, 403, `${actorToken} doit recevoir 403 sur /admin/services/upsert`);
+
+      const r4 = await fetch(`${baseUrl}/api/amaro/admin/services/batch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${actorToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceIds: [testCreatedId], action: 'show' }),
+      });
+      assert.equal(r4.status, 403, `${actorToken} doit recevoir 403 sur /admin/services/batch`);
+
+      const r5 = await fetch(`${baseUrl}/api/amaro/admin/services/${testCreatedId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${actorToken}` },
+      });
+      assert.equal(r5.status, 403, `${actorToken} doit recevoir 403 sur DELETE /admin/services`);
+    }
+
+    // 7. Partenaire ne gère que ses propres prestations : un autre partenaire et un client reçoivent 403, seul le titulaire ou l’admin peut agir
+    const otherProviderRes = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        serviceId: 'srv-published-hotel',
+        name: 'Chambre Piratée',
+        priceAmount: 100,
+      }),
+    });
+    assert.equal(otherProviderRes.status, 403, 'Un partenaire ne doit pas pouvoir modifier la fiche d’un autre prestataire');
+
+    const ownProviderRes = await fetch(`${baseUrl}/api/amaro/offers/upsert`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-provider-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'TEST-own-offer-1',
+        serviceId: 'srv-published-hotel',
+        name: 'Chambre Standard Partenaire',
+        priceAmount: 45_000,
+        priceState: 'displayed_price',
+      }),
+    });
+    assert.equal(ownProviderRes.status, 201, 'Le partenaire titulaire doit pouvoir gérer sa propre prestation');
+    store.providerOffers.delete('TEST-own-offer-1');
+
+    // 8. Suppression de la fiche TEST et nettoyage complet des données TEST
+    const delRes = await fetch(`${baseUrl}/api/amaro/admin/services/${testCreatedId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(delRes.status, 200);
+    assert.equal(store.services.has(testCreatedId), false);
+  });
+
+  it('54. Suppression complète d’un dossier de voyage par le client : cascade réservations/stock + garde-fous intégrité (403 autre utilisateur, 409 paiement actif/payé)', async () => {
+    store.reset(['CI']);
+
+    const folderId = 'TEST-folder-client-delete';
+    const serviceId = 'TEST-srv-ci-delete';
+    const stockId = 'TEST-stock-ci-delete';
+    const resId = 'TEST-res-client-delete';
+
+    store.folders.set(folderId, {
+      id: folderId,
+      ownerId: 'traveler-uid-1',
+      title: 'Séjour TEST à supprimer',
+      countryCode: 'CI',
+      status: 'planning',
+      dossierFeeStatus: 'in_verification',
+      dossierFeeAmountXof: 20_000,
+      dossierTxRef: 'TEST-DOS-DEL-001',
+      currency: 'XOF',
+    });
+
+    store.services.set(serviceId, {
+      id: serviceId,
+      providerId: 'prov-cotonou-1',
+      ownerId: 'provider-owner-uid',
+      title: 'Prestation TEST Suppression Dossier',
+      category: 'site',
+      countryCode: 'CI',
+      cityId: 'abidjan',
+      priceAmount: 15_000,
+      priceKnown: true,
+      currency: 'XOF',
+      durationMinutes: 120,
+      capacity: 6,
+      status: 'published',
+      dataOrigin: 'public_directory',
+    });
+
+    store.pilotStocks.set(stockId, {
+      id: stockId,
+      pilotId: 'TEST-pilot-ci-1',
+      serviceId,
+      providerId: 'prov-cotonou-1',
+      providerOwnerId: 'provider-owner-uid',
+      category: 'accommodation',
+      cityId: 'abidjan',
+      unitCode: 'TEST-U1',
+      unitLabel: 'Chambre TEST',
+      capacity: 6,
+      baggageCapacity: 2,
+      withDriver: false,
+      pickupAndCoverageZone: 'Abidjan',
+      startDate: '2026-12-20',
+      endDate: '2026-12-25',
+      totalUnits: 5,
+      bookedUnits: 2,
+      contractualPrice: 15_000,
+      currency: 'XOF',
+      cancellationRules: 'Standard',
+      instantBookingAgreed: true,
+      settlementMode: 'pay_on_arrival_agreed',
+      confirmationSource: 'contract',
+      expiresAt: '2026-12-31',
+      status: 'active',
+    });
+
+    store.itemsByFolder.set(folderId, [
+      {
+        id: 'TEST-item-1',
+        serviceId,
+        providerId: 'prov-cotonou-1',
+        serviceTitle: 'Prestation TEST Suppression Dossier',
+        category: 'site',
+        cityId: 'abidjan',
+        date: '2026-12-22',
+        startTime: '10:00',
+        endTime: '12:00',
+        durationMinutes: 120,
+      },
+    ]);
+
+    store.reservations.set(resId, {
+      reservationId: resId,
+      itemId: 'TEST-item-1',
+      notificationId: null,
+      folderId,
+      clientId: 'traveler-uid-1',
+      providerId: 'prov-cotonou-1',
+      providerOwnerId: 'provider-owner-uid',
+      serviceId,
+      serviceTitle: 'Prestation TEST Suppression Dossier',
+      category: 'site',
+      cityId: 'abidjan',
+      scheduledDate: '2026-12-22',
+      scheduledTime: '10:00',
+      computedEndTime: '12:00',
+      durationMinutes: 120,
+      participants: 2,
+      providerPrice: 30_000,
+      amaroFee: 2_300,
+      taxAmount: 0,
+      totalAmount: 32_300,
+      currency: 'XOF',
+      status: 'accepted',
+      paymentStatus: 'initiated',
+      allocatedStockId: stockId,
+      allocatedUnits: 2,
+      pricingSnapshot: '{}',
+      updatedAtIso: new Date().toISOString(),
+    });
+
+    store.identityMeta.set(resId, {
+      reservationId: resId,
+      folderId,
+      clientId: 'traveler-uid-1',
+      providerOwnerId: 'provider-owner-uid',
+      providerId: 'prov-cotonou-1',
+      serviceTitle: 'Prestation TEST Suppression Dossier',
+      category: 'site',
+      documentType: 'passport',
+      otherDocumentLabel: '',
+      nationalityCountry: 'CI',
+      residenceCountry: 'CI',
+      hasBackSide: false,
+      status: 'submitted_by_client',
+      purposeReason: 'Check-in',
+      recipientLabel: 'Partenaire',
+      consentGiven: true,
+      consentAt: new Date().toISOString(),
+      providerAuthorized: true,
+      retentionExpiresAt: '2027-01-01',
+      statusNote: '',
+      accessCount: 0,
+      lastAccessedBy: '',
+      lastAccessedAt: '',
+    });
+    store.identityVaults.set(resId, {
+      reservationId: resId,
+      clientId: 'traveler-uid-1',
+      providerOwnerId: 'provider-owner-uid',
+      frontMimeType: 'image/png',
+      frontCipherPayload: 'VEVTVA==',
+      backMimeType: '',
+      backCipherPayload: '',
+    });
+
+    // 1. Un autre client (TEST-client-uid) ne peut jamais supprimer le dossier d'autrui -> 403
+    const otherUserAttempt = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer test-client-jwt' },
+    });
+    assert.equal(otherUserAttempt.status, 403, 'Autre utilisateur doit recevoir 403');
+    assert.equal(store.folders.has(folderId), true);
+    assert.equal(store.reservations.has(resId), true);
+
+    // 2. Garde-fou intégrité : paiement 'initiated' -> 409 Conflict (aucune suppression)
+    const initiatedAttempt = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(initiatedAttempt.status, 409, 'Paiement en cours de vérification doit bloquer la suppression (409)');
+    assert.equal(store.folders.has(folderId), true);
+    assert.equal(store.reservations.has(resId), true);
+    assert.equal(store.pilotStocks.get(stockId)?.bookedUnits, 2);
+
+    // 3. Paiement 'succeeded' -> 409 Conflict (aucune suppression)
+    store.reservations.set(resId, {
+      ...store.reservations.get(resId)!,
+      paymentStatus: 'succeeded',
+      status: 'confirmed',
+    });
+    const paidAttempt = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(paidAttempt.status, 409, 'Réservation payée doit bloquer la suppression client (409)');
+    assert.equal(store.folders.has(folderId), true);
+
+    // 4. Frais de dossier en cours de vérification administrateur ('in_verification') même avec réservation non payée -> 409
+    store.reservations.set(resId, {
+      ...store.reservations.get(resId)!,
+      paymentStatus: 'unpaid',
+      status: 'pending_provider',
+    });
+    const feeVerifAttempt = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(feeVerifAttempt.status, 409, 'Frais de dossier en vérification doit bloquer (409)');
+    assert.equal(store.folders.has(folderId), true);
+
+    // 5. Dossier éligible (réservation non payée, frais validés) -> 200 OK, cascade complète + libération stock
+    store.folders.set(folderId, {
+      ...store.folders.get(folderId)!,
+      dossierFeeStatus: 'validated',
+    });
+    store.notificationDispatches.length = 0;
+
+    const okDelete = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(okDelete.status, 200);
+    const okJson: any = await okDelete.json();
+    assert.equal(okJson.ok, true);
+    assert.equal(okJson.deletedFolderId, folderId);
+    assert.equal(okJson.deletedFolderTitle, 'Séjour TEST à supprimer');
+    assert.equal(okJson.deletedReservationsCount, 1);
+    assert.equal(okJson.deletedItemsCount, 1);
+    assert.equal(okJson.deletedIdentityVaultCount, 1);
+    assert.equal(okJson.releasedStockUnitsCount, 2);
+    assert.equal(okJson.archivedDossierFeeTrace, true);
+
+    // Vérification post-suppression : zéro dossier, zéro réservation, zéro étape, zéro coffre-fort, stock libéré
+    assert.equal(store.folders.has(folderId), false);
+    assert.equal(store.reservations.has(resId), false);
+    assert.equal(store.itemsByFolder.has(folderId), false);
+    assert.equal(store.identityMeta.has(resId), false);
+    assert.equal(store.identityVaults.has(resId), false);
+    assert.equal(store.pilotStocks.get(stockId)?.bookedUnits, 0);
+    assert.ok(store.notificationDispatches.some((n) => n.recipientId === 'provider-owner-uid'));
+    assert.ok(store.financialArchives.has(`arch-folder-${folderId}`));
+
+    // Re-suppression sur le même dossier -> 404
+    const notFoundAgain = await fetch(`${baseUrl}/api/amaro/folders/${folderId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-traveler-jwt' },
+    });
+    assert.equal(notFoundAgain.status, 404);
+
+    // Nettoyage des artefacts TEST
+    store.pilotStocks.delete(stockId);
+    store.services.delete(serviceId);
+    store.financialArchives.delete(`arch-folder-${folderId}`);
+  });
 });
+
 
 
 

@@ -4,13 +4,18 @@ import {
   Award,
   Bell,
   Building2,
+  Camera,
   CheckCircle2,
   Clock,
   CloudUpload,
   Copy,
   Database,
+  DollarSign,
   Download,
+  Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileCheck2,
   Filter,
   FolderKanban,
@@ -19,8 +24,10 @@ import {
   HeartHandshake,
   HelpCircle,
   Info,
+  Link2,
   Lock,
   Moon,
+  Plus,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -73,11 +80,16 @@ import {
   type CircuitAFeeConfig,
 } from '../../lib/offerEngine';
 import {
-  BENIN_PUBLIC_DIRECTORY,
+  ALL_PUBLIC_DIRECTORIES,
   COUNTRIES_REGISTRY,
   EDITORIAL_IMAGES,
   VALIDATION_MATRIX,
 } from '../../data/amaroRegistry';
+import {
+  AdminCatalogueModal,
+  type AdminCatalogueModalMode,
+  type AdminCatalogueUpsertInput,
+} from './AdminCatalogueModal';
 import {
   cleanClientSettingValue,
   CONVENTION_EXPECTED_CLAUSES_REMINDER,
@@ -189,38 +201,40 @@ interface WorkspacesAdminViewProps {
   countrySetting: SystemSettingDoc | null;
   allCatalogueServices: CatalogueItem[];
   allProviders: ProviderProfileDoc[];
+  adminProviderPrivateMap?: Record<
+    string,
+    {
+      payoutChannel?: string;
+      payoutNumber?: string;
+      contactPhone?: string;
+      contactEmail?: string;
+      registrationRef?: string;
+    }
+  >;
   allReservations: ReservationDoc[];
   allFolders?: JourneyFolderDoc[];
   allStories: CulturalStoryDoc[];
   auditLogs: AuditLogEntry[];
-  onAdminUpsertCatalogueService: (payload: {
-    serviceId?: string;
-    providerId: string;
-    title: string;
-    category: ServiceCategory;
-    cityId: string;
-    address: string;
-    description: string;
-    priceAmount: number;
-    priceKnown: boolean;
-    durationMinutes: number;
-    capacity: number;
-    dataOrigin: DataOriginType;
-    verificationStatus: VerificationLevel;
-    status: 'published' | 'draft' | 'archived';
-    imageKey: string;
-    customPhotoUrl?: string;
-    photoVerified?: boolean;
-    sourceName?: string;
-    verifiedAt?: string;
-    isSacredOrCeremonial?: boolean;
-    sacredNotice?: string;
-    providerResponseHours?: number;
-  }) => Promise<void>;
+  onAdminUpsertCatalogueService: (
+    payload: AdminCatalogueUpsertInput
+  ) => Promise<boolean | void>;
+  onAdminDeleteCatalogueService?: (serviceId: string) => Promise<boolean | void>;
+  onAdminBatchCatalogueAction?: (
+    serviceIds: string[],
+    action: 'hide' | 'show' | 'mark_verified' | 'mark_to_confirm'
+  ) => Promise<boolean | void>;
+  onAdminPreviewCountry?: (countryCode: string) => void;
   onAdminVerifyProvider: (
     providerId: string,
     status: 'verified' | 'rejected'
   ) => Promise<void>;
+  onAdminReviewProvider?: (params: {
+    providerId: string;
+    action: 'accept' | 'reject' | 'request_clarification' | 'set_trust';
+    reason?: string;
+    note?: string;
+    trustedPartner?: boolean;
+  }) => Promise<void>;
   onAdminLinkProviderToDirectoryListing?: (
     provider: ProviderProfileDoc,
     directoryServiceId: string
@@ -312,7 +326,6 @@ const CATEGORIES: ServiceCategory[] = [
   'wellness',
 ];
 
-const BENIN_CITIES = COUNTRIES_REGISTRY[0]?.cities || [];
 const GITHUB_SESSION_STORAGE_KEY = 'amaro_github_session_id';
 
 function downloadJsonBlob(filename: string, payload: unknown) {
@@ -358,12 +371,17 @@ export function WorkspacesAdminView({
   countrySetting,
   allCatalogueServices,
   allProviders,
+  adminProviderPrivateMap = {},
   allReservations,
   allFolders = [],
   allStories,
   auditLogs,
   onAdminUpsertCatalogueService,
+  onAdminDeleteCatalogueService,
+  onAdminBatchCatalogueAction,
+  onAdminPreviewCountry,
   onAdminVerifyProvider,
+  onAdminReviewProvider,
   onAdminLinkProviderToDirectoryListing,
   onAdminModerateStory,
   onAdminSaveExtendedSettings,
@@ -398,6 +416,10 @@ export function WorkspacesAdminView({
     reservation: ReservationDoc;
     role: 'admin';
   } | null>(null);
+  const [rejectReasonByProvider, setRejectReasonByProvider] = useState<Record<string, string>>({});
+  const [clarifyNoteByProvider, setClarifyNoteByProvider] = useState<Record<string, string>>({});
+  const [activeDecisionForm, setActiveDecisionForm] = useState<Record<string, 'reject' | 'clarify' | null>>({});
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (
@@ -577,8 +599,9 @@ export function WorkspacesAdminView({
   }, [countrySetting]);
 
   // Admin Catalogue Editor State
+  const [admCountryCode, setAdmCountryCode] = useState<string>('CI');
   const [admSrvId, setAdmSrvId] = useState<string>('');
-  const [admProvId, setAdmProvId] = useState<string>('dir-admin-amaro');
+  const [admProvId, setAdmProvId] = useState<string>('dir-admin-ci');
   const [admTitle, setAdmTitle] = useState<string>('');
   const [admCategory, setAdmCategory] = useState<ServiceCategory>('accommodation');
   const [admCity, setAdmCity] = useState<string>('abidjan');
@@ -594,6 +617,8 @@ export function WorkspacesAdminView({
   const [admImgKey, setAdmImgKey] = useState<string>('photo_a_ajouter');
   const [admCustomPhotoUrl, setAdmCustomPhotoUrl] = useState<string>('');
   const [admPhotoVerified, setAdmPhotoVerified] = useState<boolean>(false);
+  const [admPhotoSource, setAdmPhotoSource] = useState<string>('');
+  const [admSourceUrl, setAdmSourceUrl] = useState<string>('');
   const [admSourceName, setAdmSourceName] = useState<string>('');
   const [admVerifiedAt, setAdmVerifiedAt] = useState<string>('');
   const [admSacred, setAdmSacred] = useState<boolean>(false);
@@ -601,6 +626,93 @@ export function WorkspacesAdminView({
   const [admRespHours, setAdmRespHours] = useState<number>(24);
   const [savingAdminSrv, setSavingAdminSrv] = useState<boolean>(false);
   const [togglingCountryCode, setTogglingCountryCode] = useState<string | null>(null);
+
+  // Admin Catalogue Governance Table state
+  const [tableCountryCode, setTableCountryCode] = useState<string>('CI');
+  const [tableCityFilter, setTableCityFilter] = useState<string>('all');
+  const [tableStatusFilter, setTableStatusFilter] = useState<
+    'all' | 'to_verify' | 'no_photo' | 'no_price' | 'hidden'
+  >('all');
+  const [tableSearch, setTableSearch] = useState<string>('');
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [batchBusy, setBatchBusy] = useState<boolean>(false);
+  const [tableModalState, setTableModalState] = useState<{
+    isOpen: boolean;
+    mode: AdminCatalogueModalMode;
+    item: CatalogueItem | null;
+    cityId?: string;
+  }>({ isOpen: false, mode: 'edit', item: null });
+  const [tableDeleteConfirmItem, setTableDeleteConfirmItem] =
+    useState<CatalogueItem | null>(null);
+
+  const mergedAllServices = useMemo(() => {
+    const byId = new Map<string, CatalogueItem>();
+    for (const b of ALL_PUBLIC_DIRECTORIES) {
+      byId.set(b.id, b);
+    }
+    for (const s of allCatalogueServices) {
+      const staticMatch = byId.get(s.id);
+      byId.set(s.id, {
+        ...(staticMatch || {}),
+        ...s,
+        siteEditorial: staticMatch?.siteEditorial,
+      });
+    }
+    return Array.from(byId.values());
+  }, [allCatalogueServices]);
+
+  const admCountryCities = useMemo(() => {
+    const found = COUNTRIES_REGISTRY.find((c) => c.code === admCountryCode);
+    return found?.cities || COUNTRIES_REGISTRY.find((c) => c.code === 'CI')?.cities || [];
+  }, [admCountryCode]);
+
+  const tableCountryDef = useMemo(() => {
+    return (
+      COUNTRIES_REGISTRY.find((c) => c.code === tableCountryCode) ||
+      COUNTRIES_REGISTRY.find((c) => c.code === 'CI') ||
+      COUNTRIES_REGISTRY[0]
+    );
+  }, [tableCountryCode]);
+
+  const tableCountryServices = useMemo(() => {
+    return mergedAllServices.filter(
+      (s) => (s.countryCode || 'CI').toUpperCase() === tableCountryCode
+    );
+  }, [mergedAllServices, tableCountryCode]);
+
+  const tableCityCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const s of tableCountryServices) {
+      const cid = s.cityId || 'autre';
+      counts[cid] = (counts[cid] || 0) + 1;
+    }
+    return counts;
+  }, [tableCountryServices]);
+
+  const tableFilteredServices = useMemo(() => {
+    return tableCountryServices.filter((s) => {
+      if (tableCityFilter !== 'all' && s.cityId !== tableCityFilter) return false;
+      if (tableStatusFilter === 'to_verify') {
+        if (s.verificationStatus === 'verified') return false;
+      } else if (tableStatusFilter === 'no_photo') {
+        if (Boolean(s.customPhotoUrl?.trim())) return false;
+      } else if (tableStatusFilter === 'no_price') {
+        if (s.priceKnown !== false && Number(s.priceAmount || 0) > 0) return false;
+      } else if (tableStatusFilter === 'hidden') {
+        if (s.status === 'published') return false;
+      }
+      if (tableSearch.trim()) {
+        const q = tableSearch.toLowerCase();
+        const hit =
+          s.title.toLowerCase().includes(q) ||
+          s.id.toLowerCase().includes(q) ||
+          (s.cityId || '').toLowerCase().includes(q) ||
+          (s.address || '').toLowerCase().includes(q);
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }, [tableCountryServices, tableCityFilter, tableStatusFilter, tableSearch]);
 
   // Admin Operational Tools State (Notifications, Deadlines, Dossier Fee, Governance, Multi-Admin, Content)
   const [notifChannels, setNotifChannels] = useState<
@@ -995,6 +1107,7 @@ export function WorkspacesAdminView({
   };
 
   const loadItemIntoAdminEditor = (item: CatalogueItem) => {
+    setAdmCountryCode((item.countryCode || 'CI').toUpperCase());
     setAdmSrvId(item.id);
     setAdmProvId(item.providerId);
     setAdmTitle(item.title);
@@ -1012,6 +1125,8 @@ export function WorkspacesAdminView({
     setAdmImgKey(item.imageKey || '');
     setAdmCustomPhotoUrl(item.customPhotoUrl || '');
     setAdmPhotoVerified(Boolean(item.photoVerified));
+    setAdmPhotoSource(item.photoSource || '');
+    setAdmSourceUrl(item.sourceUrl || '');
     setAdmSourceName(item.sourceName || '');
     setAdmVerifiedAt(item.verifiedAt || '');
     setAdmSacred(Boolean(item.isSacredOrCeremonial));
@@ -1313,12 +1428,7 @@ export function WorkspacesAdminView({
          ===================================================================== */}
       {subTab === 'census' && isAdmin && (
         <AdminCensusTab
-          allCatalogueServices={[
-            ...allCatalogueServices,
-            ...BENIN_PUBLIC_DIRECTORY.filter(
-              (b) => !allCatalogueServices.some((c) => c.id === b.id)
-            ),
-          ]}
+          allCatalogueServices={mergedAllServices}
           providerOffers={providerOffers}
           onRefreshOffers={() => onRefreshOffers?.()}
           onNotify={onNotify}
@@ -1969,15 +2079,42 @@ export function WorkspacesAdminView({
             </div>
           ) : (
             <>
+              {/* Alertes en direct : nouvelles demandes partenaires & prestations à valider */}
+              {(() => {
+                const pendingPartnerRequestsCount = allProviders.filter(
+                  (p) => p.verificationStatus === 'pending'
+                ).length;
+                const pendingPartnerServicesCount = mergedAllServices.filter(
+                  (s) => s.providerId?.startsWith('prv-') && s.status !== 'published'
+                ).length;
+                if (pendingPartnerRequestsCount === 0 && pendingPartnerServicesCount === 0) return null;
+                return (
+                  <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-amber-950 dark:text-amber-200 text-sm">
+                        Nouvelles demandes à examiner par l&apos;administrateur
+                      </p>
+                      <p className="text-amber-900 dark:text-amber-300">
+                        {pendingPartnerRequestsCount} demande(s) de partenaire en attente ·{' '}
+                        {pendingPartnerServicesCount} prestation(s) partenaire(s) en attente de validation avant publication.
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* 10.5 Real Factual Milestones ("Jalons réels" — zero invented goal numbers) */}
               <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 tabular-nums">
                 <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                  <span className="text-xs text-slate-500 block">Établissements tiers</span>
+                  <span className="text-xs text-slate-500 block">Établissements tiers (CI)</span>
                   <strong className="font-mono text-2xl font-bold">
                     {
-                      BENIN_PUBLIC_DIRECTORY.filter(
+                      mergedAllServices.filter(
                         (x) =>
-                          x.providerId !== 'dir-amaro-services' && x.dataOrigin !== 'demo_test'
+                          (x.countryCode || 'CI') === 'CI' &&
+                          x.providerId !== 'dir-amaro-services' &&
+                          x.dataOrigin !== 'demo_test' &&
+                          x.status === 'published'
                       ).length
                     }
                   </strong>
@@ -2894,6 +3031,442 @@ export function WorkspacesAdminView({
                 </p>
               </section>
 
+              {/* Tableau de Gestion Multi-Pays & Modification en Lot du Catalogue (Admin uniquement) */}
+              <section className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 font-bold">
+                      <FolderKanban className="w-4 h-4" />
+                      <span>Tableau de gestion des prestations par pays et ville</span>
+                    </div>
+                    <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                      Gestion complète du catalogue ({tableCountryServices.length} fiches — {tableCountryDef.nameFr})
+                    </h3>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={tableCountryCode}
+                      onChange={(e) => {
+                        setTableCountryCode(e.target.value);
+                        setTableCityFilter('all');
+                        setSelectedServiceIds([]);
+                      }}
+                      aria-label="Choisir le pays dans le tableau admin"
+                      className="min-h-[44px] px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {COUNTRIES_REGISTRY.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.nameFr} ({c.code}) —{' '}
+                          {getEffectiveCountryState(c.code, countryStates) === 'ouvert'
+                            ? 'Ouvert'
+                            : 'En préparation'}
+                        </option>
+                      ))}
+                    </select>
+
+                    {onAdminPreviewCountry && (
+                      <button
+                        type="button"
+                        onClick={() => onAdminPreviewCountry(tableCountryCode)}
+                        className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Aperçu Admin</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTableModalState({
+                          isOpen: true,
+                          mode: 'edit',
+                          item: null,
+                          cityId:
+                            tableCityFilter !== 'all'
+                              ? tableCityFilter
+                              : tableCountryDef.cities[0]?.id || 'abidjan',
+                        })
+                      }
+                      className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl bg-[#0B192C] dark:bg-amber-400 text-white dark:text-slate-950"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>
+                        Ajouter une prestation
+                        {tableCityFilter !== 'all' ? ` (${tableCityFilter})` : ''}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Compteurs par ville */}
+                <div className="flex flex-wrap gap-1.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setTableCityFilter('all')}
+                    className={`min-h-[44px] px-3 py-1.5 rounded-lg font-semibold border ${
+                      tableCityFilter === 'all'
+                        ? 'bg-teal-700 text-white border-teal-700'
+                        : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    Toutes les villes ({tableCountryServices.length})
+                  </button>
+                  {Array.from(
+                    new Set([
+                      ...tableCountryDef.cities.map((c) => c.id),
+                      ...Object.keys(tableCityCounts),
+                    ])
+                  ).map((cid) => {
+                    const cityObj = tableCountryDef.cities.find((c) => c.id === cid);
+                    return (
+                      <button
+                        key={cid}
+                        type="button"
+                        onClick={() =>
+                          setTableCityFilter((prev) => (prev === cid ? 'all' : cid))
+                        }
+                        className={`min-h-[44px] px-3 py-1.5 rounded-lg font-semibold border ${
+                          tableCityFilter === cid
+                            ? 'bg-teal-700 text-white border-teal-700'
+                            : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {cityObj?.name || cid} ({tableCityCounts[cid] || 0})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Filtres statut + recherche */}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {(
+                    [
+                      {
+                        id: 'all',
+                        label: `Toutes (${tableCountryServices.length})`,
+                      },
+                      {
+                        id: 'to_verify',
+                        label: `À vérifier (${
+                          tableCountryServices.filter(
+                            (s) => s.verificationStatus !== 'verified'
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'no_photo',
+                        label: `Sans photo (${
+                          tableCountryServices.filter((s) => !s.customPhotoUrl?.trim())
+                            .length
+                        })`,
+                      },
+                      {
+                        id: 'no_price',
+                        label: `Sans prix (${
+                          tableCountryServices.filter(
+                            (s) => s.priceKnown === false || Number(s.priceAmount || 0) <= 0
+                          ).length
+                        })`,
+                      },
+                      {
+                        id: 'hidden',
+                        label: `Masquées (${
+                          tableCountryServices.filter((s) => s.status !== 'published')
+                            .length
+                        })`,
+                      },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setTableStatusFilter(f.id)}
+                      className={`min-h-[44px] px-3 py-1.5 rounded-lg font-semibold border ${
+                        tableStatusFilter === f.id
+                          ? 'bg-[#0B192C] text-white border-[#0B192C] dark:bg-amber-400 dark:text-slate-950'
+                          : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={tableSearch}
+                      onChange={(e) => setTableSearch(e.target.value)}
+                      placeholder="Rechercher titre, ville, adresse..."
+                      className="w-full min-h-[44px] pl-9 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                {/* Barre d'actions en lot */}
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <label className="min-h-[44px] inline-flex items-center gap-2 font-semibold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={
+                        tableFilteredServices.length > 0 &&
+                        tableFilteredServices.every((s) => selectedServiceIds.includes(s.id))
+                      }
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedServiceIds(tableFilteredServices.map((s) => s.id));
+                        } else {
+                          setSelectedServiceIds([]);
+                        }
+                      }}
+                      className="w-4 h-4"
+                    />
+                    <span>
+                      Sélectionner les {tableFilteredServices.length} fiche(s) filtrées (
+                      {selectedServiceIds.length} cochée(s))
+                    </span>
+                  </label>
+
+                  {onAdminBatchCatalogueAction && selectedServiceIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        disabled={batchBusy}
+                        onClick={async () => {
+                          setBatchBusy(true);
+                          try {
+                            const ok = await onAdminBatchCatalogueAction(
+                              selectedServiceIds,
+                              'hide'
+                            );
+                            if (ok !== false) setSelectedServiceIds([]);
+                          } finally {
+                            setBatchBusy(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 py-1.5 font-semibold rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                      >
+                        Masquer la sélection
+                      </button>
+                      <button
+                        type="button"
+                        disabled={batchBusy}
+                        onClick={async () => {
+                          setBatchBusy(true);
+                          try {
+                            const ok = await onAdminBatchCatalogueAction(
+                              selectedServiceIds,
+                              'show'
+                            );
+                            if (ok !== false) setSelectedServiceIds([]);
+                          } finally {
+                            setBatchBusy(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 py-1.5 font-semibold rounded-lg bg-teal-700 text-white"
+                      >
+                        Afficher la sélection
+                      </button>
+                      <button
+                        type="button"
+                        disabled={batchBusy}
+                        onClick={async () => {
+                          setBatchBusy(true);
+                          try {
+                            const ok = await onAdminBatchCatalogueAction(
+                              selectedServiceIds,
+                              'mark_verified'
+                            );
+                            if (ok !== false) setSelectedServiceIds([]);
+                          } finally {
+                            setBatchBusy(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 py-1.5 font-semibold rounded-lg bg-emerald-700 text-white"
+                      >
+                        Marquer vérifié
+                      </button>
+                      <button
+                        type="button"
+                        disabled={batchBusy}
+                        onClick={async () => {
+                          setBatchBusy(true);
+                          try {
+                            const ok = await onAdminBatchCatalogueAction(
+                              selectedServiceIds,
+                              'mark_to_confirm'
+                            );
+                            if (ok !== false) setSelectedServiceIds([]);
+                          } finally {
+                            setBatchBusy(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 py-1.5 font-semibold rounded-lg bg-amber-600 text-white"
+                      >
+                        Marquer à vérifier
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Liste / Tableau des fiches */}
+                <div className="max-h-[480px] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-xs">
+                  {tableFilteredServices.length === 0 ? (
+                    <p className="p-6 text-center text-slate-500">
+                      Aucune prestation ne correspond aux filtres sélectionnés.
+                    </p>
+                  ) : (
+                    tableFilteredServices.map((item) => {
+                      const isChecked = selectedServiceIds.includes(item.id);
+                      const hasPhoto = Boolean(item.customPhotoUrl?.trim());
+                      const hasSource = Boolean(item.sourceUrl?.trim() || item.photoSource?.trim());
+                      return (
+                        <div
+                          key={item.id}
+                          className="p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() =>
+                                setSelectedServiceIds((prev) =>
+                                  prev.includes(item.id)
+                                    ? prev.filter((x) => x !== item.id)
+                                    : [...prev, item.id]
+                                )
+                              }
+                              aria-label={`Sélectionner ${item.title}`}
+                              className="mt-1 w-4 h-4 shrink-0"
+                            />
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <strong className="text-sm text-slate-900 dark:text-slate-100">
+                                  {item.title}
+                                </strong>
+                                <span
+                                  className={`px-2 py-0.5 rounded font-semibold ${
+                                    item.status === 'published'
+                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                      : 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                                  }`}
+                                >
+                                  {item.status === 'published' ? 'Publiée' : `Masquée (${item.status})`}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded font-semibold ${
+                                    item.verificationStatus === 'verified'
+                                      ? 'bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300'
+                                      : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                  }`}
+                                >
+                                  {item.verificationStatus === 'verified' ? 'Vérifié' : 'À vérifier'}
+                                </span>
+                              </div>
+                              <p className="text-slate-500">
+                                <span className="capitalize font-semibold">{item.cityId}</span> ·{' '}
+                                {t.categories[item.category]} ·{' '}
+                                <span className="font-mono">
+                                  {item.priceKnown !== false && item.priceAmount > 0
+                                    ? `${Number(item.priceAmount).toLocaleString('fr-FR')} ${item.currency}`
+                                    : 'Sans prix / sur demande'}
+                                </span>{' '}
+                                ·{' '}
+                                <span className={hasPhoto ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
+                                  {hasPhoto ? 'Avec photo' : 'Sans photo'}
+                                </span>
+                                {hasSource ? ' · Source enregistrée' : ''}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTableModalState({ isOpen: true, mode: 'edit', item })
+                              }
+                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold rounded-lg bg-[#0B192C] text-white"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Modifier</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTableModalState({ isOpen: true, mode: 'price', item })
+                              }
+                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                            >
+                              <DollarSign className="w-3.5 h-3.5" />
+                              <span>Prix</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTableModalState({ isOpen: true, mode: 'photo', item })
+                              }
+                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                            >
+                              <Camera className="w-3.5 h-3.5" />
+                              <span>Photo</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void onAdminUpsertCatalogueService({
+                                  serviceId: item.id,
+                                  providerId: item.providerId,
+                                  countryCode: item.countryCode || tableCountryCode,
+                                  title: item.title,
+                                  category: item.category,
+                                  cityId: item.cityId,
+                                  address: item.address,
+                                  description: item.description,
+                                  priceAmount: item.priceAmount,
+                                  priceKnown: item.priceKnown !== false,
+                                  durationMinutes: item.durationMinutes,
+                                  capacity: item.capacity,
+                                  dataOrigin: item.dataOrigin,
+                                  verificationStatus: item.verificationStatus || 'to_confirm',
+                                  status: item.status === 'published' ? 'draft' : 'published',
+                                  imageKey: item.imageKey || 'photo_a_ajouter',
+                                })
+                              }
+                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                            >
+                              {item.status === 'published' ? (
+                                <>
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                  <span>Masquer</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Afficher</span>
+                                </>
+                              )}
+                            </button>
+                            {onAdminDeleteCatalogueService && (
+                              <button
+                                type="button"
+                                onClick={() => setTableDeleteConfirmItem(item)}
+                                className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Supprimer</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
+
               {/* Admin Catalogue Manager (/services/{serviceId}) */}
               <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2901,7 +3474,7 @@ export function WorkspacesAdminView({
                     <div className="flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 font-semibold">
                       <FolderKanban className="w-4 h-4" />
                       <span>
-                        Gouvernance du Catalogue Touristique (/services/&#123;serviceId&#125;)
+                        Éditeur direct d’une fiche (/services/&#123;serviceId&#125;)
                       </span>
                     </div>
                     <h3 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
@@ -2914,19 +3487,27 @@ export function WorkspacesAdminView({
                     onChange={(e) => {
                       const pickedId = e.target.value;
                       if (!pickedId) return;
-                      const found =
-                        allCatalogueServices.find((x) => x.id === pickedId) ||
-                        BENIN_PUBLIC_DIRECTORY.find((x) => x.id === pickedId);
+                      const found = mergedAllServices.find((x) => x.id === pickedId);
                       if (found) loadItemIntoAdminEditor(found);
                     }}
                     className="min-h-[44px] max-w-xs px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                   >
-                    <option value="">Charger une fiche existante ({BENIN_PUBLIC_DIRECTORY.length})...</option>
-                    {BENIN_PUBLIC_DIRECTORY.map((it) => (
-                      <option key={it.id} value={it.id}>
-                        {it.title} ({it.cityId})
-                      </option>
-                    ))}
+                    <option value="">
+                      Charger une fiche ({admCountryCode} —{' '}
+                      {
+                        mergedAllServices.filter(
+                          (x) => (x.countryCode || 'CI') === admCountryCode
+                        ).length
+                      }
+                      )...
+                    </option>
+                    {mergedAllServices
+                      .filter((x) => (x.countryCode || 'CI') === admCountryCode)
+                      .map((it) => (
+                        <option key={it.id} value={it.id}>
+                          {it.title} ({it.cityId})
+                        </option>
+                      ))}
                   </select>
                 </div>
 
@@ -2935,9 +3516,11 @@ export function WorkspacesAdminView({
                     e.preventDefault();
                     setSavingAdminSrv(true);
                     try {
-                      await onAdminUpsertCatalogueService({
+                      const ok = await onAdminUpsertCatalogueService({
                         serviceId: admSrvId.trim() || undefined,
-                        providerId: admProvId.trim() || 'dir-admin-benin',
+                        providerId:
+                          admProvId.trim() || `dir-admin-${admCountryCode.toLowerCase()}`,
+                        countryCode: admCountryCode,
                         title: admTitle.trim(),
                         category: admCategory,
                         cityId: admCity,
@@ -2953,28 +3536,52 @@ export function WorkspacesAdminView({
                         imageKey: admImgKey,
                         customPhotoUrl: admCustomPhotoUrl.trim(),
                         photoVerified: admPhotoVerified,
+                        photoSource: admPhotoSource.trim(),
+                        sourceUrl: admSourceUrl.trim(),
                         sourceName: admSourceName.trim(),
                         verifiedAt: admVerifiedAt.trim(),
                         isSacredOrCeremonial: admSacred,
                         sacredNotice: admSacredNotice.trim(),
                         providerResponseHours: Math.max(2, Math.round(admRespHours)),
                       });
-                      setAdmSrvId('');
-                      setAdmTitle('');
-                      setAdmAddress('');
-                      setAdmDesc('');
+                      if (ok !== false) {
+                        setAdmSrvId('');
+                        setAdmTitle('');
+                        setAdmAddress('');
+                        setAdmDesc('');
+                        setAdmPhotoSource('');
+                        setAdmSourceUrl('');
+                      }
                     } finally {
                       setSavingAdminSrv(false);
                     }
                   }}
                   className="space-y-3"
                 >
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                    <select
+                      value={admCountryCode}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setAdmCountryCode(next);
+                        const firstCity =
+                          COUNTRIES_REGISTRY.find((c) => c.code === next)?.cities[0]?.id;
+                        if (firstCity) setAdmCity(firstCity);
+                      }}
+                      aria-label="Pays de la fiche"
+                      className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {COUNTRIES_REGISTRY.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.nameFr} ({c.code})
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="text"
                       value={admSrvId}
                       onChange={(e) => setAdmSrvId(e.target.value)}
-                      placeholder="ID fiche (vide = auto, ou ex: acc-cotonou-sofitel-marina)"
+                      placeholder="ID fiche (vide = auto)"
                       className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
@@ -3015,11 +3622,14 @@ export function WorkspacesAdminView({
                       onChange={(e) => setAdmCity(e.target.value)}
                       className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
-                      {BENIN_CITIES.map((c) => (
+                      {admCountryCities.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name}
                         </option>
                       ))}
+                      {!admCountryCities.some((c) => c.id === admCity) && admCity && (
+                        <option value={admCity}>{admCity}</option>
+                      )}
                     </select>
 
                     <select
@@ -3051,8 +3661,8 @@ export function WorkspacesAdminView({
                       className="min-h-[44px] px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
                       <option value="published">Publié</option>
-                      <option value="draft">Brouillon</option>
-                      <option value="archived">Archivé</option>
+                      <option value="draft">Brouillon (Masqué)</option>
+                      <option value="archived">Archivé (Masqué)</option>
                     </select>
                   </div>
 
@@ -3071,7 +3681,7 @@ export function WorkspacesAdminView({
                       min={0}
                       value={admPrice}
                       onChange={(e) => setAdmPrice(Number(e.target.value))}
-                      placeholder="Tarif XOF"
+                      placeholder="Tarif"
                       className="min-h-[44px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <label className="flex items-center gap-2 text-xs cursor-pointer">
@@ -3090,6 +3700,7 @@ export function WorkspacesAdminView({
                       onChange={(e) => setAdmImgKey(e.target.value)}
                       className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     >
+                      <option value="photo_a_ajouter">Aucune (Photo à ajouter)</option>
                       {Object.entries(EDITORIAL_IMAGES).map(([k, v]) => (
                         <option key={k} value={k}>
                           Illustration : {v.alt.slice(0, 44)}...
@@ -3123,8 +3734,8 @@ export function WorkspacesAdminView({
                     />
                   </div>
 
-                  {/* 5.4 Photo réelle vérifiée, 10.2 Source & date, 9.5 Lieu sacré réservé Admin */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center pt-1">
+                  {/* 5.4 Photo réelle vérifiée + lien d'origine */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center pt-1">
                     <input
                       type="url"
                       value={admCustomPhotoUrl}
@@ -3132,19 +3743,36 @@ export function WorkspacesAdminView({
                       placeholder="URL photo propre à l'établissement (optionnel)"
                       className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
+                    <input
+                      type="url"
+                      value={admSourceUrl}
+                      onChange={(e) => setAdmSourceUrl(e.target.value)}
+                      placeholder="Lien d’origine de la photo / fiche (https://...)"
+                      className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      value={admPhotoSource}
+                      onChange={(e) => setAdmPhotoSource(e.target.value)}
+                      placeholder="Source / Auteur photo"
+                      className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center pt-1">
                     <label className="flex items-center gap-2 text-xs cursor-pointer">
                       <input
                         type="checkbox"
                         checked={admPhotoVerified}
                         onChange={(e) => setAdmPhotoVerified(e.target.checked)}
                       />
-                      <span>Photo vérifiée de ce lieu (retire « Illustration non contractuelle »)</span>
+                      <span>Photo vérifiée de ce lieu</span>
                     </label>
                     <input
                       type="text"
                       value={admSourceName}
                       onChange={(e) => setAdmSourceName(e.target.value)}
-                      placeholder="Source (ex: Convention directe, terrain)"
+                      placeholder="Source éditoriale (ex: Convention directe, terrain)"
                       className="min-h-[44px] px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
                     />
                     <input
@@ -3193,103 +3821,426 @@ export function WorkspacesAdminView({
                 </form>
               </section>
 
-              {/* Provider Verification Queue + 1-Click Attach to Existing Directory Listing (Bloc 1) */}
+              {/* Demandes de partenaires + Prestations partenaires à valider + Rattachement sans doublon */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                <div className="lg:col-span-7 p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
-                  <h3 className="font-display text-lg font-bold">
-                    Validation des Prestataires Circuit B &amp; Rattachement Sans Doublon ({allProviders.length})
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Si un établissement inscrit existe déjà dans le répertoire public, rattachez-le à la fiche existante en un clic pour la faire passer de « Recensé, non vérifié » à « Partenaire AMARO » sans doublon.
-                  </p>
+                <div className="lg:col-span-7 p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
+                  <div className="space-y-1">
+                    <h3 className="font-display text-lg font-bold">
+                      Demandes de partenaires ({allProviders.length})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Examinez chaque demande (activité, description, WhatsApp, photos + lien d&apos;origine, moyen de réception confidentiel), puis acceptez, refusez avec motif ou demandez des précisions.
+                    </p>
+                  </div>
+
                   {allProviders.length === 0 ? (
                     <p className="text-xs text-slate-500">
-                      Aucun prestataire inscrit pour le moment (compteur réel : 0).
+                      Aucune demande partenaire enregistrée pour le moment.
                     </p>
                   ) : (
-                    <div className="space-y-3">
-                      {allProviders.map((p) => (
-                        <div
-                          key={p.id}
-                          className="p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 text-xs"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <strong className="text-sm block">{p.businessName}</strong>
-                              <span className="text-slate-500">
-                                {p.cityId} · {t.categories[p.category]} · Statut :{' '}
-                                <strong>{p.verificationStatus}</strong> · Convention v
-                                {p.conventionVersionAccepted || '1.0'}
-                              </span>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void onAdminVerifyProvider(p.id, 'verified')}
-                                className="min-h-[44px] px-3 py-1 font-semibold text-white bg-emerald-700 rounded-lg"
-                              >
-                                Valider Partenaire AMARO
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void onAdminVerifyProvider(p.id, 'rejected')}
-                                className="min-h-[44px] px-3 py-1 font-semibold text-red-700 bg-red-100 rounded-lg"
-                              >
-                                Refuser
-                              </button>
-                            </div>
-                          </div>
+                    <div className="space-y-4">
+                      {[...allProviders]
+                        .sort((a, b) => {
+                          const order: Record<string, number> = {
+                            pending: 0,
+                            clarification_requested: 1,
+                            verified: 2,
+                            rejected: 3,
+                          };
+                          return (order[a.verificationStatus] ?? 9) - (order[b.verificationStatus] ?? 9);
+                        })
+                        .map((p) => {
+                          const priv = adminProviderPrivateMap[p.id];
+                          const formMode = activeDecisionForm[p.id] || null;
+                          const isBusy = reviewBusyId === p.id;
+                          return (
+                            <div
+                              key={p.id}
+                              className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 text-xs"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <strong className="text-sm text-slate-900 dark:text-white">
+                                      {p.businessName}
+                                    </strong>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                                        p.verificationStatus === 'verified'
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : p.verificationStatus === 'clarification_requested'
+                                          ? 'bg-orange-100 text-orange-900'
+                                          : p.verificationStatus === 'rejected'
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-amber-100 text-amber-900'
+                                      }`}
+                                    >
+                                      {p.verificationStatus === 'verified'
+                                        ? 'Acceptée'
+                                        : p.verificationStatus === 'clarification_requested'
+                                        ? 'Précisions demandées'
+                                        : p.verificationStatus === 'rejected'
+                                        ? 'Refusée'
+                                        : 'Demande en attente'}
+                                    </span>
+                                    {p.trustedPartner && (
+                                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-900">
+                                        Partenaire de confiance
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-slate-600 dark:text-slate-300">
+                                    {t.categories[p.category]} · {p.cityId}
+                                    {p.publicZone ? ` (${p.publicZone})` : ''} · WhatsApp :{' '}
+                                    <span className="font-mono">{p.whatsapp || p.businessPhone || priv?.contactPhone || 'non renseigné'}</span>
+                                  </p>
+                                  <p className="text-slate-600 dark:text-slate-300">
+                                    {p.description}
+                                  </p>
+                                  {priv && (
+                                    <p className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 font-mono">
+                                      Réception confidentielle : <strong>{priv.payoutChannel || 'non précisé'}</strong> ·{' '}
+                                      {priv.payoutNumber || priv.contactPhone || '—'}
+                                    </p>
+                                  )}
+                                  {p.rejectionReason && (
+                                    <p className="text-rose-700 font-semibold">
+                                      Motif refus : {p.rejectionReason}
+                                    </p>
+                                  )}
+                                  {p.clarificationNote && (
+                                    <p className="text-orange-800 font-semibold">
+                                      Précisions demandées : {p.clarificationNote}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
 
-                          {onAdminLinkProviderToDirectoryListing && (
-                            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                              <select
-                                value={
-                                  linkDirectoryIdByProvider[p.id] ||
-                                  p.linkedDirectoryServiceId ||
-                                  ''
-                                }
-                                onChange={(e) =>
-                                  setLinkDirectoryIdByProvider((prev) => ({
-                                    ...prev,
-                                    [p.id]: e.target.value,
-                                  }))
-                                }
-                                className="flex-1 min-h-[44px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
-                              >
-                                <option value="">
-                                  Rattacher à une fiche existante de {p.cityId}...
-                                </option>
-                                {BENIN_PUBLIC_DIRECTORY.filter((d) => d.cityId === p.cityId).map(
-                                  (d) => (
-                                    <option key={d.id} value={d.id}>
-                                      {d.title} ({d.id})
-                                    </option>
-                                  )
-                                )}
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const targetId =
-                                    linkDirectoryIdByProvider[p.id] ||
-                                    p.linkedDirectoryServiceId ||
-                                    '';
-                                  if (!targetId) {
-                                    onNotify('Sélectionnez une fiche du répertoire à rattacher.');
-                                    return;
+                              {/* Photos soumises + liens d'origine */}
+                              {p.applicationPhotos && p.applicationPhotos.length > 0 && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {p.applicationPhotos.map((ph, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5"
+                                    >
+                                      <img
+                                        src={ph.url}
+                                        alt={`${p.businessName} ${idx + 1}`}
+                                        className="w-14 h-14 object-cover rounded-lg bg-slate-200 shrink-0"
+                                      />
+                                      <div className="min-w-0 space-y-0.5">
+                                        <a
+                                          href={ph.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="block text-[11px] font-semibold text-teal-700 underline truncate"
+                                        >
+                                          Voir photo #{idx + 1}
+                                        </a>
+                                        <a
+                                          href={ph.sourceUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="block text-[11px] text-slate-500 underline truncate"
+                                        >
+                                          Origine : {ph.sourceUrl}
+                                        </a>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Décisions Admin */}
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={async () => {
+                                    setReviewBusyId(p.id);
+                                    try {
+                                      if (onAdminReviewProvider) {
+                                        await onAdminReviewProvider({
+                                          providerId: p.id,
+                                          action: 'accept',
+                                        });
+                                      } else {
+                                        await onAdminVerifyProvider(p.id, 'verified');
+                                      }
+                                      setActiveDecisionForm((prev) => ({ ...prev, [p.id]: null }));
+                                    } finally {
+                                      setReviewBusyId(null);
+                                    }
+                                  }}
+                                  className="min-h-[44px] px-3.5 py-1.5 font-bold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 rounded-lg"
+                                >
+                                  Accepter
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    setActiveDecisionForm((prev) => ({
+                                      ...prev,
+                                      [p.id]: formMode === 'reject' ? null : 'reject',
+                                    }))
                                   }
-                                  void onAdminLinkProviderToDirectoryListing(p, targetId);
-                                }}
-                                className="min-h-[44px] px-3 py-1 font-semibold bg-teal-700 text-white rounded-lg"
-                              >
-                                Rattacher sans doublon
-                              </button>
+                                  className="min-h-[44px] px-3.5 py-1.5 font-bold text-rose-800 bg-rose-100 hover:bg-rose-200 rounded-lg"
+                                >
+                                  Refuser (avec motif)
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    setActiveDecisionForm((prev) => ({
+                                      ...prev,
+                                      [p.id]: formMode === 'clarify' ? null : 'clarify',
+                                    }))
+                                  }
+                                  className="min-h-[44px] px-3.5 py-1.5 font-bold text-orange-900 bg-orange-100 hover:bg-orange-200 rounded-lg"
+                                >
+                                  Demander des précisions
+                                </button>
+                                {p.verificationStatus === 'verified' && onAdminReviewProvider && (
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={async () => {
+                                      setReviewBusyId(p.id);
+                                      try {
+                                        await onAdminReviewProvider({
+                                          providerId: p.id,
+                                          action: 'set_trust',
+                                          trustedPartner: !Boolean(p.trustedPartner),
+                                        });
+                                      } finally {
+                                        setReviewBusyId(null);
+                                      }
+                                    }}
+                                    className={`min-h-[44px] px-3 py-1.5 font-semibold rounded-lg border ${
+                                      p.trustedPartner
+                                        ? 'bg-teal-700 text-white border-teal-700'
+                                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700'
+                                    }`}
+                                  >
+                                    {p.trustedPartner
+                                      ? 'Partenaire de confiance : OUI'
+                                      : 'Activer confiance directe'}
+                                  </button>
+                                )}
+                              </div>
+
+                              {formMode === 'reject' && (
+                                <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 space-y-2">
+                                  <input
+                                    type="text"
+                                    value={rejectReasonByProvider[p.id] || ''}
+                                    onChange={(e) =>
+                                      setRejectReasonByProvider((prev) => ({
+                                        ...prev,
+                                        [p.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="Indiquez le motif du refus (obligatoire)..."
+                                    className="w-full min-h-[44px] px-3 py-2 rounded-lg border border-rose-300 bg-white dark:bg-slate-900 text-xs"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={async () => {
+                                      const reason = (rejectReasonByProvider[p.id] || '').trim();
+                                      if (reason.length < 3) {
+                                        onNotify('Saisissez un motif de refus d’au moins 3 caractères.');
+                                        return;
+                                      }
+                                      setReviewBusyId(p.id);
+                                      try {
+                                        if (onAdminReviewProvider) {
+                                          await onAdminReviewProvider({
+                                            providerId: p.id,
+                                            action: 'reject',
+                                            reason,
+                                          });
+                                        } else {
+                                          await onAdminVerifyProvider(p.id, 'rejected');
+                                        }
+                                        setActiveDecisionForm((prev) => ({ ...prev, [p.id]: null }));
+                                      } finally {
+                                        setReviewBusyId(null);
+                                      }
+                                    }}
+                                    className="min-h-[44px] px-4 py-1.5 rounded-lg bg-rose-700 text-white font-bold"
+                                  >
+                                    Confirmer le refus
+                                  </button>
+                                </div>
+                              )}
+
+                              {formMode === 'clarify' && (
+                                <div className="p-3 rounded-lg bg-orange-50 dark:bg-orange-950/30 border border-orange-200 space-y-2">
+                                  <input
+                                    type="text"
+                                    value={clarifyNoteByProvider[p.id] || ''}
+                                    onChange={(e) =>
+                                      setClarifyNoteByProvider((prev) => ({
+                                        ...prev,
+                                        [p.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="Précisez ce que le partenaire doit compléter ou corriger..."
+                                    className="w-full min-h-[44px] px-3 py-2 rounded-lg border border-orange-300 bg-white dark:bg-slate-900 text-xs"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={async () => {
+                                      const note = (clarifyNoteByProvider[p.id] || '').trim();
+                                      if (note.length < 3) {
+                                        onNotify('Saisissez votre demande de précisions (3 caractères min).');
+                                        return;
+                                      }
+                                      setReviewBusyId(p.id);
+                                      try {
+                                        if (onAdminReviewProvider) {
+                                          await onAdminReviewProvider({
+                                            providerId: p.id,
+                                            action: 'request_clarification',
+                                            note,
+                                          });
+                                        }
+                                        setActiveDecisionForm((prev) => ({ ...prev, [p.id]: null }));
+                                      } finally {
+                                        setReviewBusyId(null);
+                                      }
+                                    }}
+                                    className="min-h-[44px] px-4 py-1.5 rounded-lg bg-orange-600 text-white font-bold"
+                                  >
+                                    Envoyer la demande de précisions
+                                  </button>
+                                </div>
+                              )}
+
+                              {onAdminLinkProviderToDirectoryListing && (
+                                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                                  <select
+                                    value={
+                                      linkDirectoryIdByProvider[p.id] ||
+                                      p.linkedDirectoryServiceId ||
+                                      ''
+                                    }
+                                    onChange={(e) =>
+                                      setLinkDirectoryIdByProvider((prev) => ({
+                                        ...prev,
+                                        [p.id]: e.target.value,
+                                      }))
+                                    }
+                                    className="flex-1 min-h-[44px] px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                                  >
+                                    <option value="">
+                                      Rattacher à une fiche existante de {p.cityId}...
+                                    </option>
+                                    {mergedAllServices
+                                      .filter((d) => d.cityId === p.cityId)
+                                      .map((d) => (
+                                        <option key={d.id} value={d.id}>
+                                          {d.title} ({d.id})
+                                        </option>
+                                      ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const targetId =
+                                        linkDirectoryIdByProvider[p.id] ||
+                                        p.linkedDirectoryServiceId ||
+                                        '';
+                                      if (!targetId) {
+                                        onNotify('Sélectionnez une fiche du répertoire à rattacher.');
+                                        return;
+                                      }
+                                      void onAdminLinkProviderToDirectoryListing(p, targetId);
+                                    }}
+                                    className="min-h-[44px] px-3 py-1 font-semibold bg-teal-700 text-white rounded-lg"
+                                  >
+                                    Rattacher sans doublon
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      ))}
+                          );
+                        })}
                     </div>
                   )}
+
+                  {/* Prestations partenaires en attente de validation */}
+                  {(() => {
+                    const pendingPartnerSvcs = mergedAllServices.filter(
+                      (s) => s.providerId?.startsWith('prv-') && s.status !== 'published'
+                    );
+                    if (pendingPartnerSvcs.length === 0) return null;
+                    return (
+                      <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                          Prestations partenaires en attente de validation ({pendingPartnerSvcs.length})
+                        </h4>
+                        <div className="space-y-2.5">
+                          {pendingPartnerSvcs.map((s) => {
+                            const hasPhoto = Boolean(s.customPhotoUrl && s.customPhotoUrl.trim().length >= 10);
+                            return (
+                              <div
+                                key={s.id}
+                                className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                              >
+                                <div className="space-y-1 min-w-0">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <strong className="text-sm">{s.title}</strong>
+                                    {!hasPhoto && (
+                                      <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-bold">
+                                        photo à ajouter
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-slate-600 dark:text-slate-300">
+                                    {s.cityId} · {Number(s.priceAmount || 0).toLocaleString('fr-FR')} FCFA ·{' '}
+                                    {s.photoSource ? `Origine photo : ${s.photoSource}` : 'Aucune source photo'}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    disabled={!hasPhoto}
+                                    onClick={() =>
+                                      void onAdminUpsertCatalogueService({
+                                        id: s.id,
+                                        status: 'published',
+                                        dataOrigin: 'verified_partner',
+                                        verificationStatus: 'verified',
+                                        photoVerified: true,
+                                      })
+                                    }
+                                    className="min-h-[44px] px-3 py-1.5 rounded-lg bg-emerald-700 disabled:opacity-40 text-white font-bold"
+                                  >
+                                    Valider &amp; Publier
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setTableModalState({ isOpen: true, mode: 'photo', item: s })
+                                    }
+                                    className="min-h-[44px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white dark:bg-slate-900 font-semibold"
+                                  >
+                                    Gérer photo
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Multi-Admin Governance (7.1) & Account Blocking (Bloc 2) */}
@@ -3413,9 +4364,7 @@ export function WorkspacesAdminView({
                         const isCircuitA =
                           r.circuitType === 'circuit_a_directory' ||
                           r.providerOwnerId === 'manual_concierge';
-                        const catItem =
-                          allCatalogueServices.find((x) => x.id === r.serviceId) ||
-                          BENIN_PUBLIC_DIRECTORY.find((x) => x.id === r.serviceId);
+                        const catItem = mergedAllServices.find((x) => x.id === r.serviceId);
                         const chosenLines = parseSelectedOffersJson(r.selectedOffersJson);
                         const requestedUnits = Math.max(
                           1,
@@ -4420,6 +5369,7 @@ export function WorkspacesAdminView({
                 const isBusy = togglingCountryCode === country.code;
 
                 const applyCountryStateUpdate = async (nextState: UNCountryState) => {
+                  const prevStates = countryStates;
                   const nextMap = { ...countryStates, [country.code]: nextState };
                   setCountryStates(nextMap);
                   setTogglingCountryCode(country.code);
@@ -4432,14 +5382,18 @@ export function WorkspacesAdminView({
                         state: nextState,
                       }),
                     });
+                    const bodyJson = await resp.json().catch(() => null);
                     if (!resp.ok) {
-                      const errBody = await resp.json().catch(() => null);
-                      onNotify(errBody?.error || `Erreur serveur lors du basculement de ${country.nameFr}.`);
+                      setCountryStates(prevStates);
+                      onNotify(
+                        bodyJson?.error ||
+                          `Mise à jour refusée (${resp.status}) pour ${country.nameFr}.`
+                      );
+                      return;
                     }
-                    await onAdminSaveExtendedSettings({
-                      countryOperationalStates: nextMap,
-                      photoRegistryOverrides: photoOverrides,
-                    });
+                    if (bodyJson?.countryOperationalStates) {
+                      setCountryStates(bodyJson.countryOperationalStates);
+                    }
                     onNotify(
                       `${country.nameFr} (${country.code}) basculé sur « ${
                         nextState === 'ouvert'
@@ -4451,6 +5405,9 @@ export function WorkspacesAdminView({
                           : 'Caché'
                       } ».`
                     );
+                  } catch {
+                    setCountryStates(prevStates);
+                    onNotify(`Erreur réseau lors du basculement de ${country.nameFr}.`);
                   } finally {
                     setTogglingCountryCode(null);
                   }
@@ -4531,10 +5488,19 @@ export function WorkspacesAdminView({
                         <option value="cache">Caché</option>
                       </select>
 
+                      {onAdminPreviewCountry && (
+                        <button
+                          type="button"
+                          onClick={() => onAdminPreviewCountry(country.code)}
+                          className="min-h-[44px] px-2.5 py-1 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-lg"
+                        >
+                          Aperçu Admin
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setSelectedCountryCode(country.code)}
-                        className="px-2 py-1 text-xs font-semibold text-teal-700 dark:text-teal-400 underline"
+                        className="min-h-[44px] px-2 py-1 text-xs font-semibold text-teal-700 dark:text-teal-400 underline"
                       >
                         Fiche
                       </button>
@@ -4782,6 +5748,60 @@ export function WorkspacesAdminView({
           onClose={() => setIdentityModalContext(null)}
           onNotify={onNotify}
         />
+      )}
+
+      {isAdmin && (
+        <AdminCatalogueModal
+          isOpen={tableModalState.isOpen}
+          mode={tableModalState.mode}
+          item={tableModalState.item}
+          defaultCountryCode={tableCountryCode}
+          defaultCityId={
+            tableModalState.cityId ||
+            (tableCityFilter !== 'all' ? tableCityFilter : tableCountryDef.cities[0]?.id)
+          }
+          onClose={() => setTableModalState((prev) => ({ ...prev, isOpen: false }))}
+          onSave={onAdminUpsertCatalogueService}
+          onDelete={onAdminDeleteCatalogueService}
+        />
+      )}
+
+      {isAdmin && tableDeleteConfirmItem && onAdminDeleteCatalogueService && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+            <h3 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+              Confirmer la suppression
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+              Voulez-vous supprimer ou archiver la prestation «{' '}
+              <strong>{tableDeleteConfirmItem.title}</strong> » ?
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTableDeleteConfirmItem(null)}
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = tableDeleteConfirmItem;
+                  setTableDeleteConfirmItem(null);
+                  await onAdminDeleteCatalogueService(target.id);
+                }}
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl bg-rose-700 hover:bg-rose-800 text-white"
+              >
+                Confirmer la suppression
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

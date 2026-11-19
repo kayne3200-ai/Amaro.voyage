@@ -145,6 +145,9 @@ interface JourneyHubViewProps {
     folderId: string,
     status: JourneyFolderDoc['status']
   ) => Promise<void>;
+  onDeleteFolder?: (
+    folderId: string
+  ) => Promise<{ deletedFolderTitle: string; deletedReservationsCount: number } | null>;
   folderItems: JourneyItemDoc[];
   onUpdateJourneyItem?: (
     item: JourneyItemDoc,
@@ -301,6 +304,7 @@ export function JourneyHubView({
   onCreateFolder,
   onUpdateFolderBudget,
   onUpdateFolderStatus,
+  onDeleteFolder,
   folderItems,
   onUpdateJourneyItem,
   onDeleteJourneyItem,
@@ -370,6 +374,12 @@ export function JourneyHubView({
     'Rythme équilibré, gastronomie locale, respect des sites patrimoniaux.'
   );
   const [isCreating, setIsCreating] = useState<boolean>(false);
+  const [deleteFolderConfirmOpen, setDeleteFolderConfirmOpen] = useState<boolean>(false);
+  const [deletingFolder, setDeletingFolder] = useState<boolean>(false);
+  const [deletedFolderFeedback, setDeletedFolderFeedback] = useState<{
+    title: string;
+    reservationsCount: number;
+  } | null>(null);
 
   React.useEffect(() => {
     if (selectedCountryCode && (!activeFolder || folders.length === 0)) {
@@ -1181,6 +1191,7 @@ export function JourneyHubView({
         preferencesNotes: preferencesNotes.trim(),
       });
       setShowNewFolderForm(false);
+      setDeletedFolderFeedback(null);
     } finally {
       setIsCreating(false);
     }
@@ -1374,8 +1385,69 @@ export function JourneyHubView({
             <FolderPlus className="w-4 h-4" />
             <span>Nouveau voyage</span>
           </button>
+
+          {activeFolder && onDeleteFolder && (
+            <button
+              type="button"
+              onClick={() => setDeleteFolderConfirmOpen(true)}
+              data-testid="delete-journey-folder-btn"
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800 rounded-xl transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Supprimer ce dossier</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {deletedFolderFeedback && (
+        <section
+          role="status"
+          data-testid="folder-deleted-summary"
+          className="no-print p-5 bg-emerald-50/90 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-2xl space-y-3"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1.5">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4" />
+                Dossier supprimé et données de réservation effacées
+              </p>
+              <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                Le dossier « {deletedFolderFeedback.title} » a été supprimé définitivement
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+                <strong>{deletedFolderFeedback.reservationsCount}</strong> réservation(s) associée(s), vos étapes d’itinéraire et vos pièces liées ont été supprimées (<strong>0 donnée de réservation conservée</strong> pour ce dossier). Les créneaux prestataires ont été libérés pour protéger la disponibilité du site.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDeletedFolderFeedback(null)}
+              aria-label="Fermer cette confirmation"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowNewFolderForm(true);
+                setTimeout(() => {
+                  document
+                    .getElementById('create-new-folder-form')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 50);
+              }}
+              className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 rounded-xl transition-colors"
+            >
+              <FolderPlus className="w-4 h-4" />
+              <span>Créer un nouveau dossier de voyage</span>
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Partie 3: Unified Dossier de Voyage Synthesis Strip */}
       {activeFolder && (
@@ -2223,6 +2295,7 @@ export function JourneyHubView({
       {/* Create New Journey Folder Form */}
       {(showNewFolderForm || folders.length === 0) && (
         <form
+          id="create-new-folder-form"
           onSubmit={handleCreateSubmit}
           className="no-print p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4"
         >
@@ -3614,8 +3687,23 @@ export function JourneyHubView({
             )}
 
             {folderReservations.length === 0 ? (
-              <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-500">
-                Aucune demande de réservation envoyée pour ce dossier.
+              <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-600 dark:text-slate-400 space-y-3">
+                <p>Aucune demande de réservation active pour ce dossier (0 réservation).</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewFolderForm(true);
+                    setTimeout(() => {
+                      document
+                        .getElementById('create-new-folder-form')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 50);
+                  }}
+                  className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+                >
+                  <FolderPlus className="w-4 h-4" />
+                  <span>Créer un nouveau dossier de voyage</span>
+                </button>
               </div>
             ) : (
               <div className="space-y-4">
@@ -4711,6 +4799,119 @@ export function JourneyHubView({
           }
         }}
       />
+
+      {deleteFolderConfirmOpen && activeFolder && onDeleteFolder && (() => {
+        const hasProtectedPayments =
+          folderReservations.some(
+            (r) =>
+              r.paymentStatus === 'initiated' ||
+              r.paymentStatus === 'succeeded' ||
+              r.paymentStatus === 'refunded'
+          ) || activeFolder.dossierFeeStatus === 'in_verification';
+
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-folder-modal-title"
+            className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-xs font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4" />
+                    Suppression du dossier de voyage
+                  </p>
+                  <h3
+                    id="delete-folder-modal-title"
+                    className="font-display text-lg font-bold text-slate-900 dark:text-slate-100"
+                  >
+                    Supprimer « {activeFolder.title} » ?
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  disabled={deletingFolder}
+                  onClick={() => setDeleteFolderConfirmOpen(false)}
+                  aria-label="Fermer la fenêtre de suppression"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs space-y-1.5 text-slate-700 dark:text-slate-300">
+                <p>
+                  <strong>Contenu qui sera effacé :</strong>
+                </p>
+                <p>
+                  • Ce dossier de voyage ({activeFolder.startDate} → {activeFolder.endDate})
+                </p>
+                <p>• {folderItems.length} étape(s) d’agenda et notes de carnet</p>
+                <p>
+                  • <strong>{folderReservations.length}</strong> donnée(s) de réservation liée(s) et pièces d’identité associées
+                </p>
+              </div>
+
+              {hasProtectedPayments ? (
+                <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 leading-relaxed space-y-1">
+                  <p className="font-bold">
+                    Protection financière activée — Suppression impossible en l’état
+                  </p>
+                  <p>
+                    Ce dossier contient au moins une réservation avec un paiement payé, remboursé ou en cours de vérification (ou des frais de dossier en attente de validation). Pour protéger l’intégrité comptable et vos justificatifs, veuillez d’abord annuler/résoudre ces paiements ou contacter l’assistance.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Toutes vos données de réservation associées seront supprimées et les créneaux prestataires seront automatiquement libérés. Vous pourrez ensuite créer un nouveau dossier de voyage immédiatement.
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  disabled={deletingFolder}
+                  onClick={() => setDeleteFolderConfirmOpen(false)}
+                  className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-xl"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingFolder || hasProtectedPayments}
+                  data-testid="confirm-delete-journey-folder-btn"
+                  onClick={async () => {
+                    setDeletingFolder(true);
+                    try {
+                      const result = await onDeleteFolder(activeFolder.id);
+                      if (result) {
+                        setDeleteFolderConfirmOpen(false);
+                        setDeletedFolderFeedback({
+                          title: result.deletedFolderTitle,
+                          reservationsCount: result.deletedReservationsCount,
+                        });
+                        setShowNewFolderForm(true);
+                      }
+                    } finally {
+                      setDeletingFolder(false);
+                    }
+                  }}
+                  className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-45 disabled:cursor-not-allowed rounded-xl transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>
+                    {deletingFolder
+                      ? 'Suppression en cours...'
+                      : 'Confirmer la suppression définitive'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

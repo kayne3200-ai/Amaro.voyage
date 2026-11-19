@@ -13,7 +13,10 @@ import type {
   NotificationDispatchDoc,
   PartnerActivationLevel,
   PaymentStatus,
+  PhotoIndicatorType,
+  ProviderApplicationPhoto,
   ProviderOfferDoc,
+  ProviderProfileDoc,
   ReservationDispatchChannel,
   ReservationDispatchStatus,
   ReservationStatus,
@@ -230,9 +233,86 @@ export interface AtomicReservationPayload {
   referral?: AtomicReferralPayload | null;
 }
 
+export interface AdminServiceUpsertInput {
+  id: string;
+  providerId?: string;
+  ownerId?: string;
+  title?: string;
+  category?: ServiceCategory;
+  countryCode?: string;
+  cityId?: string;
+  address?: string;
+  description?: string;
+  priceAmount?: number;
+  priceKnown?: boolean;
+  currency?: CurrencyCode;
+  durationMinutes?: number;
+  capacity?: number;
+  dataOrigin?: 'verified_partner' | 'pending_verification' | 'public_directory' | 'demo_test';
+  verificationStatus?: 'verified' | 'partially_verified' | 'to_confirm' | 'unverified';
+  status?: 'published' | 'draft' | 'archived';
+  imageKey?: string;
+  imageLicense?: string;
+  customPhotoUrl?: string;
+  photoVerified?: boolean;
+  photoIndicator?: PhotoIndicatorType;
+  photoSource?: string;
+  photoUsageRights?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  contactPhone?: string;
+  contactWhatsapp?: string;
+  contactEmail?: string;
+  publishedHours?: string;
+  neighborhood?: string;
+  isSacredOrCeremonial?: boolean;
+  sacredNotice?: string;
+  providerResponseHours?: number;
+}
+
+export interface ProviderCommercialPrivateRecord {
+  ownerId: string;
+  contactEmail: string;
+  contactPhone: string;
+  payoutChannel: string;
+  payoutNumber?: string;
+  registrationRef: string;
+}
+
+export interface ProviderWithPrivateBundle {
+  provider: ProviderProfileDoc & { blockedDates?: string[]; conventionAccepted?: boolean };
+  privateCommercial: ProviderCommercialPrivateRecord | null;
+}
+
+export interface ProviderServiceUpsertInput {
+  id?: string;
+  title: string;
+  category: ServiceCategory;
+  cityId: string;
+  address: string;
+  description: string;
+  priceAmount: number;
+  capacity?: number;
+  durationMinutes?: number;
+  customPhotoUrl?: string;
+  photoSource?: string;
+  blockedDates?: string[];
+}
+
 export interface AmaroServerStore {
   isRegisteredAdmin(uid: string, rawIdToken?: string): Promise<boolean>;
   getService(serviceId: string, rawIdToken?: string): Promise<ServerServiceRecord | null>;
+  listAllServices?(rawIdToken?: string): Promise<ServerServiceRecord[]>;
+  adminUpsertService?(
+    payload: AdminServiceUpsertInput,
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<ServerServiceRecord>;
+  adminDeleteService?(
+    serviceId: string,
+    rawIdToken?: string
+  ): Promise<{ deleted: boolean; archivedStatic?: boolean }>;
   listActivePilotStocksForService?(
     serviceId: string,
     rawIdToken?: string
@@ -300,15 +380,58 @@ export interface AmaroServerStore {
       companyName: string;
       category: ServiceCategory;
       cityId: string;
+      publicZone?: string;
       countryCode: string;
       phone: string;
+      whatsapp?: string;
       contactEmail: string;
       description: string;
+      payoutMethod?: string;
+      payoutNumber?: string;
+      registrationRef?: string;
+      photos?: ProviderApplicationPhoto[];
+      claimDirectoryServiceId?: string;
       conventionVersion: string;
       conventionAcceptedAt: string;
     },
     rawIdToken: string
   ): Promise<{ providerId: string; verificationStatus: 'pending' }>;
+  getProviderWithPrivate?(
+    providerId: string,
+    rawIdToken?: string
+  ): Promise<ProviderWithPrivateBundle | null>;
+  listAllProvidersWithPrivate?(rawIdToken?: string): Promise<ProviderWithPrivateBundle[]>;
+  adminReviewProvider?(
+    params: {
+      providerId: string;
+      action: 'accept' | 'reject' | 'request_clarification' | 'set_trust';
+      reason?: string;
+      note?: string;
+      trustedPartner?: boolean;
+      adminUid: string;
+    },
+    rawIdToken?: string
+  ): Promise<ProviderWithPrivateBundle>;
+  providerUpsertOwnService?(
+    payload: ProviderServiceUpsertInput,
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<{ service: ServerServiceRecord; requiresAdminValidation: boolean }>;
+  providerDeleteOwnService?(
+    serviceId: string,
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<{ deleted: boolean }>;
+  listProviderOwnData?(
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<{
+    provider: (ProviderProfileDoc & { trustedPartner?: boolean }) | null;
+    privateCommercial: ProviderCommercialPrivateRecord | null;
+    services: ServerServiceRecord[];
+    reservations: Array<ServerReservationRecord & { serviceTitle?: string; scheduledDate?: string; totalAmount?: number; providerPrice?: number; status?: string }>;
+    confirmedRevenueXof: number;
+  }>;
   getIdentityMetadata?(
     reservationId: string,
     rawIdToken: string
@@ -467,6 +590,23 @@ export interface AmaroServerStore {
     retainedFinancialRecordsCount: number;
     retentionPolicyLabel: string;
   }>;
+  deleteJourneyFolderCascade?(
+    params: {
+      folderId: string;
+      callerUid: string;
+      isAdmin: boolean;
+      retentionPolicyLabel: string;
+    },
+    rawIdToken: string
+  ): Promise<{
+    deletedFolderId: string;
+    deletedFolderTitle: string;
+    deletedReservationsCount: number;
+    deletedItemsCount: number;
+    deletedIdentityVaultCount: number;
+    releasedStockUnitsCount: number;
+    archivedDossierFeeTrace: boolean;
+  }>;
   isVerifiedProviderOwner?(
     providerId: string,
     uid: string,
@@ -530,6 +670,14 @@ export class ConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ConflictError';
+  }
+}
+
+export class ForbiddenError extends Error {
+  readonly statusCode = 403;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
   }
 }
 
@@ -961,6 +1109,13 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     rawIdToken?: string
   ): Promise<ServerSystemSetting> {
     const code = (patch.countryCode || 'BJ').toUpperCase().trim();
+    const rawActor = String(patch.updatedBy || '')
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (!rawActor) {
+      throw new Error('Identifiant administrateur manquant (updatedBy requis).');
+    }
+
     const existing = await this.getSystemSetting(code, rawIdToken);
     const merged: ServerSystemSetting = {
       ...existing,
@@ -986,6 +1141,50 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       return { stringValue: String(val) };
     };
 
+    const optionalScalarKeys = [
+      'partnerMarginPercent',
+      'directoryMarginPercent',
+      'partnerCommissionPercent',
+      'attributionWindowDays',
+      'attributionModel',
+      'dossierFeeXof',
+      'dossierVerificationHours',
+      'providerResponseHours',
+      'balancePaymentHours',
+      'maxPendingPaymentFolders',
+      'abandonmentRiskThreshold',
+      'alternativeBudgetTolerancePercent',
+      'maxVisitsCityChangeDay',
+      'maxVisitsSameCityDay',
+      'freeTimeBlocksPerDay',
+      'includeDossierFeeInAffiliateBase',
+      'amaroMobileMoneyNumber',
+      'amaroMobileMoneyHolder',
+      'amaroWhatsappNumber',
+      'supportWhatsappNumber',
+      'legalCompanyName',
+      'legalRccm',
+      'legalIfu',
+      'legalAddress',
+      'legalContact',
+      'waveNumber',
+      'orangeMoneyNumber',
+      'mtnMoneyNumber',
+      'financialRetentionDuration',
+      'termsVersion',
+      'conventionVersion',
+      'localContributionPercent',
+      'localContributionLabel',
+      'amaroFeePercent',
+      'amaroFeeFixed',
+      'amaroFeeCap',
+      'amaroFeeRounding',
+      'tvaActive',
+      'tvaRate',
+      'vaultKeyConfirmedByOwner',
+      'includeDemoData',
+    ] as const;
+
     if (this.hasServiceAccount) {
       const db = this.getAdminDb();
       const docRef = db.collection('system_settings').doc(code);
@@ -996,40 +1195,12 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
         serviceFeeFlat: merged.serviceFeeFlat,
         taxPercent: merged.taxPercent,
         currency: merged.currency || 'XOF',
-        updatedBy: String(patch.updatedBy || 'admin_owner').replace(/[^a-zA-Z0-9_-]/g, '_'),
+        updatedBy: rawActor,
         updatedAt: FieldValue.serverTimestamp(),
       };
       if (!snap.exists) {
         payload.createdAt = FieldValue.serverTimestamp();
       }
-      const optionalScalarKeys = [
-        'partnerMarginPercent',
-        'directoryMarginPercent',
-        'dossierFeeXof',
-        'amaroMobileMoneyNumber',
-        'amaroMobileMoneyHolder',
-        'amaroWhatsappNumber',
-        'supportWhatsappNumber',
-        'legalCompanyName',
-        'legalRccm',
-        'legalIfu',
-        'legalAddress',
-        'legalContact',
-        'waveNumber',
-        'orangeMoneyNumber',
-        'mtnMoneyNumber',
-        'financialRetentionDuration',
-        'localContributionPercent',
-        'localContributionLabel',
-        'amaroFeePercent',
-        'amaroFeeFixed',
-        'amaroFeeCap',
-        'amaroFeeRounding',
-        'tvaActive',
-        'tvaRate',
-        'vaultKeyConfirmedByOwner',
-        'includeDemoData',
-      ] as const;
       for (const ok of optionalScalarKeys) {
         if ((patch as any)[ok] !== undefined) {
           payload[ok] = (merged as any)[ok];
@@ -1057,46 +1228,35 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       serviceFeeFlat: encodeNumber(merged.serviceFeeFlat),
       taxPercent: encodeNumber(merged.taxPercent),
       currency: encodeString(merged.currency || 'XOF'),
-      updatedBy: encodeString(
-        String(patch.updatedBy || 'admin_owner').replace(/[^a-zA-Z0-9_-]/g, '_')
-      ),
+      updatedBy: encodeString(rawActor),
     };
     const updateTransforms: Array<{ fieldPath: string; setToServerValue: string }> = [
       { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
     ];
     if (!existingRaw) {
-      updateMask.push('countryCode', 'commissionPercent', 'serviceFeeFlat', 'taxPercent', 'currency', 'createdAt');
+      updateMask.push(
+        'countryCode',
+        'commissionPercent',
+        'serviceFeeFlat',
+        'taxPercent',
+        'currency',
+        'createdAt'
+      );
       updateTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    } else {
+      for (const reqKey of [
+        'countryCode',
+        'commissionPercent',
+        'serviceFeeFlat',
+        'taxPercent',
+        'currency',
+      ] as const) {
+        if (existingRaw[reqKey] === undefined || (patch as any)[reqKey] !== undefined) {
+          updateMask.push(reqKey);
+        }
+      }
     }
-    const restOptionalScalarKeys = [
-      'partnerMarginPercent',
-      'directoryMarginPercent',
-      'dossierFeeXof',
-      'amaroMobileMoneyNumber',
-      'amaroMobileMoneyHolder',
-      'amaroWhatsappNumber',
-      'supportWhatsappNumber',
-      'legalCompanyName',
-      'legalRccm',
-      'legalIfu',
-      'legalAddress',
-      'legalContact',
-      'waveNumber',
-      'orangeMoneyNumber',
-      'mtnMoneyNumber',
-      'financialRetentionDuration',
-      'localContributionPercent',
-      'localContributionLabel',
-      'amaroFeePercent',
-      'amaroFeeFixed',
-      'amaroFeeCap',
-      'amaroFeeRounding',
-      'tvaActive',
-      'tvaRate',
-      'vaultKeyConfirmedByOwner',
-      'includeDemoData',
-    ] as const;
-    for (const ok of restOptionalScalarKeys) {
+    for (const ok of optionalScalarKeys) {
       if ((patch as any)[ok] !== undefined) {
         fields[ok] = encodeJsVal((merged as any)[ok]);
         updateMask.push(ok);
@@ -1124,7 +1284,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
               name: `${this.dbResourcePath}/system_settings/${encodeURIComponent(code)}`,
               fields,
             },
-            updateMask: { fieldPaths: updateMask },
+            updateMask: { fieldPaths: Array.from(new Set(updateMask)) },
             updateTransforms,
           },
         ],
@@ -2430,40 +2590,226 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       companyName: string;
       category: ServiceCategory;
       cityId: string;
+      publicZone?: string;
       countryCode: string;
       phone: string;
+      whatsapp?: string;
       contactEmail: string;
       description: string;
+      payoutMethod?: string;
+      payoutNumber?: string;
+      registrationRef?: string;
+      photos?: ProviderApplicationPhoto[];
+      claimDirectoryServiceId?: string;
       conventionVersion: string;
       conventionAcceptedAt: string;
     },
     rawIdToken: string
   ): Promise<{ providerId: string; verificationStatus: 'pending' }> {
+    const cleanPhotos = Array.isArray(params.photos)
+      ? params.photos
+          .map((p) => ({
+            url: String(p?.url || '').trim().slice(0, 600),
+            sourceUrl: String(p?.sourceUrl || '').trim().slice(0, 500),
+          }))
+          .filter((p) => p.url.length >= 8)
+          .slice(0, 8)
+      : [];
+    const whatsapp = String(params.whatsapp || params.phone || '').trim().slice(0, 60);
+    const payoutMethod = String(params.payoutMethod || 'Wave').trim().slice(0, 120);
+    const payoutNumber = String(params.payoutNumber || whatsapp || params.phone || '')
+      .trim()
+      .slice(0, 60);
+    const publicZone = String(params.publicZone || params.cityId || '').trim().slice(0, 160);
+    const registrationRef = String(params.registrationRef || '').trim().slice(0, 120);
+    const notifId = `notif-prov-req-${params.providerId}-${Date.now().toString(36)}`;
+    const notifTitle = 'Nouvelle demande de partenaire AMARO';
+    const notifBody = `${params.companyName} (${params.cityId}) souhaite devenir partenaire. Dossier en attente de validation.`;
+
     if (this.hasServiceAccount) {
       const db = this.getAdminDb();
       const nowTs = FieldValue.serverTimestamp();
-      await db.collection('providers').doc(params.providerId).set({
+      const provRef = db.collection('providers').doc(params.providerId);
+      const existingSnap = await provRef.get();
+      const existingData = existingSnap.exists ? (existingSnap.data() as Record<string, any>) : null;
+      const preservedTrusted = Boolean(existingData?.trustedPartner === true);
+
+      const provPayload: Record<string, any> = {
         ownerId: params.ownerId,
         businessName: params.companyName.slice(0, 140),
         companyName: params.companyName.slice(0, 140),
         category: params.category,
         cityId: params.cityId,
+        publicZone,
         countryCode: params.countryCode,
         phone: params.phone.slice(0, 60),
+        whatsapp,
         contactEmail: params.contactEmail.slice(0, 140),
-        description: params.description.slice(0, 900),
+        description: params.description.slice(0, 1500),
         verificationStatus: 'pending',
+        rejectionReason: '',
+        clarificationNote: '',
+        trustedPartner: preservedTrusted,
+        applicationPhotos: cleanPhotos,
         conventionAccepted: true,
         conventionVersion: params.conventionVersion,
         conventionAcceptedAt: params.conventionAcceptedAt,
         registrationSource: 'promote_services',
+        ...(params.claimDirectoryServiceId
+          ? { claimedDirectoryServiceId: params.claimDirectoryServiceId.slice(0, 120) }
+          : {}),
+        updatedAt: nowTs,
+      };
+      if (!existingSnap.exists) {
+        provPayload.createdAt = nowTs;
+      }
+      await provRef.set(provPayload, { merge: true });
+
+      const privRef = provRef.collection('private').doc('commercial');
+      const existingPriv = await privRef.get();
+      await privRef.set(
+        {
+          ownerId: params.ownerId,
+          contactEmail: params.contactEmail.slice(0, 195),
+          contactPhone: (whatsapp || params.phone).slice(0, 40),
+          payoutChannel: payoutMethod,
+          payoutNumber,
+          registrationRef,
+          ...(existingPriv.exists ? {} : { createdAt: nowTs }),
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      );
+
+      // Notify Admin inbox + any registered admin UIDs
+      await db.collection('notifications').doc(notifId).set({
+        recipientId: 'admin-inbox',
+        senderId: params.ownerId,
+        kind: 'system',
+        title: notifTitle,
+        body: notifBody,
+        read: false,
         createdAt: nowTs,
         updatedAt: nowTs,
       });
+      const adminsSnap = await db.collection('admins').limit(20).get().catch(() => null);
+      if (adminsSnap) {
+        for (const admDoc of adminsSnap.docs) {
+          await db.collection('notifications').doc(`${notifId}-${admDoc.id.slice(0, 16)}`).set({
+            recipientId: admDoc.id,
+            senderId: params.ownerId,
+            kind: 'system',
+            title: notifTitle,
+            body: notifBody,
+            read: false,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+        }
+      }
+
       return { providerId: params.providerId, verificationStatus: 'pending' };
     }
 
+    const existingProv = await this.restGetDoc(`providers/${encodeURIComponent(params.providerId)}`, rawIdToken).catch(() => null);
+    const existingPriv = await this.restGetDoc(`providers/${encodeURIComponent(params.providerId)}/private/commercial`, rawIdToken).catch(() => null);
+
     const docName = `${this.dbResourcePath}/providers/${params.providerId}`;
+    const privDocName = `${docName}/private/commercial`;
+    const notifDocName = `${this.dbResourcePath}/notifications/${notifId}`;
+    const provFields: Record<string, any> = {
+      ownerId: encodeString(params.ownerId),
+      businessName: encodeString(params.companyName.slice(0, 140)),
+      companyName: encodeString(params.companyName.slice(0, 140)),
+      category: encodeString(params.category),
+      cityId: encodeString(params.cityId),
+      publicZone: encodeString(publicZone),
+      countryCode: encodeString(params.countryCode),
+      phone: encodeString(params.phone.slice(0, 60)),
+      whatsapp: encodeString(whatsapp),
+      contactEmail: encodeString(params.contactEmail.slice(0, 140)),
+      description: encodeString(params.description.slice(0, 1500)),
+      verificationStatus: encodeString('pending'),
+      applicationPhotos: {
+        arrayValue: {
+          values: cleanPhotos.map((p) => ({
+            mapValue: {
+              fields: {
+                url: encodeString(p.url),
+                sourceUrl: encodeString(p.sourceUrl),
+              },
+            },
+          })),
+        },
+      },
+      conventionAccepted: { booleanValue: true },
+      conventionVersion: encodeString(params.conventionVersion),
+      conventionAcceptedAt: encodeString(params.conventionAcceptedAt),
+      registrationSource: encodeString('promote_services'),
+      ...(params.claimDirectoryServiceId
+        ? { claimedDirectoryServiceId: encodeString(params.claimDirectoryServiceId.slice(0, 120)) }
+        : {}),
+    };
+    const provTransforms: Array<{ fieldPath: string; setToServerValue: string }> = [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ];
+    if (!existingProv) {
+      provTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    }
+
+    const privTransforms: Array<{ fieldPath: string; setToServerValue: string }> = [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ];
+    if (!existingPriv) {
+      privTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    }
+
+    const writes: any[] = [
+      {
+        update: {
+          name: docName,
+          fields: provFields,
+        },
+        updateMask: { fieldPaths: Object.keys(provFields) },
+        updateTransforms: provTransforms,
+      },
+      {
+        update: {
+          name: privDocName,
+          fields: {
+            ownerId: encodeString(params.ownerId),
+            contactEmail: encodeString(params.contactEmail.slice(0, 195)),
+            contactPhone: encodeString((whatsapp || params.phone).slice(0, 40)),
+            payoutChannel: encodeString(payoutMethod),
+            payoutNumber: encodeString(payoutNumber),
+            registrationRef: encodeString(registrationRef),
+          },
+        },
+        updateMask: {
+          fieldPaths: ['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'payoutNumber', 'registrationRef'],
+        },
+        updateTransforms: privTransforms,
+      },
+      {
+        update: {
+          name: notifDocName,
+          fields: {
+            recipientId: encodeString('admin-inbox'),
+            senderId: encodeString(params.ownerId),
+            kind: encodeString('system'),
+            title: encodeString(notifTitle.slice(0, 155)),
+            body: encodeString(notifBody.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      },
+    ];
+
     const commitRes = await fetch(
       `https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`,
       {
@@ -2472,35 +2818,7 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
           Authorization: `Bearer ${rawIdToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          writes: [
-            {
-              update: {
-                name: docName,
-                fields: {
-                  ownerId: encodeString(params.ownerId),
-                  businessName: encodeString(params.companyName.slice(0, 140)),
-                  companyName: encodeString(params.companyName.slice(0, 140)),
-                  category: encodeString(params.category),
-                  cityId: encodeString(params.cityId),
-                  countryCode: encodeString(params.countryCode),
-                  phone: encodeString(params.phone.slice(0, 60)),
-                  contactEmail: encodeString(params.contactEmail.slice(0, 140)),
-                  description: encodeString(params.description.slice(0, 900)),
-                  verificationStatus: encodeString('pending'),
-                  conventionAccepted: { booleanValue: true },
-                  conventionVersion: encodeString(params.conventionVersion),
-                  conventionAcceptedAt: encodeString(params.conventionAcceptedAt),
-                  registrationSource: encodeString('promote_services'),
-                },
-              },
-              updateTransforms: [
-                { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
-                { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-              ],
-            },
-          ],
-        }),
+        body: JSON.stringify({ writes }),
       }
     );
     if (!commitRes.ok) {
@@ -2999,88 +3317,67 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       .map(({ sortTs: _ignore, ...rest }) => rest);
   }
 
-  async listAllPublishedServices(rawIdToken?: string): Promise<ServerServiceRecord[]> {
+  private mapServiceRecord(id: string, d: Record<string, any>): ServerServiceRecord {
+    return {
+      id,
+      providerId: String(d.providerId || ''),
+      ownerId: String(d.ownerId || 'manual_concierge'),
+      title: String(d.title || ''),
+      category: d.category as ServiceCategory,
+      countryCode: String(d.countryCode || 'CI'),
+      cityId: String(d.cityId || 'abidjan'),
+      address: d.address ? String(d.address) : undefined,
+      description: d.description ? String(d.description) : undefined,
+      priceAmount: Number(d.priceAmount ?? 0),
+      priceKnown:
+        typeof d.priceKnown === 'boolean' ? d.priceKnown : Number(d.priceAmount ?? 0) > 0,
+      currency: (d.currency || 'XOF') as CurrencyCode,
+      durationMinutes: Math.max(0, Math.round(Number(d.durationMinutes ?? 90))),
+      capacity: Math.max(1, Math.round(Number(d.capacity ?? 4))),
+      status: (d.status || 'published') as 'draft' | 'published' | 'archived',
+      dataOrigin: (d.dataOrigin || 'public_directory') as ServerServiceRecord['dataOrigin'],
+      verificationStatus: d.verificationStatus as ServerServiceRecord['verificationStatus'],
+      activationLevel: d.activationLevel as PartnerActivationLevel | undefined,
+      pilotConventionSigned:
+        typeof d.pilotConventionSigned === 'boolean' ? d.pilotConventionSigned : undefined,
+      coveredCities: Array.isArray(d.coveredCities) ? d.coveredCities.map(String) : undefined,
+      blockedDates: Array.isArray(d.blockedDates) ? d.blockedDates.map(String) : undefined,
+      providerResponseHours:
+        typeof d.providerResponseHours === 'number' ? d.providerResponseHours : undefined,
+      sourceName: d.sourceName ? String(d.sourceName) : undefined,
+      sourceUrl: d.sourceUrl ? String(d.sourceUrl) : undefined,
+      verifiedAt: d.verifiedAt ? String(d.verifiedAt) : undefined,
+      websiteUrl: d.websiteUrl ? String(d.websiteUrl) : undefined,
+      contactPhone: d.contactPhone ? String(d.contactPhone) : undefined,
+      customPhotoUrl: d.customPhotoUrl ? String(d.customPhotoUrl) : undefined,
+      photoSource: d.photoSource ? String(d.photoSource) : undefined,
+      photoVerified: typeof d.photoVerified === 'boolean' ? d.photoVerified : undefined,
+      photoIndicator: d.photoIndicator as PhotoIndicatorType | undefined,
+    };
+  }
+
+  async listAllServices(rawIdToken?: string): Promise<ServerServiceRecord[]> {
     const byId = new Map<string, ServerServiceRecord>();
     for (const [id, svc] of Object.entries(OFFICIAL_PUBLIC_AND_DEMO_SERVICES)) {
-      if (svc.status === 'published') byId.set(id, { ...svc });
+      byId.set(id, { ...svc });
     }
     try {
       if (this.hasServiceAccount) {
-        const snap = await this.getAdminDb()
-          .collection('services')
-          .where('status', '==', 'published')
-          .limit(300)
-          .get();
-        for (const doc of snap.docs) {
-          const d = doc.data();
-          byId.set(doc.id, {
-            id: doc.id,
-            providerId: String(d.providerId || ''),
-            ownerId: String(d.ownerId || 'manual_concierge'),
-            title: String(d.title || ''),
-            category: d.category as ServiceCategory,
-            countryCode: String(d.countryCode || 'BJ'),
-            cityId: String(d.cityId || 'cotonou'),
-            priceAmount: Number(d.priceAmount ?? 0),
-            priceKnown:
-              typeof d.priceKnown === 'boolean' ? d.priceKnown : Number(d.priceAmount ?? 0) > 0,
-            currency: (d.currency || 'XOF') as CurrencyCode,
-            durationMinutes: Math.max(15, Number(d.durationMinutes || 90)),
-            capacity: Math.max(1, Number(d.capacity || 4)),
-            status: 'published',
-            dataOrigin: (d.dataOrigin || 'public_directory') as ServerServiceRecord['dataOrigin'],
-            activationLevel: d.activationLevel as PartnerActivationLevel | undefined,
-            pilotConventionSigned: Boolean(d.pilotConventionSigned),
-            coveredCities: Array.isArray(d.coveredCities) ? d.coveredCities.map(String) : undefined,
-            blockedDates: Array.isArray(d.blockedDates) ? d.blockedDates.map(String) : undefined,
-          });
+        const snap = await this.getAdminDb().collection('services').limit(1000).get();
+        for (const docSnap of snap.docs) {
+          byId.set(docSnap.id, this.mapServiceRecord(docSnap.id, docSnap.data()));
         }
       } else {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const headers: Record<string, string> = {};
         if (rawIdToken) headers.Authorization = `Bearer ${rawIdToken}`;
-        const res = await fetch(`${this.baseUrl}:runQuery`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            structuredQuery: {
-              from: [{ collectionId: 'services' }],
-              where: {
-                fieldFilter: {
-                  field: { fieldPath: 'status' },
-                  op: 'EQUAL',
-                  value: { stringValue: 'published' },
-                },
-              },
-              limit: 250,
-            },
-          }),
-        });
+        const res = await fetch(`${this.baseUrl}/services?pageSize=500`, { headers });
         if (res.ok) {
-          const rows: any[] = await res.json();
-          for (const row of rows) {
-            if (!row?.document?.fields) continue;
-            const d = decodeFirestoreFields(row.document.fields);
-            const id = String(row.document.name || '').split('/').pop() || '';
-            if (!id) continue;
-            byId.set(id, {
-              id,
-              providerId: String(d.providerId || ''),
-              ownerId: String(d.ownerId || 'manual_concierge'),
-              title: String(d.title || ''),
-              category: d.category as ServiceCategory,
-              countryCode: String(d.countryCode || 'BJ'),
-              cityId: String(d.cityId || 'cotonou'),
-              priceAmount: Number(d.priceAmount ?? 0),
-              priceKnown:
-                typeof d.priceKnown === 'boolean' ? d.priceKnown : Number(d.priceAmount ?? 0) > 0,
-              currency: (d.currency || 'XOF') as CurrencyCode,
-              durationMinutes: Math.max(15, Number(d.durationMinutes || 90)),
-              capacity: Math.max(1, Number(d.capacity || 4)),
-              status: 'published',
-              dataOrigin: (d.dataOrigin || 'public_directory') as ServerServiceRecord['dataOrigin'],
-              coveredCities: Array.isArray(d.coveredCities) ? d.coveredCities.map(String) : undefined,
-              blockedDates: Array.isArray(d.blockedDates) ? d.blockedDates.map(String) : undefined,
-            });
+          const json: any = await res.json();
+          const docs = Array.isArray(json?.documents) ? json.documents : [];
+          for (const docItem of docs) {
+            const id = String(docItem?.name || '').split('/').pop() || '';
+            if (!id || !docItem?.fields) continue;
+            byId.set(id, this.mapServiceRecord(id, decodeFirestoreFields(docItem.fields)));
           }
         }
       }
@@ -3088,6 +3385,397 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
       // Fallback gracefully to official static directory if query unavailable
     }
     return Array.from(byId.values());
+  }
+
+  async listAllPublishedServices(rawIdToken?: string): Promise<ServerServiceRecord[]> {
+    const all = await this.listAllServices(rawIdToken);
+    return all.filter((s) => s.status === 'published');
+  }
+
+  async adminUpsertService(
+    payload: AdminServiceUpsertInput,
+    _callerUid: string,
+    rawIdToken?: string
+  ): Promise<ServerServiceRecord> {
+    const cleanId = payload.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    if (!cleanId) {
+      throw new Error('Identifiant de prestation invalide.');
+    }
+
+    const staticFallback = OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId];
+    let existingRaw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('services').doc(cleanId).get();
+      existingRaw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else if (rawIdToken) {
+      existingRaw = await this.restGetDoc(`services/${encodeURIComponent(cleanId)}`, rawIdToken);
+    }
+
+    const countryCode = String(
+      payload.countryCode || existingRaw?.countryCode || staticFallback?.countryCode || 'CI'
+    )
+      .toUpperCase()
+      .trim()
+      .slice(0, 4);
+    const cityId = String(
+      payload.cityId || existingRaw?.cityId || staticFallback?.cityId || 'abidjan'
+    )
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 120);
+    const category = (payload.category ||
+      existingRaw?.category ||
+      staticFallback?.category ||
+      'site') as ServiceCategory;
+    const priceKnown =
+      payload.priceKnown !== undefined
+        ? Boolean(payload.priceKnown)
+        : existingRaw?.priceKnown !== undefined
+        ? Boolean(existingRaw.priceKnown)
+        : Number(payload.priceAmount ?? existingRaw?.priceAmount ?? staticFallback?.priceAmount ?? 0) > 0;
+    const priceAmount = priceKnown
+      ? Math.max(0, Number(payload.priceAmount ?? existingRaw?.priceAmount ?? staticFallback?.priceAmount ?? 0))
+      : 0;
+    const title = String(
+      payload.title || existingRaw?.title || staticFallback?.title || 'Prestation AMARO'
+    )
+      .trim()
+      .slice(0, 160);
+    const address = String(
+      payload.address ?? existingRaw?.address ?? staticFallback?.address ?? `${cityId}, ${countryCode}`
+    )
+      .trim()
+      .slice(0, 240);
+    const description = String(
+      payload.description ?? existingRaw?.description ?? `${title} (${cityId})`
+    )
+      .trim()
+      .slice(0, 2000);
+    const providerId = String(
+      payload.providerId || existingRaw?.providerId || staticFallback?.providerId || `dir-${cleanId}`
+    )
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 120);
+    const ownerId = String(
+      payload.ownerId || existingRaw?.ownerId || staticFallback?.ownerId || 'manual_concierge'
+    )
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 120);
+    const currency = (payload.currency ||
+      existingRaw?.currency ||
+      staticFallback?.currency ||
+      'XOF') as CurrencyCode;
+    const durationMinutes = Math.max(
+      0,
+      Math.min(
+        43200,
+        Math.round(
+          Number(
+            payload.durationMinutes ??
+              existingRaw?.durationMinutes ??
+              staticFallback?.durationMinutes ??
+              120
+          )
+        )
+      )
+    );
+    const capacity = Math.max(
+      1,
+      Math.min(
+        1000,
+        Math.round(
+          Number(payload.capacity ?? existingRaw?.capacity ?? staticFallback?.capacity ?? 2)
+        )
+      )
+    );
+    const dataOrigin = (payload.dataOrigin ||
+      existingRaw?.dataOrigin ||
+      staticFallback?.dataOrigin ||
+      'public_directory') as ServerServiceRecord['dataOrigin'];
+    const status = (payload.status ||
+      existingRaw?.status ||
+      staticFallback?.status ||
+      'published') as 'draft' | 'published' | 'archived';
+    const imageKey = String(
+      payload.imageKey ||
+        existingRaw?.imageKey ||
+        (countryCode === 'BJ' ? 'cotonou_coast' : 'abidjan_plateau')
+    )
+      .trim()
+      .slice(0, 100);
+    const imageLicense = String(
+      payload.imageLicense ||
+        existingRaw?.imageLicense ||
+        'Photo à fournir · Aucune utilisation commerciale sans accord'
+    )
+      .trim()
+      .slice(0, 200);
+
+    const optionalFields: Record<string, any> = {};
+    const customPhotoUrl =
+      payload.customPhotoUrl !== undefined
+        ? String(payload.customPhotoUrl).trim().slice(0, 600)
+        : existingRaw?.customPhotoUrl;
+    if (customPhotoUrl !== undefined) optionalFields.customPhotoUrl = customPhotoUrl;
+    const photoIndicator =
+      payload.photoIndicator ??
+      existingRaw?.photoIndicator ??
+      (customPhotoUrl && String(customPhotoUrl).trim().length >= 8 ? 'propre_etablissement' : undefined);
+    if (photoIndicator) optionalFields.photoIndicator = photoIndicator;
+    const verificationStatus =
+      payload.verificationStatus ?? existingRaw?.verificationStatus;
+    if (verificationStatus) optionalFields.verificationStatus = verificationStatus;
+    const photoVerified =
+      payload.photoVerified !== undefined
+        ? Boolean(payload.photoVerified)
+        : existingRaw?.photoVerified;
+    if (typeof photoVerified === 'boolean') optionalFields.photoVerified = photoVerified;
+    const photoSource =
+      payload.photoSource !== undefined
+        ? String(payload.photoSource).trim().slice(0, 500)
+        : existingRaw?.photoSource;
+    if (photoSource !== undefined) optionalFields.photoSource = photoSource;
+    const photoUsageRights =
+      payload.photoUsageRights !== undefined
+        ? String(payload.photoUsageRights).trim().slice(0, 240)
+        : existingRaw?.photoUsageRights;
+    if (photoUsageRights !== undefined) optionalFields.photoUsageRights = photoUsageRights;
+    const sourceName =
+      payload.sourceName !== undefined
+        ? String(payload.sourceName).trim().slice(0, 240)
+        : existingRaw?.sourceName ?? staticFallback?.sourceName;
+    if (sourceName !== undefined) optionalFields.sourceName = sourceName;
+    const sourceUrl =
+      payload.sourceUrl !== undefined
+        ? String(payload.sourceUrl).trim().slice(0, 500)
+        : existingRaw?.sourceUrl ?? staticFallback?.sourceUrl;
+    if (sourceUrl !== undefined) optionalFields.sourceUrl = sourceUrl;
+    const verifiedAt =
+      payload.verifiedAt !== undefined
+        ? String(payload.verifiedAt).trim().slice(0, 40)
+        : existingRaw?.verifiedAt ?? staticFallback?.verifiedAt;
+    if (verifiedAt !== undefined) optionalFields.verifiedAt = verifiedAt;
+    const contactPhone =
+      payload.contactPhone !== undefined
+        ? String(payload.contactPhone).trim().slice(0, 60)
+        : existingRaw?.contactPhone ?? staticFallback?.contactPhone;
+    if (contactPhone !== undefined) optionalFields.contactPhone = contactPhone;
+    const contactWhatsapp =
+      payload.contactWhatsapp !== undefined
+        ? String(payload.contactWhatsapp).trim().slice(0, 60)
+        : existingRaw?.contactWhatsapp;
+    if (contactWhatsapp !== undefined) optionalFields.contactWhatsapp = contactWhatsapp;
+    const contactEmail =
+      payload.contactEmail !== undefined
+        ? String(payload.contactEmail).trim().slice(0, 200)
+        : existingRaw?.contactEmail;
+    if (contactEmail !== undefined) optionalFields.contactEmail = contactEmail;
+    const publishedHours =
+      payload.publishedHours !== undefined
+        ? String(payload.publishedHours).trim().slice(0, 240)
+        : existingRaw?.publishedHours;
+    if (publishedHours !== undefined) optionalFields.publishedHours = publishedHours;
+    const neighborhood =
+      payload.neighborhood !== undefined
+        ? String(payload.neighborhood).trim().slice(0, 140)
+        : existingRaw?.neighborhood;
+    if (neighborhood !== undefined) optionalFields.neighborhood = neighborhood;
+    if (
+      typeof payload.isSacredOrCeremonial === 'boolean' ||
+      typeof existingRaw?.isSacredOrCeremonial === 'boolean'
+    ) {
+      optionalFields.isSacredOrCeremonial =
+        typeof payload.isSacredOrCeremonial === 'boolean'
+          ? payload.isSacredOrCeremonial
+          : Boolean(existingRaw?.isSacredOrCeremonial);
+    }
+    const sacredNotice =
+      payload.sacredNotice !== undefined
+        ? String(payload.sacredNotice).trim().slice(0, 600)
+        : existingRaw?.sacredNotice;
+    if (sacredNotice !== undefined) optionalFields.sacredNotice = sacredNotice;
+    const respHours =
+      payload.providerResponseHours ?? existingRaw?.providerResponseHours;
+    if (typeof respHours === 'number' && respHours >= 1 && respHours <= 168) {
+      optionalFields.providerResponseHours = Math.round(respHours);
+    }
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const ref = db.collection('services').doc(cleanId);
+      const docPayload: Record<string, any> = {
+        providerId,
+        ownerId,
+        title,
+        category,
+        countryCode,
+        cityId,
+        address,
+        description,
+        priceAmount,
+        priceKnown,
+        currency,
+        durationMinutes,
+        capacity,
+        dataOrigin,
+        status,
+        imageKey,
+        imageLicense,
+        ...optionalFields,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (!existingRaw) {
+        docPayload.createdAt = FieldValue.serverTimestamp();
+      }
+      await ref.set(docPayload, { merge: true });
+      return this.mapServiceRecord(cleanId, docPayload);
+    }
+
+    if (!rawIdToken) {
+      throw new Error('Jeton administrateur requis pour modifier le catalogue.');
+    }
+
+    const fields: Record<string, any> = {
+      providerId: encodeString(providerId),
+      ownerId: encodeString(ownerId),
+      title: encodeString(title),
+      category: encodeString(category),
+      countryCode: encodeString(countryCode),
+      cityId: encodeString(cityId),
+      address: encodeString(address),
+      description: encodeString(description),
+      priceAmount: encodeNumber(priceAmount),
+      priceKnown: { booleanValue: priceKnown },
+      currency: encodeString(String(currency)),
+      durationMinutes: encodeInt(durationMinutes),
+      capacity: encodeInt(capacity),
+      dataOrigin: encodeString(dataOrigin),
+      status: encodeString(status),
+      imageKey: encodeString(imageKey),
+      imageLicense: encodeString(imageLicense),
+    };
+    const updateMask: string[] = [
+      'providerId',
+      'ownerId',
+      'title',
+      'category',
+      'countryCode',
+      'cityId',
+      'address',
+      'description',
+      'priceAmount',
+      'priceKnown',
+      'currency',
+      'durationMinutes',
+      'capacity',
+      'dataOrigin',
+      'status',
+      'imageKey',
+      'imageLicense',
+      'updatedAt',
+    ];
+    for (const [k, v] of Object.entries(optionalFields)) {
+      if (v === undefined) continue;
+      if (typeof v === 'boolean') fields[k] = { booleanValue: v };
+      else if (typeof v === 'number') {
+        fields[k] = k === 'providerResponseHours' ? encodeInt(v) : encodeNumber(v);
+      } else {
+        fields[k] = encodeString(String(v));
+      }
+      updateMask.push(k);
+    }
+
+    const updateTransforms: Array<{ fieldPath: string; setToServerValue: string }> = [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ];
+    if (!existingRaw) {
+      updateMask.push('createdAt');
+      updateTransforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    }
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${this.dbResourcePath}/services/${encodeURIComponent(cleanId)}`,
+              fields,
+            },
+            updateMask: { fieldPaths: Array.from(new Set(updateMask)) },
+            updateTransforms,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Enregistrement prestation catalogue refusé (${res.status}).`);
+    }
+
+    return this.mapServiceRecord(cleanId, {
+      providerId,
+      ownerId,
+      title,
+      category,
+      countryCode,
+      cityId,
+      address,
+      description,
+      priceAmount,
+      priceKnown,
+      currency,
+      durationMinutes,
+      capacity,
+      dataOrigin,
+      status,
+      ...optionalFields,
+    });
+  }
+
+  async adminDeleteService(
+    serviceId: string,
+    rawIdToken?: string
+  ): Promise<{ deleted: boolean; archivedStatic?: boolean }> {
+    const cleanId = serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    if (!cleanId) {
+      throw new Error('Identifiant de prestation invalide.');
+    }
+
+    if (OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId]) {
+      await this.adminUpsertService(
+        { id: cleanId, status: 'archived' },
+        'admin',
+        rawIdToken
+      );
+      return { deleted: true, archivedStatic: true };
+    }
+
+    if (this.hasServiceAccount) {
+      await this.getAdminDb().collection('services').doc(cleanId).delete();
+      return { deleted: true, archivedStatic: false };
+    }
+
+    if (!rawIdToken) {
+      throw new Error('Jeton administrateur requis pour supprimer cette fiche.');
+    }
+
+    const res = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [{ delete: `${this.dbResourcePath}/services/${encodeURIComponent(cleanId)}` }],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Suppression de la fiche refusée (${res.status}).`);
+    }
+    return { deleted: true, archivedStatic: false };
   }
 
   async getAccountGovernance(
@@ -4111,6 +4799,446 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     };
   }
 
+  async deleteJourneyFolderCascade(
+    params: {
+      folderId: string;
+      callerUid: string;
+      isAdmin: boolean;
+      retentionPolicyLabel: string;
+    },
+    rawIdToken: string
+  ) {
+    const cleanFolderId = String(params.folderId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(cleanFolderId)) {
+      throw new ConflictError('Identifiant de dossier de voyage invalide.');
+    }
+
+    const folder = await this.getJourneyFolder(cleanFolderId, rawIdToken);
+    if (!folder) {
+      throw new ConflictError('Dossier de voyage introuvable.');
+    }
+    if (!params.isAdmin && folder.ownerId !== params.callerUid) {
+      throw new Error('Suppression refusée (403) : ce dossier appartient à un autre utilisateur.');
+    }
+
+    const nowIso = new Date().toISOString();
+    let deletedReservationsCount = 0;
+    let deletedItemsCount = 0;
+    let deletedIdentityVaultCount = 0;
+    let releasedStockUnitsCount = 0;
+    let archivedDossierFeeTrace = false;
+
+    const commitRestWritesChunked = async (writes: any[]) => {
+      for (let i = 0; i < writes.length; i += 400) {
+        const chunk = writes.slice(i, i + 400);
+        if (chunk.length === 0) continue;
+        const r = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${rawIdToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ writes: chunk }),
+        });
+        if (!r.ok) {
+          throw new Error(`Suppression du dossier refusée (${r.status}).`);
+        }
+      }
+    };
+
+    const folderReservations: Array<{
+      id: string;
+      status: ReservationStatus;
+      paymentStatus: PaymentStatus;
+      serviceTitle: string;
+      scheduledDate: string;
+      scheduledTime: string;
+      providerOwnerId: string;
+      allocatedStockId?: string;
+      allocatedUnits?: number;
+    }> = [];
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const resSnap = await db
+        .collection('reservations')
+        .where('folderId', '==', cleanFolderId)
+        .get();
+      for (const rDoc of resSnap.docs) {
+        const d = rDoc.data();
+        folderReservations.push({
+          id: rDoc.id,
+          status: (d.status || 'pending_provider') as ReservationStatus,
+          paymentStatus: (d.paymentStatus || 'unpaid') as PaymentStatus,
+          serviceTitle: String(d.serviceTitle || ''),
+          scheduledDate: String(d.scheduledDate || ''),
+          scheduledTime: String(d.scheduledTime || '09:00'),
+          providerOwnerId: String(d.providerOwnerId || 'manual_concierge'),
+          allocatedStockId: d.allocatedStockId ? String(d.allocatedStockId) : undefined,
+          allocatedUnits:
+            d.allocatedUnits !== undefined ? Number(d.allocatedUnits) : undefined,
+        });
+      }
+    } else {
+      const resQuery = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'reservations' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'clientId' },
+                op: 'EQUAL',
+                value: { stringValue: folder.ownerId },
+              },
+            },
+          },
+        }),
+      });
+      if (!resQuery.ok) {
+        throw new Error(`Lecture des réservations du dossier refusée (${resQuery.status}).`);
+      }
+      const rows: any[] = await resQuery.json();
+      for (const row of rows) {
+        if (!row?.document?.fields) continue;
+        const d = decodeFirestoreFields(row.document.fields);
+        if (String(d.folderId || '') !== cleanFolderId) continue;
+        const id = String(row.document.name || '').split('/').pop() || '';
+        if (!id) continue;
+        folderReservations.push({
+          id,
+          status: (d.status || 'pending_provider') as ReservationStatus,
+          paymentStatus: (d.paymentStatus || 'unpaid') as PaymentStatus,
+          serviceTitle: String(d.serviceTitle || ''),
+          scheduledDate: String(d.scheduledDate || ''),
+          scheduledTime: String(d.scheduledTime || '09:00'),
+          providerOwnerId: String(d.providerOwnerId || 'manual_concierge'),
+          allocatedStockId: d.allocatedStockId ? String(d.allocatedStockId) : undefined,
+          allocatedUnits:
+            d.allocatedUnits !== undefined ? Number(d.allocatedUnits) : undefined,
+        });
+      }
+    }
+
+    // Integrity Guard 1: never erase active/pending financial transactions without resolution
+    if (!params.isAdmin) {
+      const blockedRes = folderReservations.find(
+        (r) =>
+          r.paymentStatus === 'initiated' ||
+          r.paymentStatus === 'succeeded' ||
+          r.paymentStatus === 'refunded'
+      );
+      if (blockedRes) {
+        throw new ConflictError(
+          `Suppression bloquée pour protéger vos paiements : la réservation « ${blockedRes.serviceTitle} » a un paiement en cours de vérification, payé ou remboursé. Annulez ou contactez l’assistance d’abord.`
+        );
+      }
+      if (folder.dossierFeeStatus === 'in_verification') {
+        throw new ConflictError(
+          'Suppression bloquée pendant la vérification administrative de vos frais de dossier. Veuillez patienter ou contacter l’assistance.'
+        );
+      }
+    }
+
+    // Integrity Guard 2: release pilot_stocks & cancel active partner referrals / notify partners BEFORE deleting reservations
+    for (const r of folderReservations) {
+      const units = Number(r.allocatedUnits || 0);
+      const needsTransitionRelease =
+        Boolean(r.allocatedStockId && units > 0 && !['cancelled', 'rejected'].includes(r.status)) ||
+        (!['cancelled', 'rejected', 'refunded'].includes(r.status) &&
+          r.providerOwnerId !== 'manual_concierge');
+      if (needsTransitionRelease) {
+        await this.transitionReservation(
+          {
+            reservationId: r.id,
+            status: 'cancelled',
+            paymentStatus: r.paymentStatus,
+            scheduledDate: r.scheduledDate,
+            scheduledTime: r.scheduledTime,
+            alternativeProposal: 'Dossier de voyage supprimé par le voyageur',
+            cancelAffiliateReferral: true,
+            releaseStock:
+              r.allocatedStockId && units > 0
+                ? { stockId: r.allocatedStockId, units }
+                : null,
+            notification:
+              r.providerOwnerId && r.providerOwnerId !== 'manual_concierge'
+                ? {
+                    id: `notif-fdel-${r.id.slice(-14)}-${Date.now().toString(36)}`,
+                    recipientId: r.providerOwnerId,
+                    senderId: params.callerUid,
+                    kind: 'reservation',
+                    title: 'Dossier supprimé par le voyageur',
+                    body: `La demande pour « ${r.serviceTitle} » (${r.scheduledDate}) a été annulée suite à la suppression du dossier par le voyageur.`,
+                  }
+                : null,
+          },
+          rawIdToken
+        );
+        if (r.allocatedStockId && units > 0) {
+          releasedStockUnitsCount += units;
+        }
+      }
+    }
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const folderRef = db.collection('journey_folders').doc(cleanFolderId);
+      const batch = db.batch();
+
+      const itemsSnap = await folderRef.collection('items').get();
+      deletedItemsCount = itemsSnap.size;
+      for (const docSnap of itemsSnap.docs) batch.delete(docSnap.ref);
+
+      const expensesSnap = await folderRef.collection('expenses').get();
+      for (const docSnap of expensesSnap.docs) batch.delete(docSnap.ref);
+
+      const journalSnap = await folderRef.collection('journal').get();
+      for (const docSnap of journalSnap.docs) batch.delete(docSnap.ref);
+
+      batch.delete(folderRef.collection('private').doc('intention'));
+
+      const sharesSnap = await db
+        .collection('folder_shares')
+        .where('folderId', '==', cleanFolderId)
+        .get();
+      for (const sDoc of sharesSnap.docs) batch.delete(sDoc.ref);
+
+      for (const r of folderReservations) {
+        deletedReservationsCount += 1;
+        const idRef = db.collection('identity_verifications').doc(r.id);
+        const idSnap = await idRef.get();
+        if (idSnap.exists) {
+          deletedIdentityVaultCount += 1;
+          batch.delete(idRef.collection('private_vault').doc('files'));
+          batch.delete(idRef);
+        }
+        batch.delete(db.collection('reservations').doc(r.id));
+      }
+
+      const cleanDossierTxRef = String(folder.dossierTxRef || '').trim();
+      if (cleanDossierTxRef.length >= 3) {
+        const archRef = db.collection('financial_archives').doc(`arch-folder-${cleanFolderId}`);
+        const archSnap = await archRef.get();
+        if (!archSnap.exists) {
+          archivedDossierFeeTrace = true;
+          batch.set(archRef, {
+            reservationOrFolderRef: cleanFolderId,
+            transactionRef: cleanDossierTxRef,
+            amount: Number(folder.dossierFeeAmountXof || 0),
+            currency: (folder.currency || 'XOF') as CurrencyCode,
+            recordedDate: String(folder.dossierDeclaredAt || nowIso.slice(0, 10)),
+            recordKind: 'dossier_fee',
+            retentionPolicyLabel: params.retentionPolicyLabel,
+            anonymizedAtIso: nowIso,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      batch.set(db.collection('audit_logs').doc(`audit-fdel-${Date.now()}`), {
+        actorId: params.callerUid,
+        action: 'CLIENT_FOLDER_DELETED_COMPLIANT',
+        targetType: 'journey_folder',
+        targetId: cleanFolderId,
+        summary: `Dossier supprimé par le voyageur (${deletedItemsCount} étape(s), ${deletedReservationsCount} réservation(s) nettoyée(s)).`,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      batch.delete(folderRef);
+      await batch.commit();
+
+      return {
+        deletedFolderId: cleanFolderId,
+        deletedFolderTitle: folder.title || 'Dossier de voyage',
+        deletedReservationsCount,
+        deletedItemsCount,
+        deletedIdentityVaultCount,
+        releasedStockUnitsCount,
+        archivedDossierFeeTrace,
+      };
+    }
+
+    // REST path (evaluates Firestore rules strictly with caller's rawIdToken)
+    const restHeaders = {
+      Authorization: `Bearer ${rawIdToken}`,
+      'Content-Type': 'application/json',
+    };
+
+    const querySubcollectionIds = async (subName: string): Promise<string[]> => {
+      const qr = await fetch(
+        `${this.baseUrl}/journey_folders/${encodeURIComponent(cleanFolderId)}:${'runQuery'}`,
+        {
+          method: 'POST',
+          headers: restHeaders,
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: subName }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: 'ownerId' },
+                  op: 'EQUAL',
+                  value: { stringValue: folder.ownerId },
+                },
+              },
+            },
+          }),
+        }
+      );
+      if (!qr.ok) return [];
+      const rows: any[] = await qr.json();
+      return rows
+        .filter((row) => row?.document?.name)
+        .map((row) => String(row.document.name));
+    };
+
+    const [itemDocNames, expenseDocNames, journalDocNames] = await Promise.all([
+      querySubcollectionIds('items'),
+      querySubcollectionIds('expenses'),
+      querySubcollectionIds('journal'),
+    ]);
+    deletedItemsCount = itemDocNames.length;
+
+    const childDeleteWrites: any[] = [];
+    for (const n of [...itemDocNames, ...expenseDocNames, ...journalDocNames]) {
+      childDeleteWrites.push({ delete: n });
+    }
+
+    const intentionDoc = await this.restGetDoc(
+      `journey_folders/${encodeURIComponent(cleanFolderId)}/private/intention`,
+      rawIdToken
+    );
+    if (intentionDoc) {
+      childDeleteWrites.push({
+        delete: `${this.dbResourcePath}/journey_folders/${encodeURIComponent(
+          cleanFolderId
+        )}/private/intention`,
+      });
+    }
+
+    const sharesQuery = await fetch(`${this.baseUrl}:runQuery`, {
+      method: 'POST',
+      headers: restHeaders,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'folder_shares' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'ownerId' },
+              op: 'EQUAL',
+              value: { stringValue: folder.ownerId },
+            },
+          },
+        },
+      }),
+    });
+    if (sharesQuery.ok) {
+      const shareRows: any[] = await sharesQuery.json();
+      for (const row of shareRows) {
+        if (!row?.document?.fields || !row?.document?.name) continue;
+        const sf = decodeFirestoreFields(row.document.fields);
+        if (String(sf.folderId || '') === cleanFolderId) {
+          childDeleteWrites.push({ delete: String(row.document.name) });
+        }
+      }
+    }
+
+    for (const r of folderReservations) {
+      deletedReservationsCount += 1;
+      const idMeta = await this.restGetDoc(
+        `identity_verifications/${encodeURIComponent(r.id)}`,
+        rawIdToken
+      ).catch(() => null);
+      if (idMeta) {
+        deletedIdentityVaultCount += 1;
+        childDeleteWrites.push({
+          delete: `${this.dbResourcePath}/identity_verifications/${encodeURIComponent(
+            r.id
+          )}/private_vault/files`,
+        });
+        childDeleteWrites.push({
+          delete: `${this.dbResourcePath}/identity_verifications/${encodeURIComponent(r.id)}`,
+        });
+      }
+      childDeleteWrites.push({
+        delete: `${this.dbResourcePath}/reservations/${encodeURIComponent(r.id)}`,
+      });
+    }
+
+    // Delete all sub-resources and reservations first while journey_folders/{id} still exists for parent get() rules
+    await commitRestWritesChunked(childDeleteWrites);
+
+    // Final commit: optional financial archive + audit log + parent folder delete
+    const finalWrites: any[] = [];
+    const cleanDossierTxRefRest = String(folder.dossierTxRef || '').trim();
+    if (cleanDossierTxRefRest.length >= 3) {
+      const existingArch = await this.restGetDoc(
+        `financial_archives/arch-folder-${encodeURIComponent(cleanFolderId)}`,
+        rawIdToken
+      ).catch(() => null);
+      if (!existingArch) {
+        archivedDossierFeeTrace = true;
+        finalWrites.push({
+          update: {
+            name: `${this.dbResourcePath}/financial_archives/arch-folder-${cleanFolderId}`,
+            fields: {
+              reservationOrFolderRef: encodeString(cleanFolderId),
+              transactionRef: encodeString(cleanDossierTxRefRest),
+              amount: encodeNumber(Number(folder.dossierFeeAmountXof || 0)),
+              currency: encodeString(folder.currency || 'XOF'),
+              recordedDate: encodeString(
+                String(folder.dossierDeclaredAt || nowIso.slice(0, 10))
+              ),
+              recordKind: encodeString('dossier_fee'),
+              retentionPolicyLabel: encodeString(params.retentionPolicyLabel),
+              anonymizedAtIso: encodeString(nowIso),
+            },
+          },
+          currentDocument: { exists: false },
+          updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        });
+      }
+    }
+
+    const auditId = `audit-fdel-${Date.now()}`;
+    finalWrites.push({
+      update: {
+        name: `${this.dbResourcePath}/audit_logs/${auditId}`,
+        fields: {
+          actorId: encodeString(params.callerUid),
+          action: encodeString('CLIENT_FOLDER_DELETED_COMPLIANT'),
+          targetType: encodeString('journey_folder'),
+          targetId: encodeString(cleanFolderId),
+          summary: encodeString(
+            `Dossier supprimé par le voyageur (${deletedItemsCount} étape(s), ${deletedReservationsCount} réservation(s) nettoyée(s)).`
+          ),
+        },
+      },
+      currentDocument: { exists: false },
+      updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+    });
+
+    finalWrites.push({
+      delete: `${this.dbResourcePath}/journey_folders/${encodeURIComponent(cleanFolderId)}`,
+    });
+
+    await commitRestWritesChunked(finalWrites);
+
+    return {
+      deletedFolderId: cleanFolderId,
+      deletedFolderTitle: folder.title || 'Dossier de voyage',
+      deletedReservationsCount,
+      deletedItemsCount,
+      deletedIdentityVaultCount,
+      releasedStockUnitsCount,
+      archivedDossierFeeTrace,
+    };
+  }
+
   // ===========================================================================
   // PARTIE B & PARTIE A — OFFRES PAR PRESTATAIRE & RECENSEMENT WEB BÉNIN
   // ===========================================================================
@@ -4855,6 +5983,738 @@ export class CloudFirestoreServerStore implements AmaroServerStore {
     };
     await this.upsertCensusListing(updatedCensus, rawIdToken);
     return { serviceId: targetServiceId, offersSaved: saved };
+  }
+
+  // ===========================================================================
+  // PARCOURS PRESTATAIRE : DEMANDE, VALIDATION ADMIN, PUBLICATION CLOISONNÉE
+  // ===========================================================================
+  private mapProviderProfile(id: string, raw: Record<string, any>): ProviderProfileDoc & { blockedDates?: string[]; conventionAccepted?: boolean } {
+    const photosRaw = Array.isArray(raw.applicationPhotos) ? raw.applicationPhotos : [];
+    const applicationPhotos: ProviderApplicationPhoto[] = photosRaw
+      .filter((p): p is Record<string, any> => Boolean(p && typeof p === 'object'))
+      .map((p) => ({
+        url: String(p.url || '').trim(),
+        sourceUrl: String(p.sourceUrl || '').trim(),
+      }))
+      .filter((p) => p.url.length > 0);
+    const vStatus = String(raw.verificationStatus || 'pending');
+    return {
+      id,
+      ownerId: String(raw.ownerId || ''),
+      businessName: String(raw.businessName || raw.companyName || ''),
+      category: (raw.category || 'accommodation') as ServiceCategory,
+      countryCode: String(raw.countryCode || 'CI'),
+      cityId: String(raw.cityId || 'abidjan'),
+      ...(raw.publicZone ? { publicZone: String(raw.publicZone) } : {}),
+      description: String(raw.description || ''),
+      ...(raw.whatsapp ? { whatsapp: String(raw.whatsapp) } : {}),
+      verificationStatus: (['pending', 'clarification_requested', 'verified', 'rejected'].includes(vStatus)
+        ? vStatus
+        : 'pending') as ProviderProfileDoc['verificationStatus'],
+      ...(raw.rejectionReason ? { rejectionReason: String(raw.rejectionReason) } : {}),
+      ...(raw.clarificationNote ? { clarificationNote: String(raw.clarificationNote) } : {}),
+      trustedPartner: Boolean(raw.trustedPartner),
+      ...(applicationPhotos.length > 0 ? { applicationPhotos } : {}),
+      ...(raw.phone || raw.businessPhone ? { businessPhone: String(raw.phone || raw.businessPhone) } : {}),
+      ...(raw.contactEmail || raw.businessEmail ? { businessEmail: String(raw.contactEmail || raw.businessEmail) } : {}),
+      ...(raw.conventionVersion || raw.conventionVersionAccepted
+        ? { conventionVersionAccepted: String(raw.conventionVersion || raw.conventionVersionAccepted) }
+        : {}),
+      ...(raw.conventionAcceptedAt ? { conventionAcceptedAt: String(raw.conventionAcceptedAt) } : {}),
+      ...(raw.reviewedAt ? { reviewedAt: String(raw.reviewedAt) } : {}),
+      ...(raw.reviewedBy ? { reviewedBy: String(raw.reviewedBy) } : {}),
+      ...(raw.linkedDirectoryServiceId || raw.claimedDirectoryServiceId
+        ? { linkedDirectoryServiceId: String(raw.linkedDirectoryServiceId || raw.claimedDirectoryServiceId) }
+        : {}),
+      ...(typeof raw.agreedCommissionPercent === 'number' ? { agreedCommissionPercent: raw.agreedCommissionPercent } : {}),
+      ...(Array.isArray(raw.blockedDates) ? { blockedDates: raw.blockedDates.map(String) } : {}),
+      ...(typeof raw.conventionAccepted === 'boolean' ? { conventionAccepted: raw.conventionAccepted } : {}),
+    };
+  }
+
+  private mapProviderPrivate(raw: Record<string, any> | null): ProviderCommercialPrivateRecord | null {
+    if (!raw) return null;
+    return {
+      ownerId: String(raw.ownerId || ''),
+      contactEmail: String(raw.contactEmail || ''),
+      contactPhone: String(raw.contactPhone || ''),
+      payoutChannel: String(raw.payoutChannel || ''),
+      ...(raw.payoutNumber ? { payoutNumber: String(raw.payoutNumber) } : {}),
+      registrationRef: String(raw.registrationRef || ''),
+    };
+  }
+
+  async getProviderWithPrivate(
+    providerId: string,
+    rawIdToken?: string
+  ): Promise<ProviderWithPrivateBundle | null> {
+    if (!providerId) return null;
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const snap = await db.collection('providers').doc(providerId).get();
+      if (!snap.exists) return null;
+      const privSnap = await db.collection('providers').doc(providerId).collection('private').doc('commercial').get().catch(() => null);
+      return {
+        provider: this.mapProviderProfile(snap.id, snap.data() || {}),
+        privateCommercial: privSnap && privSnap.exists ? this.mapProviderPrivate(privSnap.data() || null) : null,
+      };
+    }
+    const raw = await this.restGetDoc(`providers/${encodeURIComponent(providerId)}`, rawIdToken).catch(() => null);
+    if (!raw) return null;
+    const privRaw = await this.restGetDoc(`providers/${encodeURIComponent(providerId)}/private/commercial`, rawIdToken).catch(() => null);
+    return {
+      provider: this.mapProviderProfile(providerId, raw),
+      privateCommercial: this.mapProviderPrivate(privRaw),
+    };
+  }
+
+  async listAllProvidersWithPrivate(rawIdToken?: string): Promise<ProviderWithPrivateBundle[]> {
+    const out: ProviderWithPrivateBundle[] = [];
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const snap = await db.collection('providers').limit(300).get();
+      for (const d of snap.docs) {
+        const privSnap = await d.ref.collection('private').doc('commercial').get().catch(() => null);
+        out.push({
+          provider: this.mapProviderProfile(d.id, d.data() || {}),
+          privateCommercial: privSnap && privSnap.exists ? this.mapProviderPrivate(privSnap.data() || null) : null,
+        });
+      }
+      return out;
+    }
+    if (!rawIdToken) return out;
+    const res = await fetch(`${this.baseUrl}/providers?pageSize=200`, {
+      headers: { Authorization: `Bearer ${rawIdToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`Lecture des demandes partenaires refusée (${res.status}).`);
+    }
+    const json: any = await res.json();
+    const docs = Array.isArray(json?.documents) ? json.documents : [];
+    for (const docItem of docs) {
+      const id = String(docItem?.name || '').split('/').pop() || '';
+      if (!id || !docItem?.fields) continue;
+      const fields = decodeFirestoreFields(docItem.fields);
+      const privRaw = await this.restGetDoc(`providers/${encodeURIComponent(id)}/private/commercial`, rawIdToken).catch(() => null);
+      out.push({
+        provider: this.mapProviderProfile(id, fields),
+        privateCommercial: this.mapProviderPrivate(privRaw),
+      });
+    }
+    return out;
+  }
+
+  async adminReviewProvider(
+    params: {
+      providerId: string;
+      action: 'accept' | 'reject' | 'request_clarification' | 'set_trust';
+      reason?: string;
+      note?: string;
+      trustedPartner?: boolean;
+      adminUid: string;
+    },
+    rawIdToken?: string
+  ): Promise<ProviderWithPrivateBundle> {
+    const existingBundle = await this.getProviderWithPrivate(params.providerId, rawIdToken);
+    if (!existingBundle) {
+      throw new Error('Dossier prestataire introuvable.');
+    }
+    const prov = existingBundle.provider;
+    const nowIso = new Date().toISOString();
+    const nextPatch: Record<string, any> = {
+      reviewedAt: nowIso,
+      reviewedBy: params.adminUid,
+    };
+    let notifTitle = '';
+    let notifBody = '';
+
+    if (params.action === 'accept') {
+      nextPatch.verificationStatus = 'verified';
+      nextPatch.rejectionReason = '';
+      nextPatch.clarificationNote = '';
+      if (typeof params.trustedPartner === 'boolean') {
+        nextPatch.trustedPartner = params.trustedPartner;
+      }
+      notifTitle = 'Demande partenaire acceptée';
+      notifBody = `Votre demande pour « ${prov.businessName} » a été acceptée. Vous pouvez maintenant ajouter vos prestations dans l’onglet Pro.`;
+    } else if (params.action === 'reject') {
+      const reason = String(params.reason || '').trim().slice(0, 600);
+      nextPatch.verificationStatus = 'rejected';
+      nextPatch.rejectionReason = reason;
+      nextPatch.clarificationNote = '';
+      nextPatch.trustedPartner = false;
+      notifTitle = 'Demande partenaire refusée';
+      notifBody = `Votre demande pour « ${prov.businessName} » n’a pas été retenue : ${reason}`;
+    } else if (params.action === 'request_clarification') {
+      const note = String(params.note || '').trim().slice(0, 600);
+      nextPatch.verificationStatus = 'clarification_requested';
+      nextPatch.clarificationNote = note;
+      notifTitle = 'Précisions demandées sur votre demande partenaire';
+      notifBody = `L’administrateur demande des précisions pour « ${prov.businessName} » : ${note}`;
+    } else {
+      nextPatch.trustedPartner = Boolean(params.trustedPartner);
+      notifTitle = nextPatch.trustedPartner
+        ? 'Statut Partenaire de confiance activé'
+        : 'Statut Partenaire de confiance désactivé';
+      notifBody = nextPatch.trustedPartner
+        ? `Votre compte « ${prov.businessName} » dispose désormais de la publication directe sous réserve du respect des règles photo.`
+        : `Les nouvelles prestations de « ${prov.businessName} » repassent en validation administrateur avant publication.`;
+    }
+
+    const notifId = `notif-prov-rev-${params.providerId}-${Date.now().toString(36)}`;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const nowTs = FieldValue.serverTimestamp();
+      await db.collection('providers').doc(params.providerId).set(
+        {
+          ...nextPatch,
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      );
+
+      if (params.action === 'accept' || params.action === 'reject') {
+        const userRef = db.collection('users').doc(prov.ownerId);
+        const userSnap = await userRef.get().catch(() => null);
+        if (userSnap && userSnap.exists) {
+          await userRef.set(
+            {
+              accountType: params.action === 'accept' ? 'provider' : 'traveler',
+              updatedAt: nowTs,
+            },
+            { merge: true }
+          );
+        }
+      }
+
+      if (params.action === 'reject') {
+        const srvSnap = await db.collection('services').where('providerId', '==', params.providerId).get();
+        for (const sDoc of srvSnap.docs) {
+          await sDoc.ref.set(
+            {
+              status: 'draft',
+              dataOrigin: 'pending_verification',
+              verificationStatus: 'unverified',
+              updatedAt: nowTs,
+            },
+            { merge: true }
+          );
+        }
+      }
+
+      if (prov.ownerId) {
+        await db.collection('notifications').doc(notifId).set({
+          recipientId: prov.ownerId,
+          senderId: params.adminUid,
+          kind: 'system',
+          title: notifTitle.slice(0, 155),
+          body: notifBody.slice(0, 780),
+          read: false,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+      }
+
+      return (await this.getProviderWithPrivate(params.providerId, rawIdToken))!;
+    }
+
+    if (!rawIdToken) {
+      throw new Error('Jeton administrateur requis pour valider un partenaire.');
+    }
+
+    const provFields: Record<string, any> = {};
+    const updateMask: string[] = [];
+    for (const [k, v] of Object.entries(nextPatch)) {
+      if (typeof v === 'boolean') provFields[k] = { booleanValue: v };
+      else provFields[k] = encodeString(String(v));
+      updateMask.push(k);
+    }
+
+    const writes: any[] = [
+      {
+        update: {
+          name: `${this.dbResourcePath}/providers/${encodeURIComponent(params.providerId)}`,
+          fields: provFields,
+        },
+        updateMask: { fieldPaths: updateMask },
+        updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+      },
+    ];
+
+    if (params.action === 'accept' || params.action === 'reject') {
+      const userExists = await this.restGetDoc(`users/${encodeURIComponent(prov.ownerId)}`, rawIdToken).catch(() => null);
+      if (userExists) {
+        writes.push({
+          update: {
+            name: `${this.dbResourcePath}/users/${encodeURIComponent(prov.ownerId)}`,
+            fields: {
+              accountType: encodeString(params.action === 'accept' ? 'provider' : 'traveler'),
+            },
+          },
+          updateMask: { fieldPaths: ['accountType'] },
+          updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        });
+      }
+    }
+
+    if (prov.ownerId) {
+      writes.push({
+        update: {
+          name: `${this.dbResourcePath}/notifications/${notifId}`,
+          fields: {
+            recipientId: encodeString(prov.ownerId),
+            senderId: encodeString(params.adminUid),
+            kind: encodeString('system'),
+            title: encodeString(notifTitle.slice(0, 155)),
+            body: encodeString(notifBody.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      });
+    }
+
+    const commitRes = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ writes }),
+    });
+    if (!commitRes.ok) {
+      throw new Error(`Décision partenaire refusée (${commitRes.status}).`);
+    }
+
+    if (params.action === 'reject') {
+      const allSvcs = await this.listAllServices(rawIdToken);
+      for (const s of allSvcs.filter((srv) => srv.providerId === params.providerId)) {
+        await this.adminUpsertService(
+          {
+            id: s.id,
+            status: 'draft',
+            dataOrigin: 'pending_verification',
+            verificationStatus: 'unverified',
+          },
+          params.adminUid,
+          rawIdToken
+        ).catch(() => {});
+      }
+    }
+
+    return (await this.getProviderWithPrivate(params.providerId, rawIdToken))!;
+  }
+
+  async providerUpsertOwnService(
+    payload: ProviderServiceUpsertInput,
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<{ service: ServerServiceRecord; requiresAdminValidation: boolean }> {
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    const bundle = await this.getProviderWithPrivate(providerId, rawIdToken);
+    if (!bundle || bundle.provider.ownerId !== callerUid) {
+      throw new ForbiddenError('Aucun profil partenaire trouvé pour ce compte (403).');
+    }
+    if (bundle.provider.verificationStatus !== 'verified') {
+      throw new ForbiddenError('Votre demande partenaire doit d’abord être acceptée par l’administrateur avant de publier des prestations (403).');
+    }
+
+    const cleanId = payload.id
+      ? payload.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
+      : `srv-prv-${Date.now().toString(36)}-${crypto.randomBytes(2).toString('hex')}`;
+    if (!cleanId) {
+      throw new Error('Identifiant de prestation invalide.');
+    }
+
+    let existingRaw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('services').doc(cleanId).get();
+      existingRaw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else if (rawIdToken) {
+      existingRaw = await this.restGetDoc(`services/${encodeURIComponent(cleanId)}`, rawIdToken).catch(() => null);
+    }
+
+    if (OFFICIAL_PUBLIC_AND_DEMO_SERVICES[cleanId] && (!existingRaw || existingRaw.ownerId !== callerUid)) {
+      throw new ForbiddenError('Vous ne pouvez pas modifier une fiche officielle du répertoire qui ne vous est pas rattachée (403).');
+    }
+    if (existingRaw && (String(existingRaw.ownerId || '') !== callerUid || String(existingRaw.providerId || '') !== providerId)) {
+      throw new ForbiddenError('Accès refusé : vous ne pouvez modifier que vos propres prestations (403).');
+    }
+
+    const customPhotoUrl = String(payload.customPhotoUrl ?? existingRaw?.customPhotoUrl ?? '').trim().slice(0, 600);
+    const photoSource = String(payload.photoSource ?? existingRaw?.photoSource ?? '').trim().slice(0, 500);
+    const hasPhoto = customPhotoUrl.length >= 10 && /^https?:\/\//i.test(customPhotoUrl);
+
+    if (customPhotoUrl.length > 0 && !hasPhoto) {
+      throw new Error('Le lien de la photo doit être une adresse internet valide (https://...).');
+    }
+    if (hasPhoto && photoSource.length < 5) {
+      throw new Error('Indiquez obligatoirement le lien de la page d’origine de chaque photo.');
+    }
+
+    const allServices = await this.listAllServices(rawIdToken);
+    if (hasPhoto) {
+      const normalizedPhoto = customPhotoUrl.toLowerCase();
+      const duplicate = allServices.find(
+        (s) => s.id !== cleanId && String(s.customPhotoUrl || '').trim().toLowerCase() === normalizedPhoto
+      );
+      if (duplicate) {
+        throw new ConflictError(`Cette photo est déjà utilisée par « ${duplicate.title} ». Règle AMARO : une photo = une seule prestation, aucun doublon.`);
+      }
+    }
+
+    const title = String(payload.title || '').trim().slice(0, 160);
+    const cityId = String(payload.cityId || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64);
+    const address = String(payload.address || cityId).trim().slice(0, 240);
+    const description = String(payload.description || '').trim().slice(0, 2000);
+    const priceAmount = Math.max(0, Math.round(Number(payload.priceAmount || 0)));
+    const capacity = Math.max(1, Math.min(1000, Math.round(Number(payload.capacity ?? existingRaw?.capacity ?? 2))));
+    const durationMinutes = Math.max(15, Math.min(43200, Math.round(Number(payload.durationMinutes ?? existingRaw?.durationMinutes ?? 120))));
+    const blockedDates = Array.isArray(payload.blockedDates)
+      ? payload.blockedDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d))).slice(0, 366)
+      : Array.isArray(existingRaw?.blockedDates)
+      ? existingRaw.blockedDates.map(String).slice(0, 366)
+      : [];
+
+    const isMajorChange =
+      !existingRaw ||
+      title !== String(existingRaw.title || '') ||
+      payload.category !== existingRaw.category ||
+      cityId !== String(existingRaw.cityId || '') ||
+      priceAmount !== Number(existingRaw.priceAmount ?? 0) ||
+      description !== String(existingRaw.description || '') ||
+      customPhotoUrl !== String(existingRaw.customPhotoUrl || '') ||
+      photoSource !== String(existingRaw.photoSource || '');
+
+    const canAutoPublishTrusted = Boolean(bundle.provider.trustedPartner) && hasPhoto && photoSource.length >= 5;
+    let nextStatus: 'draft' | 'published' = 'draft';
+    let nextOrigin: 'verified_partner' | 'pending_verification' = 'pending_verification';
+    let nextVerif: 'verified' | 'unverified' = 'unverified';
+    let nextPhotoVerified = false;
+    const nextPhotoIndicator: PhotoIndicatorType = hasPhoto ? 'propre_etablissement' : 'photo_a_ajouter';
+
+    if (!hasPhoto) {
+      nextStatus = 'draft';
+      nextOrigin = 'pending_verification';
+      nextVerif = 'unverified';
+      nextPhotoVerified = false;
+    } else if (canAutoPublishTrusted) {
+      nextStatus = 'published';
+      nextOrigin = 'verified_partner';
+      nextVerif = 'verified';
+      nextPhotoVerified = true;
+    } else if (!isMajorChange && existingRaw?.status === 'published') {
+      nextStatus = 'published';
+      nextOrigin = (existingRaw.dataOrigin || 'verified_partner') as 'verified_partner' | 'pending_verification';
+      nextVerif = existingRaw.verificationStatus === 'verified' ? 'verified' : 'unverified';
+      nextPhotoVerified = Boolean(existingRaw.photoVerified);
+    }
+
+    const requiresAdminValidation = nextStatus === 'draft';
+    const countryCode = bundle.provider.countryCode || 'CI';
+    const currency: CurrencyCode = 'XOF';
+    const imageKey = countryCode === 'BJ' ? 'cotonou_coast' : 'abidjan_plateau';
+    const imageLicense = hasPhoto
+      ? `Source partenaire : ${photoSource.slice(0, 150)}`
+      : 'photo à ajouter';
+
+    const notifId = `notif-srv-val-${cleanId}-${Date.now().toString(36)}`;
+    const notifTitle = existingRaw
+      ? 'Prestation partenaire modifiée à valider'
+      : 'Nouvelle prestation partenaire à valider';
+    const notifBody = `${bundle.provider.businessName} a soumis « ${title} » (${cityId}). Statut : En attente de validation.`;
+
+    if (this.hasServiceAccount) {
+      const db = this.getAdminDb();
+      const nowTs = FieldValue.serverTimestamp();
+      const docData: Record<string, any> = {
+        providerId,
+        ownerId: callerUid,
+        title,
+        category: payload.category,
+        countryCode,
+        cityId,
+        address,
+        description,
+        priceAmount,
+        priceKnown: priceAmount > 0,
+        currency,
+        durationMinutes,
+        capacity,
+        dataOrigin: nextOrigin,
+        verificationStatus: nextVerif,
+        status: nextStatus,
+        imageKey,
+        imageLicense,
+        customPhotoUrl,
+        photoVerified: nextPhotoVerified,
+        photoIndicator: nextPhotoIndicator,
+        photoSource,
+        blockedDates,
+        sourceName: `Déclaré par le Partenaire AMARO (${bundle.provider.businessName})`,
+        updatedAt: nowTs,
+      };
+      if (!existingRaw) docData.createdAt = nowTs;
+      await db.collection('services').doc(cleanId).set(docData, { merge: true });
+
+      if (requiresAdminValidation) {
+        await db.collection('notifications').doc(notifId).set({
+          recipientId: 'admin-inbox',
+          senderId: callerUid,
+          kind: 'system',
+          title: notifTitle.slice(0, 155),
+          body: notifBody.slice(0, 780),
+          read: false,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+      }
+      return { service: this.mapServiceRecord(cleanId, docData), requiresAdminValidation };
+    }
+
+    if (!rawIdToken) {
+      throw new Error('Jeton requis.');
+    }
+
+    const docName = `${this.dbResourcePath}/services/${encodeURIComponent(cleanId)}`;
+    const fields: Record<string, any> = {
+      providerId: encodeString(providerId),
+      ownerId: encodeString(callerUid),
+      title: encodeString(title),
+      category: encodeString(payload.category),
+      countryCode: encodeString(countryCode),
+      cityId: encodeString(cityId),
+      address: encodeString(address),
+      description: encodeString(description),
+      priceAmount: encodeNumber(priceAmount),
+      priceKnown: { booleanValue: priceAmount > 0 },
+      currency: encodeString(currency),
+      durationMinutes: encodeInt(durationMinutes),
+      capacity: encodeInt(capacity),
+      dataOrigin: encodeString(nextOrigin),
+      verificationStatus: encodeString(nextVerif),
+      status: encodeString(nextStatus),
+      imageKey: encodeString(imageKey),
+      imageLicense: encodeString(imageLicense),
+      customPhotoUrl: encodeString(customPhotoUrl),
+      photoVerified: { booleanValue: nextPhotoVerified },
+      photoIndicator: encodeString(nextPhotoIndicator),
+      photoSource: encodeString(photoSource),
+      sourceName: encodeString(`Déclaré par le Partenaire AMARO (${bundle.provider.businessName})`),
+      blockedDates: {
+        arrayValue: {
+          values: blockedDates.map((d) => encodeString(d)),
+        },
+      },
+    };
+    const transforms: Array<{ fieldPath: string; setToServerValue: string }> = [
+      { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    ];
+    if (!existingRaw) transforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+
+    const writes: any[] = [
+      {
+        update: { name: docName, fields },
+        updateMask: { fieldPaths: Object.keys(fields) },
+        updateTransforms: transforms,
+      },
+    ];
+    if (requiresAdminValidation) {
+      writes.push({
+        update: {
+          name: `${this.dbResourcePath}/notifications/${notifId}`,
+          fields: {
+            recipientId: encodeString('admin-inbox'),
+            senderId: encodeString(callerUid),
+            kind: encodeString('system'),
+            title: encodeString(notifTitle.slice(0, 155)),
+            body: encodeString(notifBody.slice(0, 780)),
+            read: { booleanValue: false },
+          },
+        },
+        currentDocument: { exists: false },
+        updateTransforms: [
+          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+      });
+    }
+
+    const commitRes = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ writes }),
+    });
+    if (!commitRes.ok) {
+      throw new Error(`Enregistrement prestation prestataire refusé (${commitRes.status}).`);
+    }
+
+    return {
+      service: this.mapServiceRecord(cleanId, {
+        providerId,
+        ownerId: callerUid,
+        title,
+        category: payload.category,
+        countryCode,
+        cityId,
+        address,
+        description,
+        priceAmount,
+        priceKnown: priceAmount > 0,
+        currency,
+        durationMinutes,
+        capacity,
+        dataOrigin: nextOrigin,
+        verificationStatus: nextVerif,
+        status: nextStatus,
+        customPhotoUrl,
+        photoVerified: nextPhotoVerified,
+        photoIndicator: nextPhotoIndicator,
+        photoSource,
+        blockedDates,
+      }),
+      requiresAdminValidation,
+    };
+  }
+
+  async providerDeleteOwnService(
+    serviceId: string,
+    callerUid: string,
+    rawIdToken?: string
+  ): Promise<{ deleted: boolean }> {
+    const cleanId = serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    let existingRaw: Record<string, any> | null = null;
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('services').doc(cleanId).get();
+      existingRaw = snap.exists ? (snap.data() as Record<string, any>) : null;
+    } else if (rawIdToken) {
+      existingRaw = await this.restGetDoc(`services/${encodeURIComponent(cleanId)}`, rawIdToken).catch(() => null);
+    }
+    if (!existingRaw) {
+      throw new Error('Prestation introuvable.');
+    }
+    if (String(existingRaw.ownerId || '') !== callerUid || String(existingRaw.providerId || '') !== providerId) {
+      throw new ForbiddenError('Vous ne pouvez supprimer que vos propres prestations (403).');
+    }
+
+    if (this.hasServiceAccount) {
+      await this.getAdminDb().collection('services').doc(cleanId).delete();
+      return { deleted: true };
+    }
+    if (!rawIdToken) throw new Error('Jeton requis.');
+    const commitRes = await fetch(`https://firestore.googleapis.com/v1/${this.dbResourcePath}:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        writes: [{ delete: `${this.dbResourcePath}/services/${encodeURIComponent(cleanId)}` }],
+      }),
+    });
+    if (!commitRes.ok) {
+      throw new Error(`Suppression refusée (${commitRes.status}).`);
+    }
+    return { deleted: true };
+  }
+
+  async listProviderOwnData(callerUid: string, rawIdToken?: string) {
+    const providerId = `prv-${callerUid.slice(0, 24)}`;
+    const bundle = await this.getProviderWithPrivate(providerId, rawIdToken);
+    if (!bundle || bundle.provider.ownerId !== callerUid) {
+      throw new ForbiddenError('Aucun espace prestataire associé à ce compte (403).');
+    }
+
+    const allServices = await this.listAllServices(rawIdToken);
+    const myServices = allServices.filter((s) => s.ownerId === callerUid && s.providerId === providerId);
+
+    const myReservations: Array<ServerReservationRecord & { serviceTitle?: string; scheduledDate?: string; totalAmount?: number; providerPrice?: number; status?: string }> = [];
+    if (this.hasServiceAccount) {
+      const snap = await this.getAdminDb().collection('reservations').where('providerOwnerId', '==', callerUid).limit(300).get();
+      for (const d of snap.docs) {
+        const raw = d.data() || {};
+        myReservations.push({
+          reservationId: d.id,
+          folderId: String(raw.folderId || ''),
+          clientId: String(raw.clientId || ''),
+          providerOwnerId: String(raw.providerOwnerId || ''),
+          providerId: String(raw.providerId || ''),
+          serviceId: String(raw.serviceId || ''),
+          serviceTitle: String(raw.serviceTitle || ''),
+          scheduledDate: String(raw.scheduledDate || ''),
+          status: (raw.status || 'pending_provider') as ReservationStatus,
+          paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
+          providerPrice: Number(raw.providerPrice ?? 0),
+          totalAmount: Number(raw.totalAmount ?? 0),
+          participants: Number(raw.participants ?? 1),
+          scheduledTime: String(raw.scheduledTime || ''),
+        });
+      }
+    } else if (rawIdToken) {
+      const r = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${rawIdToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'reservations' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'providerOwnerId' },
+                op: 'EQUAL',
+                value: { stringValue: callerUid },
+              },
+            },
+            limit: 300,
+          },
+        }),
+      });
+      if (r.ok) {
+        const arr: any[] = await r.json();
+        for (const item of arr) {
+          const docItem = item?.document;
+          if (!docItem?.name || !docItem?.fields) continue;
+          const id = String(docItem.name).split('/').pop() || '';
+          const raw = decodeFirestoreFields(docItem.fields);
+          myReservations.push({
+            reservationId: id,
+            folderId: String(raw.folderId || ''),
+            clientId: String(raw.clientId || ''),
+            providerOwnerId: String(raw.providerOwnerId || ''),
+            providerId: String(raw.providerId || ''),
+            serviceId: String(raw.serviceId || ''),
+            serviceTitle: String(raw.serviceTitle || ''),
+            scheduledDate: String(raw.scheduledDate || ''),
+            status: (raw.status || 'pending_provider') as ReservationStatus,
+            paymentStatus: (raw.paymentStatus || 'unpaid') as PaymentStatus,
+            providerPrice: Number(raw.providerPrice ?? 0),
+            totalAmount: Number(raw.totalAmount ?? 0),
+            participants: Number(raw.participants ?? 1),
+            scheduledTime: String(raw.scheduledTime || ''),
+          });
+        }
+      }
+    }
+
+    const confirmedRevenueXof = myReservations
+      .filter((r) => r.paymentStatus === 'succeeded' && r.status === 'confirmed')
+      .reduce((acc, r) => acc + Number(r.providerPrice || 0), 0);
+
+    return {
+      provider: bundle.provider,
+      privateCommercial: bundle.privateCommercial,
+      services: myServices,
+      reservations: myReservations,
+      confirmedRevenueXof,
+    };
   }
 }
 

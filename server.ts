@@ -1,6 +1,7 @@
+import http from 'http';
 import dotenv from 'dotenv';
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,7 +11,7 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 function loadFirebaseAppletConfig(): { projectId: string; firestoreDatabaseId: string } {
   const configPath = path.join(__dirname, 'firebase-applet-config.json');
@@ -25,7 +26,7 @@ function loadFirebaseAppletConfig(): { projectId: string; firestoreDatabaseId: s
   };
 }
 
-async function startServer() {
+async function initAmaroExpress(): Promise<Express> {
   registerTsx();
   const { createAmaroApp } = await import('./src/server/createAmaroApp');
   const { projectId, firestoreDatabaseId } = loadFirebaseAppletConfig();
@@ -50,7 +51,45 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  return app;
+}
+
+function startServer() {
+  let activeApp: Express | null = null;
+  let initError: unknown = null;
+
+  const readyPromise = initAmaroExpress()
+    .then((app) => {
+      activeApp = app;
+      return app;
+    })
+    .catch((err) => {
+      initError = err;
+      console.error('Server initialization error:', err);
+      return null;
+    });
+
+  const server = http.createServer((req, res) => {
+    if (activeApp) {
+      activeApp(req, res);
+      return;
+    }
+    void readyPromise.then((app) => {
+      if (app) {
+        app(req, res);
+        return;
+      }
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(
+        initError instanceof Error
+          ? `Erreur de démarrage serveur: ${initError.message}`
+          : 'Erreur de démarrage serveur.'
+      );
+    });
+  });
+
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`AMARO.VOYAGE server listening on http://0.0.0.0:${PORT}`);
   });
 }

@@ -127,9 +127,11 @@ service cloud.firestore {
       return data.keys().hasAll(['ownerId', 'businessName', 'category', 'countryCode', 'cityId', 'description', 'verificationStatus', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
           'ownerId', 'businessName', 'companyName', 'category', 'countryCode', 'cityId',
-          'description', 'verificationStatus', 'contactName', 'phone', 'businessPhone',
-          'contactEmail', 'businessEmail', 'address', 'conventionAccepted', 'conventionVersion',
-          'conventionVersionAccepted', 'conventionAcceptedAt', 'registrationSource',
+          'publicZone', 'description', 'whatsapp', 'verificationStatus', 'rejectionReason',
+          'clarificationNote', 'trustedPartner', 'applicationPhotos', 'contactName', 'phone',
+          'businessPhone', 'contactEmail', 'businessEmail', 'address', 'conventionAccepted',
+          'conventionVersion', 'conventionVersionAccepted', 'conventionAcceptedAt',
+          'reviewedAt', 'reviewedBy', 'registrationSource',
           'linkedDirectoryServiceId', 'claimedDirectoryServiceId', 'adminConventionStage', 'agreedCommissionPercent',
           'agreedResponseHours', 'agreedCancellationTerms', 'blockedDates', 'seasonalRatesSummary',
           'createdAt', 'updatedAt'
@@ -139,19 +141,28 @@ service cloud.firestore {
         && isValidCategory(data.category)
         && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 4
         && isValidId(data.cityId)
+        && (!('publicZone' in data) || (data.publicZone is string && data.publicZone.size() <= 160))
         && data.description is string && data.description.size() >= 10 && data.description.size() <= 1500
-        && data.verificationStatus is string && data.verificationStatus in ['pending', 'verified', 'rejected']
+        && (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 60))
+        && data.verificationStatus is string && data.verificationStatus in ['pending', 'clarification_requested', 'verified', 'rejected']
+        && (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 600))
+        && (!('clarificationNote' in data) || (data.clarificationNote is string && data.clarificationNote.size() <= 600))
+        && (!('trustedPartner' in data) || data.trustedPartner is bool)
+        && (!('applicationPhotos' in data) || (data.applicationPhotos is list && data.applicationPhotos.size() <= 10))
+        && (!('reviewedAt' in data) || (data.reviewedAt is string && data.reviewedAt.size() <= 40))
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
     function isValidProviderPrivate(data) {
       return data.keys().hasAll(['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'contactEmail', 'contactPhone', 'payoutChannel', 'payoutNumber', 'registrationRef', 'createdAt', 'updatedAt'])
         && isValidId(data.ownerId)
         && data.contactEmail is string && data.contactEmail.size() <= 200
         && data.contactPhone is string && data.contactPhone.size() <= 40
         && data.payoutChannel is string && data.payoutChannel.size() <= 120
+        && (!('payoutNumber' in data) || (data.payoutNumber is string && data.payoutNumber.size() <= 60))
         && data.registrationRef is string && data.registrationRef.size() <= 120
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -169,7 +180,7 @@ service cloud.firestore {
           'capacity', 'dataOrigin', 'verificationStatus', 'sourceName', 'sourceUrl', 'verifiedAt',
           'contactPhone', 'contactWhatsapp', 'contactEmail', 'publishedHours',
           'neighborhood', 'standing', 'activationLevel', 'pilotConventionSigned', 'cancellationPolicy',
-          'customPhotoUrl', 'photoVerified', 'photoSource', 'photoUsageRights',
+          'customPhotoUrl', 'photoVerified', 'photoIndicator', 'photoSource', 'photoUsageRights',
           'isSacredOrCeremonial', 'sacredNotice', 'linkedDirectoryServiceId',
           'seasonalTariffs', 'unitTariffs', 'blockedDates', 'providerResponseHours',
           'status', 'imageKey', 'imageLicense', 'createdAt', 'updatedAt'
@@ -206,6 +217,9 @@ service cloud.firestore {
         && (!('cancellationPolicy' in data) || (data.cancellationPolicy is string && data.cancellationPolicy.size() <= 500))
         && (!('customPhotoUrl' in data) || (data.customPhotoUrl is string && data.customPhotoUrl.size() <= 600))
         && (!('photoVerified' in data) || data.photoVerified is bool)
+        && (!('photoIndicator' in data) || (data.photoIndicator is string && data.photoIndicator in ['propre_etablissement', 'illustration', 'a_verifier', 'photo_a_ajouter']))
+        && (!('photoSource' in data) || (data.photoSource is string && data.photoSource.size() <= 500))
+        && (!('photoUsageRights' in data) || (data.photoUsageRights is string && data.photoUsageRights.size() <= 240))
         && (!('isSacredOrCeremonial' in data) || data.isSacredOrCeremonial is bool)
         && (!('sacredNotice' in data) || (data.sacredNotice is string && data.sacredNotice.size() <= 600))
         && (!('linkedDirectoryServiceId' in data) || (data.linkedDirectoryServiceId is string && data.linkedDirectoryServiceId.size() <= 128))
@@ -868,6 +882,7 @@ service cloud.firestore {
         && isValidId(userId)
         && request.auth.uid == userId
         && isValidUserPublic(incoming())
+        && (incoming().accountType == 'traveler' || isAdmin())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -878,7 +893,9 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'accountType', 'preferredLocale', 'preferredCurrency', 'updatedAt']))
+          (request.auth.uid == userId
+            && incoming().accountType == existing().accountType
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLocale', 'preferredCurrency', 'updatedAt']))
           || isAdmin()
         );
 
@@ -949,6 +966,8 @@ service cloud.firestore {
         && isValidProviderProfile(incoming())
         && incoming().ownerId == request.auth.uid
         && incoming().verificationStatus == 'pending'
+        && !('trustedPartner' in incoming() && incoming().trustedPartner == true)
+        && !('agreedCommissionPercent' in incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -960,11 +979,17 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (existing().ownerId == request.auth.uid
-            && incoming().verificationStatus == existing().verificationStatus
+            && (
+              incoming().verificationStatus == existing().verificationStatus
+              || (existing().verificationStatus in ['clarification_requested', 'rejected'] && incoming().verificationStatus == 'pending')
+            )
+            && !('trustedPartner' in incoming() && incoming().trustedPartner != ('trustedPartner' in existing() ? existing().trustedPartner : false))
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'businessName', 'companyName', 'category', 'countryCode', 'cityId',
-              'description', 'contactName', 'phone', 'businessPhone', 'contactEmail',
-              'businessEmail', 'address', 'claimedDirectoryServiceId', 'blockedDates', 'seasonalRatesSummary', 'updatedAt'
+              'businessName', 'companyName', 'category', 'countryCode', 'cityId', 'publicZone',
+              'description', 'whatsapp', 'applicationPhotos', 'contactName', 'phone', 'businessPhone', 'contactEmail',
+              'businessEmail', 'address', 'claimedDirectoryServiceId', 'blockedDates', 'seasonalRatesSummary',
+              'conventionAccepted', 'conventionVersion', 'conventionVersionAccepted', 'conventionAcceptedAt',
+              'verificationStatus', 'updatedAt'
             ]))
           || isAdmin()
         );
@@ -999,7 +1024,7 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (
             (get(/databases/$(database)/documents/providers/$(providerId)).data.ownerId == request.auth.uid
-              && incoming().diff(existing()).affectedKeys().hasOnly(['contactEmail', 'contactPhone', 'payoutChannel', 'registrationRef', 'updatedAt']))
+              && incoming().diff(existing()).affectedKeys().hasOnly(['contactEmail', 'contactPhone', 'payoutChannel', 'payoutNumber', 'registrationRef', 'updatedAt']))
             || isAdmin()
           );
 
@@ -1018,12 +1043,22 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (
-          (isAdmin() && (incoming().ownerId == request.auth.uid || incoming().ownerId == 'manual_concierge'))
+          (isAdmin() && (incoming().ownerId == request.auth.uid || incoming().ownerId == 'manual_concierge' || exists(/databases/$(database)/documents/providers/$(incoming().providerId))))
           || (
             incoming().ownerId == request.auth.uid
-            && incoming().dataOrigin == 'pending_verification'
             && !('isSacredOrCeremonial' in incoming() && incoming().isSacredOrCeremonial == true)
             && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.ownerId == request.auth.uid
+            && get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.verificationStatus == 'verified'
+            && (
+              (incoming().status == 'draft' && incoming().dataOrigin == 'pending_verification' && (!('verificationStatus' in incoming()) || incoming().verificationStatus in ['unverified', 'to_confirm']))
+              || (
+                get(/databases/$(database)/documents/providers/$(incoming().providerId)).data.trustedPartner == true
+                && 'customPhotoUrl' in incoming() && incoming().customPhotoUrl.size() >= 10
+                && 'photoSource' in incoming() && incoming().photoSource.size() >= 5
+                && incoming().status == 'published'
+                && incoming().dataOrigin == 'verified_partner'
+              )
+            )
           )
         );
 
@@ -1036,18 +1071,40 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (existing().ownerId == request.auth.uid
-            && incoming().dataOrigin == existing().dataOrigin
+            && get(/databases/$(database)/documents/providers/$(existing().providerId)).data.ownerId == request.auth.uid
+            && get(/databases/$(database)/documents/providers/$(existing().providerId)).data.verificationStatus == 'verified'
             && !('isSacredOrCeremonial' in incoming() && incoming().isSacredOrCeremonial == true && !('isSacredOrCeremonial' in existing() && existing().isSacredOrCeremonial == true))
+            && (
+              (incoming().status == 'draft' && incoming().dataOrigin == 'pending_verification' && (!('verificationStatus' in incoming()) || incoming().verificationStatus in ['unverified', 'to_confirm']))
+              || (
+                get(/databases/$(database)/documents/providers/$(existing().providerId)).data.trustedPartner == true
+                && 'customPhotoUrl' in incoming() && incoming().customPhotoUrl.size() >= 10
+                && 'photoSource' in incoming() && incoming().photoSource.size() >= 5
+              )
+              || (
+                incoming().status == existing().status
+                && incoming().dataOrigin == existing().dataOrigin
+                && incoming().diff(existing()).affectedKeys().hasOnly(['blockedDates', 'updatedAt'])
+              )
+            )
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'title', 'category', 'address', 'description', 'priceAmount', 'priceKnown',
+              'title', 'category', 'cityId', 'address', 'description', 'priceAmount', 'priceKnown',
               'currency', 'durationMinutes', 'capacity', 'neighborhood', 'standing',
               'cancellationPolicy', 'blockedDates', 'seasonalTariffs', 'unitTariffs',
-              'providerResponseHours', 'verificationStatus', 'status', 'imageKey', 'imageLicense', 'updatedAt'
+              'customPhotoUrl', 'photoVerified', 'photoIndicator', 'photoSource', 'photoUsageRights',
+              'providerResponseHours', 'dataOrigin', 'verificationStatus', 'status', 'imageKey', 'imageLicense', 'updatedAt'
             ]))
           || isAdmin()
         );
 
-      allow delete: if isAdmin() && isValidId(serviceId);
+      allow delete: if isValidId(serviceId) && (
+        isAdmin()
+        || (
+          isVerifiedUser()
+          && existing().ownerId == request.auth.uid
+          && existing().providerId.matches('^prv-.*')
+        )
+      );
     }
 
     // --- 5. Amaro Journey Folders, Master-Gated Items, Intentions, Expenses & Logbook ---
@@ -1310,7 +1367,15 @@ service cloud.firestore {
           || isAdmin()
         );
 
-      allow delete: if isAdmin() && isValidId(reservationId);
+      allow delete: if isValidId(reservationId) && (
+        isAdmin()
+        || (
+          isVerifiedUser()
+          && existing().clientId == request.auth.uid
+          && !(existing().paymentStatus in ['initiated', 'succeeded', 'refunded'])
+          && (!('allocatedUnits' in existing()) || existing().allocatedUnits == 0 || existing().status in ['cancelled', 'rejected'])
+        )
+      );
     }
 
     // --- 7. AMARO PARTNERS (Influencers & Affiliates) ---
@@ -1392,7 +1457,7 @@ service cloud.firestore {
     // --- 8. Centralized Notifications & Unified Dispatch Logs ---
     match /notifications/{notificationId} {
       allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().recipientId == request.auth.uid || isBootstrappedAdmin());
+      allow list: if isSignedIn() && (existing().recipientId == request.auth.uid || isBootstrappedAdmin() || (existing().recipientId == 'admin-inbox' && isAdmin()));
 
       allow create: if isVerifiedUser()
         && isValidId(notificationId)
@@ -1483,6 +1548,7 @@ service cloud.firestore {
         && (
           (isAdmin() && incoming().actorId == request.auth.uid)
           || (isVerifiedUser() && incoming().action == 'CLIENT_ACCOUNT_DELETED_COMPLIANT')
+          || (isVerifiedUser() && incoming().action == 'CLIENT_FOLDER_DELETED_COMPLIANT' && incoming().actorId == request.auth.uid)
         );
 
       allow update, delete: if false;

@@ -81,6 +81,8 @@ import {
 import {
   CloudFirestoreServerStore,
   ConflictError,
+  ForbiddenError,
+  type AdminServiceUpsertInput,
   type AmaroServerStore,
   type ServerIdentityMetadataRecord,
 } from './firestoreStore';
@@ -95,6 +97,7 @@ import {
   validateAndInspectIdentityDataUrl,
 } from './identityVault';
 import {
+  BOOTSTRAPPED_ADMIN_EMAIL,
   createFirebaseAdminTokenVerifier,
   createRequireAdmin,
   createRequireAuth,
@@ -1666,7 +1669,8 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   async function isVerifiedAdminCaller(
     caller: NonNullable<AuthedRequest['caller']>
   ): Promise<boolean> {
-    if (caller.emailVerified && caller.email === 'kayne3200@gmail.com') {
+    const normalizedEmail = String(caller.email || '').trim().toLowerCase();
+    if (caller.emailVerified && normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL) {
       return true;
     }
     try {
@@ -1676,9 +1680,21 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
   }
 
+  async function loadMergedCountryStates(bearer?: string): Promise<Record<string, CountryOperationalState>> {
+    const [bjSetting, ciSetting] = await Promise.all([
+      store.getSystemSetting('BJ', bearer).catch(() => null),
+      store.getSystemSetting('CI', bearer).catch(() => null),
+    ]);
+    return {
+      ...((bjSetting?.countryOperationalStates || {}) as Record<string, CountryOperationalState>),
+      ...((ciSetting?.countryOperationalStates || {}) as Record<string, CountryOperationalState>),
+    };
+  }
+
   async function checkCountryAccess(
     rawCode: string,
-    bearer?: string
+    bearer?: string,
+    adminPreview = false
   ): Promise<{
     countryCode: string;
     state: CountryOperationalState;
@@ -1689,14 +1705,11 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     const normCode = String(rawCode || 'CI').toUpperCase().trim() || 'CI';
     let overrides: Record<string, CountryOperationalState> = {};
     try {
-      const setting = await store.getSystemSetting('BJ', bearer).catch(() => null);
-      if (setting?.countryOperationalStates) {
-        overrides = setting.countryOperationalStates as Record<string, CountryOperationalState>;
-      }
+      overrides = await loadMergedCountryStates(bearer);
     } catch {}
     const effectiveState = getEffectiveCountryState(normCode, overrides);
     let isAdmin = false;
-    if (bearer && effectiveState === 'ouvert_admin_seulement') {
+    if (bearer && (effectiveState === 'ouvert_admin_seulement' || adminPreview)) {
       try {
         const caller = await verifyToken(bearer);
         if (caller) {
@@ -1711,7 +1724,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
     const allowed =
       effectiveState === 'ouvert' ||
-      (effectiveState === 'ouvert_admin_seulement' && isAdmin);
+      ((effectiveState === 'ouvert_admin_seulement' || adminPreview) && isAdmin);
     return { countryCode: normCode, state: effectiveState, allowed, isAdmin, overrides };
   }
 
@@ -2535,11 +2548,25 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       const companyName = String(req.body?.companyName || '').trim();
       const category = String(req.body?.category || '').trim() as ServiceCategory;
       const cityId = String(req.body?.cityId || '').trim();
+      const publicZone = String(req.body?.publicZone || cityId).trim();
       const phone = String(req.body?.phone || '').trim();
+      const whatsapp = String(req.body?.whatsapp || phone || '').trim();
       const contactEmail = String(req.body?.contactEmail || caller.email || '').trim();
       const description = String(req.body?.description || '').trim();
+      const payoutMethod = String(req.body?.payoutMethod || '').trim();
+      const payoutNumber = String(req.body?.payoutNumber || '').trim();
+      const registrationRef = String(req.body?.registrationRef || '').trim();
+      const claimDirectoryServiceId = String(req.body?.claimDirectoryServiceId || '').trim();
+      const rawPhotos = Array.isArray(req.body?.photos) ? req.body.photos : [];
+      const photos = rawPhotos
+        .filter((p: unknown): p is Record<string, any> => Boolean(p && typeof p === 'object'))
+        .map((p: Record<string, any>) => ({
+          url: String(p.url || '').trim().slice(0, 600),
+          sourceUrl: String(p.sourceUrl || '').trim().slice(0, 500),
+        }))
+        .filter((p) => p.url.length > 0);
 
-      // Bloc 1: "Promouvoir mes services" is the ONLY authorized provider registration entry point
+      // Bloc 1: "Promouvoir mes services" (onglet Pro) is the ONLY authorized provider registration entry point
       if (sourceFlow !== 'promote_services') {
         res.status(403).json({
           error:
@@ -2551,22 +2578,86 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       if (!conventionAccepted) {
         res.status(400).json({
           error:
-            'Vous devez lire et accepter la convention prestataire AMARO avant de créer votre compte prestataire.',
+            'Vous devez lire et accepter la convention de partenariat AMARO avant d’envoyer votre demande.',
         });
         return;
       }
       if (companyName.length < 2 || !VALID_CATEGORIES.has(category) || !cityId) {
         res.status(400).json({
-          error: 'Veuillez renseigner le nom commercial, la catégorie et la ville principale.',
+          error: 'Veuillez renseigner le nom de l’activité, la catégorie et la ville.',
         });
         return;
+      }
+      if (description.length < 10) {
+        res.status(400).json({
+          error: 'Veuillez rédiger une description claire de votre activité (10 caractères minimum).',
+        });
+        return;
+      }
+      if (whatsapp.length < 6) {
+        res.status(400).json({
+          error: 'Veuillez indiquer un numéro WhatsApp valide pour la coordination des réservations.',
+        });
+        return;
+      }
+      if (!['Wave', 'Orange Money', 'MTN'].includes(payoutMethod) || payoutNumber.length < 6) {
+        res.status(400).json({
+          error: 'Veuillez choisir votre moyen de réception (Wave, Orange Money ou MTN) et saisir le numéro associé.',
+        });
+        return;
+      }
+      if (photos.length === 0) {
+        res.status(400).json({
+          error: 'Ajoutez au moins une photo réelle avec le lien de la page d’origine pour soumettre votre demande.',
+        });
+        return;
+      }
+      for (const p of photos) {
+        if (!/^https?:\/\/\S{6,}/i.test(p.url)) {
+          res.status(400).json({
+            error: 'Chaque photo doit avoir un lien internet valide commençant par https:// ou http://.',
+          });
+          return;
+        }
+        if (p.sourceUrl.length < 5) {
+          res.status(400).json({
+            error: 'Indiquez obligatoirement le lien de la page d’origine de chaque photo.',
+          });
+          return;
+        }
       }
 
       try {
         const providerCountryCode = String(req.body?.countryCode || 'CI').toUpperCase().trim() || 'CI';
+        const providerId = `prv-${caller.uid.slice(0, 24)}`;
+        if (store.listAllServices) {
+          const allServices = await store.listAllServices(caller.rawIdToken);
+          const seenUrls = new Set<string>();
+          for (const p of photos) {
+            const norm = p.url.toLowerCase();
+            if (seenUrls.has(norm)) {
+              res.status(409).json({
+                error: 'Vous avez ajouté deux fois la même photo dans votre demande.',
+              });
+              return;
+            }
+            seenUrls.add(norm);
+            const dup = allServices.find(
+              (s) =>
+                s.providerId !== providerId &&
+                String(s.customPhotoUrl || '').trim().toLowerCase() === norm
+            );
+            if (dup) {
+              res.status(409).json({
+                error: `Cette photo est déjà utilisée par « ${dup.title} ». Règle AMARO : une photo = une seule prestation, aucun doublon.`,
+              });
+              return;
+            }
+          }
+        }
+
         const setting = await store.getSystemSetting(providerCountryCode, caller.rawIdToken);
         const nowIso = new Date().toISOString();
-        const providerId = `prv-${caller.uid.slice(0, 24)}`;
         if (store.registerProviderFromPromoteFlow) {
           await store.registerProviderFromPromoteFlow(
             {
@@ -2575,11 +2666,18 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
               companyName,
               category,
               cityId,
+              publicZone,
               countryCode: providerCountryCode,
-              phone,
+              phone: phone || whatsapp,
+              whatsapp,
               contactEmail,
               description,
-              conventionVersion: setting.conventionVersion || '1.0',
+              payoutMethod,
+              payoutNumber,
+              registrationRef,
+              photos,
+              claimDirectoryServiceId,
+              conventionVersion: setting.conventionVersion || '1.1',
               conventionAcceptedAt: nowIso,
             },
             caller.rawIdToken
@@ -2589,14 +2687,272 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
           ok: true,
           providerId,
           verificationStatus: 'pending',
-          conventionVersion: setting.conventionVersion || '1.0',
+          conventionVersion: setting.conventionVersion || '1.1',
           conventionAcceptedAt: nowIso,
           publiclyBookable: false,
           notice:
-            'Votre demande est enregistrée avec le statut « En attente de validation ». Vos offres ne seront visibles et réservables qu’après vérification par l’administration AMARO.',
+            'Statut : Demande en attente. L’administrateur AMARO va examiner vos informations et vos photos avant toute activation.',
         });
       } catch (err) {
         res.status(500).json({ error: redactSecrets(err) || 'Inscription prestataire impossible.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/admin/providers',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.listAllProvidersWithPrivate) {
+        res.status(501).json({ error: 'Gestion serveur des partenaires non configurée.' });
+        return;
+      }
+      try {
+        const providers = await store.listAllProvidersWithPrivate(caller.rawIdToken);
+        res.json({ ok: true, providers });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        res.status(/\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/providers/:providerId/review',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.adminReviewProvider) {
+        res.status(501).json({ error: 'Validation des partenaires non configurée.' });
+        return;
+      }
+      const providerId = String(req.params.providerId || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+      const action = String(req.body?.action || '').trim() as
+        | 'accept'
+        | 'reject'
+        | 'request_clarification';
+      const reason = String(req.body?.reason || '').trim();
+      const note = String(req.body?.note || '').trim();
+      const trustedPartner =
+        typeof req.body?.trustedPartner === 'boolean' ? req.body.trustedPartner : undefined;
+
+      if (!providerId || !['accept', 'reject', 'request_clarification'].includes(action)) {
+        res.status(400).json({
+          error: 'Action de validation invalide (accept, reject ou request_clarification).',
+        });
+        return;
+      }
+      if (action === 'reject' && reason.length < 3) {
+        res.status(400).json({ error: 'Veuillez indiquer un motif clair pour le refus.' });
+        return;
+      }
+      if (action === 'request_clarification' && note.length < 3) {
+        res.status(400).json({ error: 'Veuillez préciser les éléments à compléter par le partenaire.' });
+        return;
+      }
+
+      try {
+        const bundle = await store.adminReviewProvider(
+          {
+            providerId,
+            action,
+            reason,
+            note,
+            trustedPartner,
+            adminUid: caller.uid,
+          },
+          caller.rawIdToken
+        );
+        res.json({ ok: true, bundle });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        if (/introuvable/i.test(msg)) {
+          res.status(404).json({ error: msg });
+          return;
+        }
+        res.status(/\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/providers/:providerId/trust',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.adminReviewProvider) {
+        res.status(501).json({ error: 'Gestion confiance partenaire non configurée.' });
+        return;
+      }
+      const providerId = String(req.params.providerId || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120);
+      if (!providerId || typeof req.body?.trustedPartner !== 'boolean') {
+        res.status(400).json({ error: 'Paramètre trustedPartner (booléen) requis.' });
+        return;
+      }
+      try {
+        const bundle = await store.adminReviewProvider(
+          {
+            providerId,
+            action: 'set_trust',
+            trustedPartner: req.body.trustedPartner,
+            adminUid: caller.uid,
+          },
+          caller.rawIdToken
+        );
+        res.json({ ok: true, bundle });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        res.status(/introuvable/i.test(msg) ? 404 : /\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
+      }
+    }
+  );
+
+  app.get(
+    '/api/amaro/provider/my-data',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.listProviderOwnData) {
+        res.status(501).json({ error: 'Espace prestataire non configuré.' });
+        return;
+      }
+      try {
+        const data = await store.listProviderOwnData(caller.uid, caller.rawIdToken);
+        res.json({ ok: true, ...data });
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          res.status(403).json({ error: err.message });
+          return;
+        }
+        const msg = redactSecrets(err);
+        res.status(/\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/provider/services/upsert',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.providerUpsertOwnService) {
+        res.status(501).json({ error: 'Gestion des prestations prestataire non configurée.' });
+        return;
+      }
+      const b = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
+      const title = String(b.title || '').trim();
+      const category = String(b.category || '').trim() as ServiceCategory;
+      const cityId = String(b.cityId || '').trim();
+      const description = String(b.description || '').trim();
+      const priceAmount = Number(b.priceAmount ?? 0);
+
+      if (title.length < 2 || !VALID_CATEGORIES.has(category) || !cityId) {
+        res.status(400).json({ error: 'Veuillez renseigner le titre, la catégorie et la ville.' });
+        return;
+      }
+      if (description.length < 10) {
+        res.status(400).json({ error: 'Veuillez rédiger une description (10 caractères minimum).' });
+        return;
+      }
+      if (!Number.isFinite(priceAmount) || priceAmount < 0) {
+        res.status(400).json({ error: 'Tarif en FCFA invalide.' });
+        return;
+      }
+
+      try {
+        const result = await store.providerUpsertOwnService(
+          {
+            ...(b.id ? { id: String(b.id) } : b.serviceId ? { id: String(b.serviceId) } : {}),
+            title,
+            category,
+            cityId,
+            ...(b.address !== undefined ? { address: String(b.address) } : {}),
+            description,
+            priceAmount,
+            ...(b.capacity !== undefined ? { capacity: Number(b.capacity) } : {}),
+            ...(b.durationMinutes !== undefined ? { durationMinutes: Number(b.durationMinutes) } : {}),
+            ...(b.customPhotoUrl !== undefined ? { customPhotoUrl: String(b.customPhotoUrl) } : {}),
+            ...(b.photoSource !== undefined ? { photoSource: String(b.photoSource) } : {}),
+            ...(Array.isArray(b.blockedDates) ? { blockedDates: b.blockedDates.map(String) } : {}),
+          },
+          caller.uid,
+          caller.rawIdToken
+        );
+        res.json({
+          ok: true,
+          service: result.service,
+          requiresAdminValidation: result.requiresAdminValidation,
+          message: result.requiresAdminValidation
+            ? result.service.photoIndicator === 'photo_a_ajouter'
+              ? 'Prestation enregistrée en brouillon (« photo à ajouter »). Elle reste cachée aux clients tant qu’une photo valide n’est pas ajoutée et validée.'
+              : 'Prestation enregistrée en attente de validation. Elle sera visible par les clients dès accord de l’administrateur.'
+            : 'Prestation publiée directement (statut Partenaire de confiance).',
+        });
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          res.status(403).json({ error: err.message });
+          return;
+        }
+        if (err instanceof ConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        const msg = redactSecrets(err);
+        if (/lien|photo/i.test(msg)) {
+          res.status(400).json({ error: msg });
+          return;
+        }
+        res.status(/\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/amaro/provider/services/:serviceId',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const serviceId = String(req.params.serviceId || '').trim();
+      if (!serviceId) {
+        res.status(400).json({ error: 'Identifiant de prestation manquant.' });
+        return;
+      }
+      if (!store.providerDeleteOwnService) {
+        res.status(501).json({ error: 'Suppression de prestation non configurée.' });
+        return;
+      }
+      try {
+        if (store.listProviderOwnData) {
+          const ownData = await store.listProviderOwnData(caller.uid, caller.rawIdToken);
+          const hasActiveBooking = ownData.reservations.some(
+            (r) =>
+              r.serviceId === serviceId &&
+              (r.paymentStatus === 'succeeded' ||
+                r.status === 'confirmed' ||
+                r.status === 'pending_provider' ||
+                r.status === 'pending_payment')
+          );
+          if (hasActiveBooking) {
+            res.status(409).json({
+              error: 'Impossible de supprimer cette prestation car une réservation active ou payée y est rattachée.',
+            });
+            return;
+          }
+        }
+        const result = await store.providerDeleteOwnService(serviceId, caller.uid, caller.rawIdToken);
+        res.json({ ok: true, serviceId, ...result });
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          res.status(403).json({ error: err.message });
+          return;
+        }
+        const msg = redactSecrets(err);
+        if (/introuvable/i.test(msg)) {
+          res.status(404).json({ error: msg });
+          return;
+        }
+        res.status(/\(403\)|refus/i.test(msg) ? 403 : 500).json({ error: msg });
       }
     }
   );
@@ -3376,16 +3732,77 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
   );
 
+  app.delete(
+    '/api/amaro/folders/:folderId',
+    requireAuth,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const folderId = String(req.params.folderId || '').trim();
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(folderId)) {
+        res.status(400).json({ error: 'Identifiant de dossier de voyage invalide.' });
+        return;
+      }
+      if (!store.deleteJourneyFolderCascade) {
+        res.status(501).json({ error: 'Suppression de dossier non configurée côté serveur.' });
+        return;
+      }
+
+      try {
+        const folder = await store.getJourneyFolder(folderId, caller.rawIdToken);
+        if (!folder) {
+          res.status(404).json({ error: 'Dossier de voyage introuvable.' });
+          return;
+        }
+        const isAdmin = await isVerifiedAdminCaller(caller);
+        if (!isAdmin && folder.ownerId !== caller.uid) {
+          res.status(403).json({
+            error: 'Accès refusé : vous ne pouvez supprimer que votre propre dossier de voyage.',
+          });
+          return;
+        }
+
+        const setting = await store.getSystemSetting('CI', caller.rawIdToken).catch(() => null);
+        const result = await store.deleteJourneyFolderCascade(
+          {
+            folderId,
+            callerUid: caller.uid,
+            isAdmin,
+            retentionPolicyLabel: setting?.financialRetentionDuration || '5 ans',
+          },
+          caller.rawIdToken
+        );
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusée/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
+      }
+    }
+  );
+
   // ===========================================================================
   // C5. INTERRUPTEUR PAR PAYS & BLOCAGE SERVEUR (193 ÉTATS MEMBRES DE L'ONU)
   // ===========================================================================
+  app.get('/api/amaro/auth/whoami', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const caller = req.caller!;
+    const isAdmin = await isVerifiedAdminCaller(caller);
+    res.json({
+      ok: true,
+      uid: caller.uid,
+      email: caller.email,
+      emailVerified: caller.emailVerified,
+      isAdmin,
+    });
+  });
+
   app.get('/api/amaro/country-states', async (_req: Request, res: Response) => {
     let overrides: Record<string, CountryOperationalState> = {};
     try {
-      const setting = await store.getSystemSetting('BJ').catch(() => null);
-      if (setting?.countryOperationalStates) {
-        overrides = setting.countryOperationalStates;
-      }
+      overrides = await loadMergedCountryStates();
     } catch {}
     const list = UN_193_COUNTRIES.map((c) => ({
       ...c,
@@ -3412,22 +3829,412 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       }
       try {
         const caller = req.caller!;
-        const setting = await store.getSystemSetting('BJ', caller.rawIdToken);
-        const currentOverrides = setting.countryOperationalStates || {};
+        const currentOverrides = await loadMergedCountryStates(caller.rawIdToken);
         const updatedOverrides = { ...currentOverrides, [countryCode]: state };
         const anyStore = store as any;
         if (typeof anyStore.updateSystemSetting === 'function') {
           await anyStore.updateSystemSetting(
-            { countryCode: 'BJ', countryOperationalStates: updatedOverrides },
+            {
+              countryCode: 'BJ',
+              countryOperationalStates: updatedOverrides,
+              updatedBy: caller.uid,
+            },
+            caller.rawIdToken
+          );
+          await anyStore.updateSystemSetting(
+            {
+              countryCode: 'CI',
+              countryOperationalStates: updatedOverrides,
+              updatedBy: caller.uid,
+            },
             caller.rawIdToken
           );
         } else if (anyStore.settings && typeof anyStore.settings.get === 'function') {
-          const cur = anyStore.settings.get('BJ') || setting;
-          anyStore.settings.set('BJ', { ...cur, countryOperationalStates: updatedOverrides });
+          const curBj = anyStore.settings.get('BJ') || (await store.getSystemSetting('BJ'));
+          anyStore.settings.set('BJ', {
+            ...curBj,
+            countryOperationalStates: updatedOverrides,
+            updatedBy: caller.uid,
+          });
+          const curCi = anyStore.settings.get('CI') || (await store.getSystemSetting('CI'));
+          anyStore.settings.set('CI', {
+            ...curCi,
+            countryOperationalStates: updatedOverrides,
+            updatedBy: caller.uid,
+          });
         }
-        res.json({ ok: true, countryCode, state });
+        res.json({ ok: true, countryCode, state, countryOperationalStates: updatedOverrides });
       } catch (err) {
-        res.status(500).json({ error: redactSecrets(err) });
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusée/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/system-settings',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
+      const patch: Record<string, any> = {
+        updatedBy: caller.uid,
+      };
+      const stringKeys = [
+        'amaroMobileMoneyNumber',
+        'amaroMobileMoneyHolder',
+        'amaroWhatsappNumber',
+        'supportWhatsappNumber',
+        'legalCompanyName',
+        'legalRccm',
+        'legalIfu',
+        'legalAddress',
+        'legalContact',
+        'waveNumber',
+        'orangeMoneyNumber',
+        'mtnMoneyNumber',
+        'financialRetentionDuration',
+        'termsVersion',
+        'conventionVersion',
+        'localContributionLabel',
+      ] as const;
+      for (const k of stringKeys) {
+        if (body[k] !== undefined) {
+          patch[k] = String(body[k] ?? '').trim().slice(0, 300);
+        }
+      }
+      const numberKeys = [
+        'commissionPercent',
+        'partnerMarginPercent',
+        'directoryMarginPercent',
+        'partnerCommissionPercent',
+        'attributionWindowDays',
+        'dossierFeeXof',
+        'dossierVerificationHours',
+        'providerResponseHours',
+        'balancePaymentHours',
+        'maxPendingPaymentFolders',
+        'abandonmentRiskThreshold',
+        'alternativeBudgetTolerancePercent',
+        'maxVisitsCityChangeDay',
+        'maxVisitsSameCityDay',
+        'freeTimeBlocksPerDay',
+        'localContributionPercent',
+        'serviceFeeFlat',
+        'taxPercent',
+      ] as const;
+      for (const k of numberKeys) {
+        if (body[k] !== undefined && Number.isFinite(Number(body[k]))) {
+          patch[k] = Number(body[k]);
+        }
+      }
+      const boolKeys = [
+        'vaultKeyConfirmedByOwner',
+        'includeDemoData',
+        'includeDossierFeeInAffiliateBase',
+      ] as const;
+      for (const k of boolKeys) {
+        if (body[k] !== undefined) {
+          patch[k] = Boolean(body[k]);
+        }
+      }
+      if (body.attributionModel === 'first_touch' || body.attributionModel === 'last_touch') {
+        patch.attributionModel = body.attributionModel;
+      }
+      if (body.countryOperationalStates && typeof body.countryOperationalStates === 'object') {
+        const cleanStates: Record<string, CountryOperationalState> = {};
+        const validStates = new Set(['ouvert', 'ouvert_admin_seulement', 'bientot', 'cache']);
+        for (const [cc, st] of Object.entries(body.countryOperationalStates)) {
+          const norm = String(cc).toUpperCase().trim();
+          const stStr = String(st).trim() as CountryOperationalState;
+          if (/^[A-Z]{2,4}$/.test(norm) && validStates.has(stStr)) {
+            cleanStates[norm] = stStr;
+          }
+        }
+        patch.countryOperationalStates = cleanStates;
+      }
+      if (body.photoRegistryOverrides && typeof body.photoRegistryOverrides === 'object') {
+        patch.photoRegistryOverrides = body.photoRegistryOverrides;
+      }
+
+      try {
+        const anyStore = store as any;
+        if (typeof anyStore.updateSystemSetting === 'function') {
+          const savedCi = await anyStore.updateSystemSetting(
+            { ...patch, countryCode: 'CI' },
+            caller.rawIdToken
+          );
+          await anyStore.updateSystemSetting(
+            { ...patch, countryCode: 'BJ' },
+            caller.rawIdToken
+          );
+          res.json({ ok: true, setting: savedCi });
+          return;
+        }
+        res.status(501).json({ error: 'Mise à jour de configuration non configurée.' });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusée/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/services/upsert',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.adminUpsertService) {
+        res.status(501).json({ error: 'Gestion serveur du catalogue non configurée.' });
+        return;
+      }
+      const b = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
+      const rawId = String(b.serviceId || b.id || '').trim();
+      const serviceId = rawId
+        ? rawId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
+        : `srv-adm-${Date.now().toString(36)}-${crypto.randomBytes(2).toString('hex')}`;
+
+      if (b.category && !VALID_CATEGORIES.has(String(b.category))) {
+        res.status(400).json({ error: 'Catégorie de prestation invalide.' });
+        return;
+      }
+      if (b.status && !['published', 'draft', 'archived'].includes(String(b.status))) {
+        res.status(400).json({ error: 'Statut de publication invalide.' });
+        return;
+      }
+      if (
+        b.verificationStatus &&
+        !['verified', 'partially_verified', 'to_confirm', 'unverified'].includes(
+          String(b.verificationStatus)
+        )
+      ) {
+        res.status(400).json({ error: 'Statut de vérification invalide.' });
+        return;
+      }
+      if (
+        b.dataOrigin &&
+        !['verified_partner', 'pending_verification', 'public_directory', 'demo_test'].includes(
+          String(b.dataOrigin)
+        )
+      ) {
+        res.status(400).json({ error: 'Origine des données invalide.' });
+        return;
+      }
+
+      try {
+        const allServices = store.listAllServices
+          ? await store.listAllServices(caller.rawIdToken)
+          : [];
+        const existingTarget = allServices.find((s) => s.id === serviceId);
+        const nextPhoto =
+          b.customPhotoUrl !== undefined
+            ? String(b.customPhotoUrl || '').trim()
+            : String(existingTarget?.customPhotoUrl || '').trim();
+
+        if (nextPhoto) {
+          if (!/^https?:\/\/\S{6,}/i.test(nextPhoto)) {
+            res.status(400).json({ error: 'Le lien de photo doit commencer par https:// ou http://.' });
+            return;
+          }
+          const dup = allServices.find(
+            (s) => s.id !== serviceId && String(s.customPhotoUrl || '').trim().toLowerCase() === nextPhoto.toLowerCase()
+          );
+          if (dup) {
+            res.status(409).json({
+              error: `Photo déjà utilisée par « ${dup.title} ». Règle AMARO : une photo = une seule prestation, aucun doublon.`,
+            });
+            return;
+          }
+        }
+
+        const effectiveProviderId = String(b.providerId ?? existingTarget?.providerId ?? '');
+        const isPartnerListing = effectiveProviderId.startsWith('prv-');
+        if (isPartnerListing && b.status === 'published' && !nextPhoto) {
+          res.status(400).json({
+            error: 'Impossible de publier une prestation partenaire sans photo valide : la fiche doit rester en brouillon (« photo à ajouter »).',
+          });
+          return;
+        }
+
+        const forcedIndicator =
+          b.customPhotoUrl !== undefined && !nextPhoto
+            ? 'photo_a_ajouter'
+            : b.photoIndicator !== undefined
+            ? String(b.photoIndicator)
+            : nextPhoto
+            ? 'propre_etablissement'
+            : existingTarget?.photoIndicator;
+
+        const input: AdminServiceUpsertInput = {
+          id: serviceId,
+          ...(b.providerId !== undefined ? { providerId: String(b.providerId) } : {}),
+          ...(b.ownerId !== undefined ? { ownerId: String(b.ownerId) } : {}),
+          ...(b.title !== undefined ? { title: String(b.title) } : {}),
+          ...(b.category !== undefined ? { category: b.category as ServiceCategory } : {}),
+          ...(b.countryCode !== undefined ? { countryCode: String(b.countryCode) } : {}),
+          ...(b.cityId !== undefined ? { cityId: String(b.cityId) } : {}),
+          ...(b.address !== undefined ? { address: String(b.address) } : {}),
+          ...(b.description !== undefined ? { description: String(b.description) } : {}),
+          ...(b.priceAmount !== undefined ? { priceAmount: Number(b.priceAmount) } : {}),
+          ...(b.priceKnown !== undefined ? { priceKnown: Boolean(b.priceKnown) } : {}),
+          ...(b.currency !== undefined && VALID_CURRENCIES.has(String(b.currency))
+            ? { currency: b.currency as CurrencyCode }
+            : {}),
+          ...(b.durationMinutes !== undefined
+            ? { durationMinutes: Number(b.durationMinutes) }
+            : {}),
+          ...(b.capacity !== undefined ? { capacity: Number(b.capacity) } : {}),
+          ...(b.dataOrigin !== undefined ? { dataOrigin: b.dataOrigin } : {}),
+          ...(b.verificationStatus !== undefined
+            ? { verificationStatus: b.verificationStatus }
+            : {}),
+          ...(isPartnerListing && b.customPhotoUrl !== undefined && !nextPhoto
+            ? { status: 'draft', photoVerified: false }
+            : b.status !== undefined
+            ? { status: b.status }
+            : {}),
+          ...(b.imageKey !== undefined ? { imageKey: String(b.imageKey) } : {}),
+          ...(b.imageLicense !== undefined ? { imageLicense: String(b.imageLicense) } : {}),
+          ...(b.customPhotoUrl !== undefined ? { customPhotoUrl: String(b.customPhotoUrl) } : {}),
+          ...(forcedIndicator ? { photoIndicator: forcedIndicator as AdminServiceUpsertInput['photoIndicator'] } : {}),
+          ...(isPartnerListing && b.customPhotoUrl !== undefined && !nextPhoto
+            ? {}
+            : b.photoVerified !== undefined
+            ? { photoVerified: Boolean(b.photoVerified) }
+            : {}),
+          ...(b.photoSource !== undefined ? { photoSource: String(b.photoSource) } : {}),
+          ...(b.photoUsageRights !== undefined
+            ? { photoUsageRights: String(b.photoUsageRights) }
+            : {}),
+          ...(b.sourceName !== undefined ? { sourceName: String(b.sourceName) } : {}),
+          ...(b.sourceUrl !== undefined ? { sourceUrl: String(b.sourceUrl) } : {}),
+          ...(b.verifiedAt !== undefined ? { verifiedAt: String(b.verifiedAt) } : {}),
+          ...(b.contactPhone !== undefined ? { contactPhone: String(b.contactPhone) } : {}),
+          ...(b.contactWhatsapp !== undefined
+            ? { contactWhatsapp: String(b.contactWhatsapp) }
+            : {}),
+          ...(b.contactEmail !== undefined ? { contactEmail: String(b.contactEmail) } : {}),
+          ...(b.publishedHours !== undefined ? { publishedHours: String(b.publishedHours) } : {}),
+          ...(b.neighborhood !== undefined ? { neighborhood: String(b.neighborhood) } : {}),
+          ...(b.isSacredOrCeremonial !== undefined
+            ? { isSacredOrCeremonial: Boolean(b.isSacredOrCeremonial) }
+            : {}),
+          ...(b.sacredNotice !== undefined ? { sacredNotice: String(b.sacredNotice) } : {}),
+          ...(b.providerResponseHours !== undefined
+            ? { providerResponseHours: Number(b.providerResponseHours) }
+            : {}),
+        };
+
+        const saved = await store.adminUpsertService(input, caller.uid, caller.rawIdToken);
+        res.json({ ok: true, service: saved });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusé/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/amaro/admin/services/batch',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      if (!store.adminUpsertService) {
+        res.status(501).json({ error: 'Gestion par lot du catalogue non configurée.' });
+        return;
+      }
+      const rawIds = Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : [];
+      const action = String(req.body?.action || '').trim();
+      const validActions = new Set(['hide', 'show', 'mark_verified', 'mark_to_confirm']);
+      const serviceIds: string[] = Array.from(
+        new Set<string>(
+          rawIds
+            .map((x: unknown) => String(x || '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120))
+            .filter(Boolean)
+        )
+      ).slice(0, 100);
+
+      if (serviceIds.length === 0 || !validActions.has(action)) {
+        res.status(400).json({
+          error: 'Sélection de fiches vide ou action en lot invalide (hide, show, mark_verified, mark_to_confirm).',
+        });
+        return;
+      }
+
+      try {
+        const allServices = store.listAllServices
+          ? await store.listAllServices(caller.rawIdToken)
+          : [];
+        const byId = new Map(allServices.map((s) => [s.id, s]));
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const updated: ServerServiceRecord[] = [];
+        for (const sid of serviceIds) {
+          const target = byId.get(sid);
+          if (
+            action === 'show' &&
+            target &&
+            target.providerId.startsWith('prv-') &&
+            !String(target.customPhotoUrl || '').trim()
+          ) {
+            continue;
+          }
+          const patch: AdminServiceUpsertInput = { id: sid };
+          if (action === 'hide') patch.status = 'draft';
+          else if (action === 'show') {
+            patch.status = 'published';
+            if (target?.providerId.startsWith('prv-')) {
+              patch.dataOrigin = 'verified_partner';
+              patch.verificationStatus = 'verified';
+              patch.photoVerified = true;
+              patch.verifiedAt = todayIso;
+            }
+          } else if (action === 'mark_verified') {
+            patch.verificationStatus = 'verified';
+            patch.verifiedAt = todayIso;
+          } else if (action === 'mark_to_confirm') {
+            patch.verificationStatus = 'to_confirm';
+          }
+          const saved = await store.adminUpsertService(patch, caller.uid, caller.rawIdToken);
+          updated.push(saved);
+        }
+        res.json({
+          ok: true,
+          action,
+          updatedCount: updated.length,
+          serviceIds: updated.map((u) => u.id),
+        });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusé/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/amaro/admin/services/:serviceId',
+    requireAdmin,
+    async (req: AuthedRequest, res: Response) => {
+      const caller = req.caller!;
+      const serviceId = String(req.params.serviceId || '').trim();
+      if (!serviceId) {
+        res.status(400).json({ error: 'Identifiant de prestation manquant.' });
+        return;
+      }
+      if (!store.adminDeleteService) {
+        res.status(501).json({ error: 'Suppression serveur de fiche non configurée.' });
+        return;
+      }
+      try {
+        const result = await store.adminDeleteService(serviceId, caller.rawIdToken);
+        res.json({ ok: true, serviceId, ...result });
+      } catch (err) {
+        const msg = redactSecrets(err);
+        const status = /\(403\)|refusée/i.test(msg) ? 403 : 500;
+        res.status(status).json({ error: msg });
       }
     }
   );
@@ -3440,8 +4247,10 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       return;
     }
 
+    const adminPreviewRequested =
+      req.query.adminPreview === '1' || req.query.adminPreview === 'true';
     const bearer = extractBearerToken(req) || undefined;
-    const access = await checkCountryAccess(normCode, bearer);
+    const access = await checkCountryAccess(normCode, bearer, adminPreviewRequested);
 
     if (!access.allowed) {
       res.status(403).json({
@@ -3453,18 +4262,43 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     }
 
     const countryDef = COUNTRIES_REGISTRY.find((c) => c.code === normCode);
-    const countryServices = ALL_PUBLIC_DIRECTORIES.filter(
-      (it) => it.countryCode === normCode && it.status === 'published' && it.dataOrigin !== 'demo_test'
+    const liveServices =
+      access.isAdmin && store.listAllServices
+        ? await store.listAllServices(bearer).catch(() => [])
+        : store.listAllPublishedServices
+        ? await store.listAllPublishedServices(bearer).catch(() => [])
+        : [];
+    const byId = new Map<string, any>();
+    for (const item of ALL_PUBLIC_DIRECTORIES) {
+      if (item.countryCode === normCode && item.dataOrigin !== 'demo_test') {
+        if (access.isAdmin || item.status === 'published') {
+          byId.set(item.id, item);
+        }
+      }
+    }
+    for (const srv of liveServices) {
+      if (srv.countryCode !== normCode || srv.dataOrigin === 'demo_test') continue;
+      if (!access.isAdmin && srv.status !== 'published') {
+        byId.delete(srv.id);
+        continue;
+      }
+      const prev = byId.get(srv.id);
+      byId.set(srv.id, prev ? { ...prev, ...srv } : srv);
+    }
+    const countryServices = Array.from(byId.values()).filter((it) =>
+      access.isAdmin ? true : it.status === 'published'
     );
     const emergencyNumbers =
       countryDef?.emergencyNumbers?.length
         ? countryDef.emergencyNumbers
         : getEmergencyNumbersForCountry(normCode);
+    const isPubliclyOpen = access.state === 'ouvert';
 
     if (normCode === 'CI' && countryDef) {
       res.json({
         ok: true,
         countryCode: 'CI',
+        isAdminPreview: !isPubliclyOpen && access.allowed,
         countryName: countryDef.nameFr,
         currency: countryDef.currency,
         languages: countryDef.languages,
@@ -3495,6 +4329,7 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
     res.json({
       ok: true,
       countryCode: normCode,
+      isAdminPreview: !isPubliclyOpen && access.allowed,
       country: countryDef || unCountry,
       services: countryServices,
       emergencyNumbers,

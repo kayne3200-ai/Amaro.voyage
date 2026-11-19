@@ -66,6 +66,12 @@ export interface ServerServiceRecord {
   verifiedAt?: string;
   websiteUrl?: string;
   contactPhone?: string;
+  description?: string;
+  customPhotoUrl?: string;
+  photoSource?: string;
+  photoVerified?: boolean;
+  photoIndicator?: PhotoIndicatorType;
+  verificationStatus?: 'verified' | 'partially_verified' | 'to_confirm' | 'unverified';
   structuredOffers?: ProviderOfferDoc[];
 }
 

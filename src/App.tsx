@@ -22,6 +22,7 @@ import {
   db,
   handleFirestoreError,
   OperationType,
+  reportFirestoreListenerError,
   verifyFirestoreConnectivity,
 } from './lib/firebase';
 import { authorizedFetch } from './lib/apiClient';
@@ -49,6 +50,7 @@ import {
   type PilotPartnerDoc,
   type PilotStockDoc,
   type PlatformContentDoc,
+  type ProviderApplicationPhoto,
   type ProviderOfferDoc,
   type ProviderProfileDoc,
   type ProviderThankYouDoc,
@@ -65,9 +67,11 @@ import {
   CheckCircle2,
   Clock,
   Compass,
+  Eye,
   Globe2,
   Lock,
   Search,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   UN_193_COUNTRIES,
@@ -396,6 +400,7 @@ function AmaroPlatform() {
   const [myTravelerReviews, setMyTravelerReviews] = useState<TravelerReviewDoc[]>([]);
   const [clientReservations, setClientReservations] = useState<ReservationDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [adminInboxNotifications, setAdminInboxNotifications] = useState<NotificationDoc[]>([]);
   const [sessionDraft, setSessionDraft] = useState<AssistantDraftItinerary | null>(() => {
     try {
       const stored = sessionStorage.getItem(PENDING_ASSISTANT_DRAFT_KEY);
@@ -422,6 +427,7 @@ function AmaroPlatform() {
     contactEmail: string;
     contactPhone: string;
     payoutChannel: string;
+    payoutNumber?: string;
     registrationRef: string;
   } | null>(null);
   const [myServices, setMyServices] = useState<CatalogueItem[]>([]);
@@ -435,6 +441,18 @@ function AmaroPlatform() {
   // Admin Data
   const [allCatalogueServices, setAllCatalogueServices] = useState<CatalogueItem[]>([]);
   const [allProviders, setAllProviders] = useState<ProviderProfileDoc[]>([]);
+  const [adminProviderPrivateMap, setAdminProviderPrivateMap] = useState<
+    Record<
+      string,
+      {
+        payoutChannel?: string;
+        payoutNumber?: string;
+        contactPhone?: string;
+        contactEmail?: string;
+        registrationRef?: string;
+      }
+    >
+  >({});
   const [allReservations, setAllReservations] = useState<ReservationDoc[]>([]);
   const [allFolders, setAllFolders] = useState<JourneyFolderDoc[]>([]);
   const [allStories, setAllStories] = useState<CulturalStoryDoc[]>([]);
@@ -468,9 +486,11 @@ function AmaroPlatform() {
     Record<string, IdentityVerificationDoc>
   >({});
 
+  const [adminPreviewCountryCode, setAdminPreviewCountryCode] = useState<string | null>(null);
+
   const isBootstrappedAdmin =
     Boolean(authUser?.emailVerified) &&
-    authUser?.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+    authUser?.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
   const isAdmin = isBootstrappedAdmin || (Boolean(authUser?.emailVerified) && hasAdminDoc);
   const hasFirestoreSession = canUserAccessFirestore(authUser);
 
@@ -514,10 +534,20 @@ function AmaroPlatform() {
     };
   }, []);
 
+  // Clear admin preview if admin logs out
+  useEffect(() => {
+    if (!isAdmin && adminPreviewCountryCode !== null) {
+      setAdminPreviewCountryCode(null);
+    }
+  }, [isAdmin, adminPreviewCountryCode]);
+
   // Enforce URL country lock dynamically when states or admin privileges change
   useEffect(() => {
     if (requestedUrlCountry) {
-      if (isCountryOpen(requestedUrlCountry, effectiveCountryStates, isAdmin)) {
+      const canAccessRequested =
+        isCountryOpen(requestedUrlCountry, effectiveCountryStates, isAdmin) ||
+        (isAdmin && adminPreviewCountryCode === requestedUrlCountry);
+      if (canAccessRequested) {
         setSelectedCountryCode(requestedUrlCountry);
         setLockedAttemptCode(null);
         setEntryMode('country');
@@ -534,16 +564,18 @@ function AmaroPlatform() {
       return;
     }
 
-    if (
-      entryMode === 'country' &&
-      !isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin)
-    ) {
+    const canAccessCurrent =
+      isCountryOpen(selectedCountryCode, effectiveCountryStates, isAdmin) ||
+      (isAdmin && adminPreviewCountryCode === selectedCountryCode);
+
+    if (entryMode === 'country' && !canAccessCurrent) {
       setLockedAttemptCode(selectedCountryCode);
       setEntryMode('locked_country');
     } else if (
       entryMode === 'locked_country' &&
       lockedAttemptCode &&
-      isCountryOpen(lockedAttemptCode, effectiveCountryStates, isAdmin)
+      (isCountryOpen(lockedAttemptCode, effectiveCountryStates, isAdmin) ||
+        (isAdmin && adminPreviewCountryCode === lockedAttemptCode))
     ) {
       setSelectedCountryCode(lockedAttemptCode);
       setLockedAttemptCode(null);
@@ -553,6 +585,7 @@ function AmaroPlatform() {
     requestedUrlCountry,
     effectiveCountryStates,
     isAdmin,
+    adminPreviewCountryCode,
     entryMode,
     selectedCountryCode,
     lockedAttemptCode,
@@ -560,6 +593,7 @@ function AmaroPlatform() {
   ]);
 
   const handleGoHome = useCallback(() => {
+    setAdminPreviewCountryCode(null);
     setRequestedUrlCountry(null);
     setLockedAttemptCode(null);
     setEntryMode('home');
@@ -577,6 +611,35 @@ function AmaroPlatform() {
     }
   }, []);
 
+  const handleAdminPreviewCountry = useCallback(
+    async (nextCode: string) => {
+      if (!isAdmin) return;
+      const norm = String(nextCode || '').toUpperCase().trim();
+      if (!norm) return;
+      const registry = await loadAmaroRegistry();
+      const targetCountry = registry.COUNTRIES_REGISTRY.find((c) => c.code === norm);
+      if (isCountryOpen(norm, effectiveCountryStates, isAdmin)) {
+        setAdminPreviewCountryCode(null);
+      } else {
+        setAdminPreviewCountryCode(norm);
+        showToast(
+          `Aperçu administrateur actif sur ${norm} — ce pays reste « En préparation » pour le public.`
+        );
+      }
+      setRequestedUrlCountry(norm);
+      setLockedAttemptCode(null);
+      setSelectedCountryCode(norm);
+      setEntryMode('country');
+      setActiveTab('explorer');
+      if (targetCountry?.currency) {
+        setCurrency(targetCountry.currency);
+      } else if (norm === 'CI' || norm === 'BJ') {
+        setCurrency('XOF');
+      }
+    },
+    [effectiveCountryStates, isAdmin, showToast]
+  );
+
   const handleSelectCountry = useCallback(
     (nextCode: string) => {
       const norm = String(nextCode || '').toUpperCase().trim();
@@ -584,6 +647,7 @@ function AmaroPlatform() {
         showToast('Ce pays est actuellement « En préparation ». Ouverture progressive pays par pays.');
         return;
       }
+      setAdminPreviewCountryCode(null);
       setRequestedUrlCountry(norm);
       setLockedAttemptCode(null);
       setSelectedCountryCode(norm);
@@ -609,9 +673,13 @@ function AmaroPlatform() {
   const setSelectedFolderId = useCallback(
     (folderId: string) => {
       setSelectedFolderIdState(folderId);
-      if (authUser?.uid && folderId) {
+      if (authUser?.uid) {
         try {
-          localStorage.setItem(getFolderStorageKey(authUser.uid), folderId);
+          if (folderId) {
+            localStorage.setItem(getFolderStorageKey(authUser.uid), folderId);
+          } else {
+            localStorage.removeItem(getFolderStorageKey(authUser.uid));
+          }
         } catch {
           // ignore storage limits
         }
@@ -768,7 +836,7 @@ function AmaroPlatform() {
         }));
         setPublishedServices(list);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'services')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'services')
     );
 
     const qStories = query(
@@ -785,7 +853,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'cultural_stories')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'cultural_stories')
     );
 
     const qReviews = query(
@@ -806,7 +874,7 @@ function AmaroPlatform() {
           })
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'traveler_reviews')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'traveler_reviews')
     );
 
     const unsubPlatformContent = onSnapshot(
@@ -833,7 +901,7 @@ function AmaroPlatform() {
         }
         setFirestorePlatformContents(map);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'platform_content')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'platform_content')
     );
 
     const unsubSettings = onSnapshot(
@@ -860,7 +928,7 @@ function AmaroPlatform() {
           }
         }
       },
-      (err) => handleFirestoreError(err, OperationType.GET, 'system_settings/CI')
+      (err) => reportFirestoreListenerError(err, OperationType.GET, 'system_settings/CI')
     );
 
     const qActiveStocks = query(
@@ -881,7 +949,7 @@ function AmaroPlatform() {
           })
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_stocks')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'pilot_stocks')
     );
 
     return () => {
@@ -913,7 +981,7 @@ function AmaroPlatform() {
           });
         }
       },
-      (err) => handleFirestoreError(err, OperationType.GET, `users/${uid}`)
+      (err) => reportFirestoreListenerError(err, OperationType.GET, `users/${uid}`)
     );
 
     const unsubUserPriv = onSnapshot(
@@ -930,7 +998,7 @@ function AmaroPlatform() {
           });
         }
       },
-      (err) => handleFirestoreError(err, OperationType.GET, `users/${uid}/private/info`)
+      (err) => reportFirestoreListenerError(err, OperationType.GET, `users/${uid}/private/info`)
     );
 
     const unsubUserPrefs = onSnapshot(
@@ -992,7 +1060,7 @@ function AmaroPlatform() {
           return list[0]?.id || '';
         });
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'journey_folders')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'journey_folders')
     );
 
     const unsubFolderShares = onSnapshot(
@@ -1040,7 +1108,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'reservations(client)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'reservations(client)')
     );
 
     const unsubProvRes = onSnapshot(
@@ -1053,7 +1121,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'reservations(provider)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'reservations(provider)')
     );
 
     const unsubNotifs = onSnapshot(
@@ -1066,7 +1134,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'notifications')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'notifications')
     );
 
     const unsubMyProvider = onSnapshot(
@@ -1082,7 +1150,7 @@ function AmaroPlatform() {
           setMyProvider(null);
         }
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'providers(owner)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'providers(owner)')
     );
 
     const unsubMyServices = onSnapshot(
@@ -1095,7 +1163,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'services(owner)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'services(owner)')
     );
 
     const unsubProviderThanks = onSnapshot(
@@ -1132,7 +1200,7 @@ function AmaroPlatform() {
           setMyPartner(null);
         }
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'partners(owner)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'partners(owner)')
     );
 
     const unsubMyReferrals = onSnapshot(
@@ -1145,7 +1213,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'partner_referrals(owner)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'partner_referrals(owner)')
     );
 
     const unsubClientIdentity = onSnapshot(
@@ -1160,7 +1228,7 @@ function AmaroPlatform() {
         }
         setClientIdentityByRes(map);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(client)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'identity_verifications(client)')
     );
 
     const unsubProviderIdentity = onSnapshot(
@@ -1175,7 +1243,7 @@ function AmaroPlatform() {
         }
         setProviderIdentityByRes(map);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(provider)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'identity_verifications(provider)')
     );
 
     return () => {
@@ -1215,12 +1283,13 @@ function AmaroPlatform() {
             contactEmail: d.contactEmail,
             contactPhone: d.contactPhone,
             payoutChannel: d.payoutChannel,
+            payoutNumber: d.payoutNumber || '',
             registrationRef: d.registrationRef,
           });
         }
       },
       (err) =>
-        handleFirestoreError(
+        reportFirestoreListenerError(
           err,
           OperationType.GET,
           `providers/${myProvider.id}/private/commercial`
@@ -1253,7 +1322,7 @@ function AmaroPlatform() {
         );
       },
       (err) =>
-        handleFirestoreError(
+        reportFirestoreListenerError(
           err,
           OperationType.LIST,
           `journey_folders/${selectedFolderId}/items`
@@ -1275,7 +1344,7 @@ function AmaroPlatform() {
         );
       },
       (err) =>
-        handleFirestoreError(
+        reportFirestoreListenerError(
           err,
           OperationType.LIST,
           `journey_folders/${selectedFolderId}/journal`
@@ -1365,7 +1434,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'services(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'services(admin)')
     );
 
     const u1 = onSnapshot(
@@ -1378,7 +1447,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'providers(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'providers(admin)')
     );
 
     const u2 = onSnapshot(
@@ -1391,7 +1460,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'reservations(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'reservations(admin)')
     );
 
     const uFolders = onSnapshot(
@@ -1404,7 +1473,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'journey_folders(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'journey_folders(admin)')
     );
 
     const u3 = onSnapshot(
@@ -1417,7 +1486,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'cultural_stories(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'cultural_stories(admin)')
     );
 
     const uReviews = onSnapshot(
@@ -1477,7 +1546,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'audit_logs')
     );
 
     const u5 = onSnapshot(
@@ -1490,7 +1559,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'partners(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'partners(admin)')
     );
 
     const u6 = onSnapshot(
@@ -1503,7 +1572,7 @@ function AmaroPlatform() {
           }))
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'partner_referrals(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'partner_referrals(admin)')
     );
 
     const u7 = onSnapshot(
@@ -1518,7 +1587,7 @@ function AmaroPlatform() {
         }
         setAdminIdentityByRes(map);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'identity_verifications(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'identity_verifications(admin)')
     );
 
     const u8 = onSnapshot(
@@ -1535,7 +1604,7 @@ function AmaroPlatform() {
           })
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_partners(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'pilot_partners(admin)')
     );
 
     const u9 = onSnapshot(
@@ -1552,7 +1621,20 @@ function AmaroPlatform() {
           })
         );
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'pilot_stocks(admin)')
+      (err) => reportFirestoreListenerError(err, OperationType.LIST, 'pilot_stocks(admin)')
+    );
+
+    const u10 = onSnapshot(
+      query(collection(db, 'notifications'), where('recipientId', '==', 'admin-inbox')),
+      (snap) => {
+        setAdminInboxNotifications(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<NotificationDoc, 'id'>),
+          }))
+        );
+      },
+      () => setAdminInboxNotifications([])
     );
 
     return () => {
@@ -1570,10 +1652,51 @@ function AmaroPlatform() {
       u7();
       u8();
       u9();
+      u10();
     };
   }, [isAdmin]);
 
-  // Combined Catalogue (Bloc 5.8: DEMO_REFERENCE_CATALOGUE hidden unless countrySetting?.includeDemoData === true)
+  const refreshAdminProviderPrivateMap = useCallback(async () => {
+    if (!isAdmin) {
+      setAdminProviderPrivateMap({});
+      return;
+    }
+    try {
+      const resp = await authorizedFetch('/api/amaro/admin/providers');
+      if (!resp.ok) return;
+      const data = await resp.json().catch(() => ({}));
+      const list = Array.isArray(data?.providers) ? data.providers : [];
+      const nextMap: Record<
+        string,
+        {
+          payoutChannel?: string;
+          payoutNumber?: string;
+          contactPhone?: string;
+          contactEmail?: string;
+          registrationRef?: string;
+        }
+      > = {};
+      for (const entry of list) {
+        if (entry?.provider?.id && entry?.privateCommercial) {
+          nextMap[entry.provider.id] = entry.privateCommercial;
+        }
+      }
+      setAdminProviderPrivateMap(nextMap);
+    } catch {
+      // Ignore silent background sync error
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      void refreshAdminProviderPrivateMap();
+    } else {
+      setAdminProviderPrivateMap({});
+      setAdminInboxNotifications([]);
+    }
+  }, [isAdmin, allProviders.length, refreshAdminProviderPrivateMap]);
+
+  // Combined Catalogue (Strict public published items only; Bloc 5.8 hides demo unless includeDemoData === true)
   const combinedCatalogue = useMemo(() => {
     const overriddenIds = new Set<string>(publishedServices.map((s) => s.id));
     for (const s of allCatalogueServices) {
@@ -1613,6 +1736,25 @@ function AmaroPlatform() {
     }
     return uniqueItems;
   }, [allCatalogueServices, countrySetting?.includeDemoData, publishedServices, registryModule]);
+
+  // Admin-only full catalogue view (includes draft/archived overrides so Admin can manage or re-publish hidden items)
+  const adminExpandedCatalogue = useMemo(() => {
+    if (!isAdmin) return combinedCatalogue;
+    const staticDirectories = registryModule?.ALL_PUBLIC_DIRECTORIES || [];
+    const byId = new Map<string, CatalogueItem>();
+    for (const item of combinedCatalogue) {
+      byId.set(item.id, item);
+    }
+    for (const srv of allCatalogueServices) {
+      const staticMatch = staticDirectories.find((b) => b.id === srv.id);
+      byId.set(srv.id, {
+        ...(staticMatch || {}),
+        ...srv,
+        siteEditorial: staticMatch?.siteEditorial,
+      });
+    }
+    return Array.from(byId.values());
+  }, [allCatalogueServices, combinedCatalogue, isAdmin, registryModule]);
 
   // Merged Platform Content (Defaults + Firestore Admin Overrides)
   const platformContentMap = useMemo(() => {
@@ -2030,6 +2172,75 @@ function AmaroPlatform() {
       );
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `journey_folders/${folderId}`);
+    }
+  };
+
+  const handleDeleteFolder = async (
+    folderId: string
+  ): Promise<{ deletedFolderTitle: string; deletedReservationsCount: number } | null> => {
+    if (!authUser?.uid) {
+      showToast('Veuillez vous connecter pour supprimer un dossier.');
+      return null;
+    }
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/folders/${encodeURIComponent(folderId)}`,
+        { method: 'DELETE' }
+      );
+      const data: any = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(
+          data?.error ||
+            'Suppression du dossier impossible pour le moment.'
+        );
+        return null;
+      }
+
+      const deletedResIds = new Set(
+        clientReservations
+          .filter((r) => r.folderId === folderId)
+          .map((r) => r.id)
+      );
+      const remainingFolders = folders.filter((f) => f.id !== folderId);
+      setFolders(remainingFolders);
+      setClientReservations((prev) =>
+        prev.filter((r) => r.folderId !== folderId)
+      );
+      if (selectedFolderId === folderId || remainingFolders.length === 0) {
+        setFolderItems([]);
+        setJournalEntries([]);
+        setFolderExpenses([]);
+        setFolderIntention(null);
+      }
+      setFolderShares((prev) => prev.filter((s) => s.folderId !== folderId));
+      setClientIdentityByRes((prev) => {
+        const next = { ...prev };
+        for (const id of deletedResIds) {
+          delete next[id];
+        }
+        return next;
+      });
+
+      const nextFolderId = remainingFolders[0]?.id || '';
+      setSelectedFolderId(nextFolderId);
+
+      const deletedFolderTitle = String(
+        data?.deletedFolderTitle || 'Dossier de voyage'
+      );
+      const deletedReservationsCount = Number(
+        data?.deletedReservationsCount || deletedResIds.size
+      );
+      showToast(
+        `Dossier « ${deletedFolderTitle} » supprimé (${deletedReservationsCount} réservation(s) nettoyée(s)).`
+      );
+      return { deletedFolderTitle, deletedReservationsCount };
+    } catch (err) {
+      showToast(
+        err instanceof Error
+          ? err.message
+          : 'Erreur réseau lors de la suppression du dossier.'
+      );
+      return null;
     }
   };
 
@@ -2735,7 +2946,7 @@ function AmaroPlatform() {
   };
 
   const handleMarkAllNotificationsRead = async () => {
-    const unread = notifications.filter((n) => !n.read);
+    const unread = mergedNotifications.filter((n) => !n.read);
     for (const n of unread) {
       try {
         await updateDoc(doc(db, 'notifications', n.id), {
@@ -2900,7 +3111,7 @@ function AmaroPlatform() {
     });
   };
 
-  // Circuit B Single Entry Point: Register Provider via "Promouvoir mes services" (Bloc 1)
+  // Circuit B Single Entry Point: Register Provider via "Promouvoir mes services" (onglet Pro)
   const handleRegisterProviderViaPromote = async (payload: {
     businessName: string;
     category: ServiceCategory;
@@ -2910,6 +3121,9 @@ function AmaroPlatform() {
     phone: string;
     whatsapp: string;
     email: string;
+    payoutMethod: 'Wave' | 'Orange Money' | 'MTN';
+    payoutNumber: string;
+    photos: ProviderApplicationPhoto[];
     taxOrRegistrationId: string;
     acceptedConvention: boolean;
     claimDirectoryServiceId?: string;
@@ -2928,46 +3142,34 @@ function AmaroPlatform() {
           companyName: payload.businessName,
           category: payload.category,
           cityId: payload.cityId,
+          publicZone: payload.publicZone,
+          countryCode: selectedCountryCode || 'CI',
           phone: payload.phone,
+          whatsapp: payload.whatsapp,
           contactEmail: payload.email,
-          description: `${payload.descriptionFr}${
-            payload.publicZone ? ` (Zone : ${payload.publicZone})` : ''
-          }`,
+          description: payload.descriptionFr,
+          payoutMethod: payload.payoutMethod,
+          payoutNumber: payload.payoutNumber,
+          registrationRef: payload.taxOrRegistrationId,
+          photos: payload.photos,
+          ...(payload.claimDirectoryServiceId?.trim()
+            ? { claimDirectoryServiceId: payload.claimDirectoryServiceId.trim() }
+            : {}),
         }),
       });
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        showToast(data?.error || 'Inscription prestataire refusée.');
+        showToast(data?.error || 'Demande partenaire refusée.');
         return false;
       }
 
-      const providerId = String(data.providerId || `prv-${authUser.uid.slice(0, 24)}`);
-      if (payload.claimDirectoryServiceId?.trim()) {
-        await updateDoc(doc(db, 'providers', providerId), {
-          claimedDirectoryServiceId: payload.claimDirectoryServiceId.trim().slice(0, 120),
-          updatedAt: serverTimestamp(),
-        }).catch(() => {});
-      }
-      await setDoc(
-        doc(db, 'providers', providerId, 'private', 'commercial'),
-        {
-          ownerId: authUser.uid,
-          contactEmail: payload.email.slice(0, 195),
-          contactPhone: (payload.whatsapp || payload.phone).slice(0, 38),
-          payoutChannel: payload.whatsapp ? `WhatsApp/MoMo ${payload.whatsapp}`.slice(0, 115) : '',
-          registrationRef: payload.taxOrRegistrationId.slice(0, 115),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      ).catch(() => {});
-
       showToast(
         data?.notice ||
-          'Candidature enregistrée avec le statut « En attente de validation ».'
+          'Statut : Demande en attente. L’administrateur AMARO va examiner votre demande.'
       );
       return true;
     } catch {
-      showToast('Erreur de communication lors de l’inscription prestataire.');
+      showToast('Erreur de communication lors de l’envoi de votre demande.');
       return false;
     }
   };
@@ -2985,13 +3187,14 @@ function AmaroPlatform() {
       contactEmail: string;
       contactPhone: string;
       payoutChannel: string;
+      payoutNumber?: string;
       registrationRef: string;
     }
   ) => {
     if (!authUser?.uid) return;
     if (!myProvider) {
       showToast(
-        'Veuillez passer par « Promouvoir mes services » pour inscrire votre établissement.'
+        'Veuillez passer par « Devenir partenaire » dans l’onglet Pro.'
       );
       setActiveTab('promote');
       return;
@@ -3015,13 +3218,14 @@ function AmaroPlatform() {
           contactEmail: priv.contactEmail.slice(0, 195),
           contactPhone: priv.contactPhone.slice(0, 38),
           payoutChannel: priv.payoutChannel.slice(0, 115),
+          payoutNumber: String(priv.payoutNumber || '').slice(0, 38),
           registrationRef: priv.registrationRef.slice(0, 115),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
 
-      showToast('Profil prestataire mis à jour.');
+      showToast('Profil partenaire mis à jour.');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `providers/${providerId}`);
     }
@@ -3037,65 +3241,52 @@ function AmaroPlatform() {
     capacity: number;
     durationMinutes: number;
     description: string;
+    customPhotoUrl?: string;
+    photoSource?: string;
     blockedDates: string[];
-  }) => {
-    if (!authUser?.uid || !myProvider) return;
-    const isVerifiedPartner = myProvider.verificationStatus === 'verified';
-    const serviceId = draft.id || makeSafeId('srv');
-    const { COUNTRIES_REGISTRY: loadedCountries, resolveItemEditorialImage } =
-      await loadAmaroRegistry();
-    const imgMeta = resolveItemEditorialImage({
-      category: draft.category,
-      cityId: draft.cityId,
-      title: draft.title,
-    });
-
+  }): Promise<boolean> => {
+    if (!authUser?.uid || !myProvider) return false;
     try {
-      const ref = doc(db, 'services', serviceId);
-      const snap = await getDoc(ref);
-      const commonFields = {
-        title: draft.title.slice(0, 155),
-        category: draft.category,
-        cityId: draft.cityId,
-        address: draft.address.slice(0, 230),
-        description: draft.description.slice(0, 1900),
-        priceAmount: Math.max(0, Number(draft.priceAmount)),
-        priceKnown: Number(draft.priceAmount) > 0,
-        durationMinutes: Math.max(15, Math.round(draft.durationMinutes)),
-        capacity: Math.max(1, Math.round(draft.capacity)),
-        blockedDates: draft.blockedDates.slice(0, 180),
-        // Bloc 1: Strictly draft / non-bookable until Admin validates the provider!
-        dataOrigin: isVerifiedPartner ? 'verified_partner' : 'pending_verification',
-        verificationStatus: isVerifiedPartner ? 'verified' : 'unverified',
-        status: isVerifiedPartner ? 'published' : 'draft',
-        updatedAt: serverTimestamp(),
-      };
-
-      if (snap.exists()) {
-        await updateDoc(ref, commonFields);
-      } else {
-        await setDoc(ref, {
-          providerId: myProvider.id,
-          ownerId: authUser.uid,
-          countryCode: myProvider.countryCode || selectedCountryCode || 'CI',
-          currency:
-            (loadedCountries.find(
-              (c) => c.code === (myProvider.countryCode || selectedCountryCode || 'CI')
-            )?.currency as CurrencyCode) || 'XOF',
-          imageKey: imgMeta.key,
-          imageLicense: imgMeta.license.slice(0, 195),
-          ...commonFields,
-          createdAt: serverTimestamp(),
-        });
+      const resp = await authorizedFetch('/api/amaro/provider/services/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || 'Impossible d’enregistrer cette prestation.');
+        return false;
       }
-
       showToast(
-        isVerifiedPartner
-          ? 'Offre Partenaire AMARO enregistrée et publiée.'
-          : 'Offre enregistrée en brouillon : elle sera publiée dès validation de votre dossier par l’administrateur AMARO.'
+        data?.message ||
+          (data?.requiresAdminValidation
+            ? 'Prestation enregistrée en attente de validation.'
+            : 'Prestation enregistrée et publiée.')
       );
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `services/${serviceId}`);
+      return true;
+    } catch {
+      showToast('Erreur réseau lors de l’enregistrement de la prestation.');
+      return false;
+    }
+  };
+
+  const handleDeleteProviderService = async (serviceId: string): Promise<boolean> => {
+    if (!authUser?.uid || !myProvider) return false;
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/provider/services/${encodeURIComponent(serviceId)}`,
+        { method: 'DELETE' }
+      );
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || 'Suppression refusée.');
+        return false;
+      }
+      showToast('Prestation supprimée.');
+      return true;
+    } catch {
+      showToast('Erreur réseau lors de la suppression.');
+      return false;
     }
   };
 
@@ -3145,38 +3336,74 @@ function AmaroPlatform() {
   };
 
   // Admin Governance Handlers
+  const handleAdminReviewProvider = async (params: {
+    providerId: string;
+    action: 'accept' | 'reject' | 'request_clarification' | 'set_trust';
+    reason?: string;
+    note?: string;
+    trustedPartner?: boolean;
+  }) => {
+    if (!isAdmin) {
+      showToast('Action réservée à l’administrateur (403).');
+      return;
+    }
+    try {
+      const isTrustOnly = params.action === 'set_trust';
+      const endpoint = isTrustOnly
+        ? `/api/amaro/admin/providers/${encodeURIComponent(params.providerId)}/trust`
+        : `/api/amaro/admin/providers/${encodeURIComponent(params.providerId)}/review`;
+      const resp = await authorizedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          isTrustOnly
+            ? { trustedPartner: Boolean(params.trustedPartner) }
+            : {
+                action: params.action,
+                ...(params.reason ? { reason: params.reason } : {}),
+                ...(params.note ? { note: params.note } : {}),
+                ...(typeof params.trustedPartner === 'boolean'
+                  ? { trustedPartner: params.trustedPartner }
+                  : {}),
+              }
+        ),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || 'Décision partenaire refusée.');
+        return;
+      }
+      await refreshAdminProviderPrivateMap();
+      await writeAuditLog(
+        'REVIEW_PROVIDER',
+        params.providerId,
+        `Décision partenaire : ${params.action}${params.reason ? ` (${params.reason})` : ''}${params.note ? ` (${params.note})` : ''}`
+      ).catch(() => {});
+      const label =
+        params.action === 'accept'
+          ? 'Demande partenaire acceptée.'
+          : params.action === 'reject'
+          ? 'Demande partenaire refusée.'
+          : params.action === 'request_clarification'
+          ? 'Demande de précisions envoyée au partenaire.'
+          : params.trustedPartner
+          ? 'Statut Partenaire de confiance activé.'
+          : 'Statut Partenaire de confiance retiré.';
+      showToast(label);
+    } catch {
+      showToast('Erreur réseau lors du traitement de la demande partenaire.');
+    }
+  };
+
   const handleAdminVerifyProvider = async (
     providerId: string,
     status: 'verified' | 'rejected'
   ) => {
-    try {
-      await updateDoc(doc(db, 'providers', providerId), {
-        verificationStatus: status,
-        updatedAt: serverTimestamp(),
-      });
-
-      const matchingServices = allCatalogueServices.filter(
-        (s) => s.providerId === providerId
-      );
-      for (const srv of matchingServices) {
-        await updateDoc(doc(db, 'services', srv.id), {
-          dataOrigin:
-            status === 'verified' ? 'verified_partner' : 'pending_verification',
-          verificationStatus: status === 'verified' ? 'verified' : 'unverified',
-          status: status === 'verified' ? 'published' : 'draft',
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      await writeAuditLog(
-        'VERIFY_PROVIDER',
-        providerId,
-        `Statut prestataire passé à ${status}`
-      );
-      showToast(`Prestataire mis à jour (${status}).`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `providers/${providerId}`);
-    }
+    await handleAdminReviewProvider({
+      providerId,
+      action: status === 'verified' ? 'accept' : 'reject',
+      ...(status === 'rejected' ? { reason: 'Dossier non retenu par l’administrateur' } : {}),
+    });
   };
 
   // Bloc 1: Link a registered provider account to an existing public directory listing in 1 click WITHOUT creating a duplicate
@@ -3348,57 +3575,39 @@ function AmaroPlatform() {
 
   const handleAdminSaveExtendedSettings = async (patch: Partial<SystemSettingDoc>) => {
     if (!authUser?.uid || !isAdmin) return;
-    const refBj = doc(db, 'system_settings', 'BJ');
-    const refCi = doc(db, 'system_settings', 'CI');
+    const { id: _ignore, ...cleanPatch } = patch as any;
     try {
-      const snap = await getDoc(refBj);
-      const base = snap.exists()
-        ? {}
-        : {
-            countryCode: 'BJ',
-            commissionPercent: countrySetting?.commissionPercent ?? 10,
-            serviceFeeFlat: countrySetting?.serviceFeeFlat ?? 1_000,
-            taxPercent: countrySetting?.taxPercent ?? 18,
-            currency: 'XOF',
-            createdAt: serverTimestamp(),
-          };
-      const { id: _ignore, ...cleanPatch } = patch as any;
-      await setDoc(
-        refBj,
-        {
-          ...base,
-          ...cleanPatch,
-          updatedBy: authUser.uid,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-      // Sync platform legal, Mobile Money, and fee settings into active Côte d’Ivoire doc so backend CI reads match admin settings
-      const { countryCode: _cc, ...ciPatch } = cleanPatch;
-      await setDoc(
-        refCi,
-        {
-          countryCode: 'CI',
-          currency: 'XOF',
-          commissionPercent:
-            ciPatch.commissionPercent ?? countrySetting?.commissionPercent ?? 10,
-          serviceFeeFlat:
-            ciPatch.serviceFeeFlat ?? countrySetting?.serviceFeeFlat ?? 1_000,
-          taxPercent: ciPatch.taxPercent ?? countrySetting?.taxPercent ?? 0,
-          ...ciPatch,
-          updatedBy: authUser.uid,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const resp = await authorizedFetch('/api/amaro/admin/system-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanPatch),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const errMsg = data?.error || `Erreur serveur (${resp.status}) lors de l’enregistrement.`;
+        showToast(errMsg);
+        return;
+      }
+      if (data?.setting) {
+        setCountrySetting((prev) => ({
+          ...(prev || ({ id: 'CI' } as SystemSettingDoc)),
+          ...data.setting,
+        }));
+      }
+      if (cleanPatch.countryOperationalStates) {
+        setPublicCountryStates((prev) => ({
+          ...prev,
+          ...cleanPatch.countryOperationalStates,
+        }));
+      }
       await writeAuditLog(
         'UPDATE_GOVERNANCE_SETTINGS',
         'CI_BJ',
         `Paramètres étendus mis à jour (${Object.keys(cleanPatch).join(', ')})`
       );
       showToast('Paramètres opérationnels et juridiques enregistrés.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'system_settings/BJ');
+    } catch {
+      showToast('Erreur réseau lors de l’enregistrement de la configuration système.');
     }
   };
 
@@ -3537,126 +3746,198 @@ function AmaroPlatform() {
 
   const handleAdminUpsertCatalogueService = async (payload: {
     serviceId?: string;
-    providerId: string;
-    title: string;
-    category: ServiceCategory;
-    cityId: string;
-    address: string;
-    description: string;
-    priceAmount: number;
-    priceKnown: boolean;
-    durationMinutes: number;
-    capacity: number;
-    dataOrigin: DataOriginType;
-    verificationStatus: VerificationLevel;
-    status: 'published' | 'draft' | 'archived';
-    imageKey: string;
+    providerId?: string;
+    countryCode?: string;
+    title?: string;
+    category?: ServiceCategory;
+    cityId?: string;
+    address?: string;
+    description?: string;
+    priceAmount?: number;
+    priceKnown?: boolean;
+    durationMinutes?: number;
+    capacity?: number;
+    dataOrigin?: DataOriginType;
+    verificationStatus?: VerificationLevel;
+    status?: 'published' | 'draft' | 'archived';
+    imageKey?: string;
     customPhotoUrl?: string;
     photoVerified?: boolean;
+    photoSource?: string;
+    photoUsageRights?: string;
     sourceName?: string;
+    sourceUrl?: string;
     verifiedAt?: string;
+    contactPhone?: string;
     isSacredOrCeremonial?: boolean;
     sacredNotice?: string;
     providerResponseHours?: number;
   }) => {
-    if (!authUser?.uid || !isAdmin) return;
+    if (!authUser?.uid || !isAdmin) return false;
+    const targetCountryCode = (payload.countryCode || selectedCountryCode || 'CI').toUpperCase();
     const cleanId = payload.serviceId
       ? payload.serviceId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120)
       : makeSafeId('srv-adm');
     const cleanProvId =
-      payload.providerId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'dir-admin-benin';
+      (payload.providerId || `dir-admin-${targetCountryCode.toLowerCase()}`)
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .slice(0, 120);
     const { COUNTRIES_REGISTRY: loadedCountries, resolveItemEditorialImage } =
       await loadAmaroRegistry();
-    const imgMeta = resolveItemEditorialImage({
-      title: payload.title,
-      category: payload.category,
-      cityId: payload.cityId,
-      imageKey: payload.imageKey,
-      customPhotoUrl: payload.customPhotoUrl,
-      photoVerified: payload.photoVerified,
-    });
+    const imgMeta =
+      payload.title || payload.imageKey || payload.customPhotoUrl
+        ? resolveItemEditorialImage({
+            title: payload.title || cleanId,
+            category: payload.category || 'site',
+            cityId: payload.cityId || 'abidjan',
+            imageKey: payload.imageKey,
+            customPhotoUrl: payload.customPhotoUrl,
+            photoVerified: payload.photoVerified,
+          })
+        : null;
 
-    const extraFields = {
-      ...(typeof payload.customPhotoUrl === 'string'
-        ? { customPhotoUrl: payload.customPhotoUrl.trim().slice(0, 650) }
-        : {}),
-      ...(typeof payload.photoVerified === 'boolean'
-        ? { photoVerified: payload.photoVerified }
-        : {}),
-      ...(typeof payload.sourceName === 'string'
-        ? { sourceName: payload.sourceName.trim().slice(0, 235) }
-        : {}),
-      ...(typeof payload.verifiedAt === 'string'
-        ? { verifiedAt: payload.verifiedAt.trim().slice(0, 32) }
-        : {}),
-      ...(typeof payload.isSacredOrCeremonial === 'boolean'
-        ? { isSacredOrCeremonial: payload.isSacredOrCeremonial }
-        : {}),
-      ...(typeof payload.sacredNotice === 'string'
-        ? { sacredNotice: payload.sacredNotice.trim().slice(0, 500) }
-        : {}),
-      ...(typeof payload.providerResponseHours === 'number' && payload.providerResponseHours > 0
-        ? { providerResponseHours: Math.round(payload.providerResponseHours) }
-        : {}),
-    };
+    const countryCurrency =
+      (loadedCountries.find((c) => c.code === targetCountryCode)?.currency as CurrencyCode) ||
+      'XOF';
 
-    const ref = doc(db, 'services', cleanId);
     try {
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        await updateDoc(ref, {
-          title: payload.title.slice(0, 155),
-          category: payload.category,
-          cityId: payload.cityId,
-          address: payload.address.slice(0, 230),
-          description: payload.description.slice(0, 1900),
-          priceAmount: payload.priceKnown ? Math.max(0, Number(payload.priceAmount)) : 0,
-          priceKnown: payload.priceKnown,
-          durationMinutes: Math.max(0, Math.round(payload.durationMinutes)),
-          capacity: Math.max(1, Math.round(payload.capacity)),
-          dataOrigin: payload.dataOrigin,
-          verificationStatus: payload.verificationStatus,
-          status: payload.status,
-          imageKey: payload.imageKey,
-          imageLicense: imgMeta.license.slice(0, 195),
-          ...extraFields,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(ref, {
+      const resp = await authorizedFetch('/api/amaro/admin/services/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceId: cleanId,
           providerId: cleanProvId,
-          ownerId: 'manual_concierge',
-          title: payload.title.slice(0, 155),
-          category: payload.category,
-          countryCode: selectedCountryCode || 'CI',
-          cityId: payload.cityId,
-          address: payload.address.slice(0, 230),
-          description: payload.description.slice(0, 1900),
-          priceAmount: payload.priceKnown ? Math.max(0, Number(payload.priceAmount)) : 0,
-          priceKnown: payload.priceKnown,
-          currency:
-            (loadedCountries.find((c) => c.code === (selectedCountryCode || 'CI'))
-              ?.currency as CurrencyCode) || 'XOF',
-          durationMinutes: Math.max(0, Math.round(payload.durationMinutes)),
-          capacity: Math.max(1, Math.round(payload.capacity)),
-          dataOrigin: payload.dataOrigin,
-          verificationStatus: payload.verificationStatus,
-          status: payload.status,
-          imageKey: payload.imageKey,
-          imageLicense: imgMeta.license.slice(0, 195),
-          ...extraFields,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+          countryCode: targetCountryCode,
+          currency: countryCurrency,
+          ...(payload.title !== undefined ? { title: payload.title.slice(0, 155) } : {}),
+          ...(payload.category !== undefined ? { category: payload.category } : {}),
+          ...(payload.cityId !== undefined ? { cityId: payload.cityId } : {}),
+          ...(payload.address !== undefined ? { address: payload.address.slice(0, 230) } : {}),
+          ...(payload.description !== undefined
+            ? { description: payload.description.slice(0, 1900) }
+            : {}),
+          ...(payload.priceAmount !== undefined ? { priceAmount: payload.priceAmount } : {}),
+          ...(payload.priceKnown !== undefined ? { priceKnown: payload.priceKnown } : {}),
+          ...(payload.durationMinutes !== undefined
+            ? { durationMinutes: Math.max(0, Math.round(payload.durationMinutes)) }
+            : {}),
+          ...(payload.capacity !== undefined
+            ? { capacity: Math.max(1, Math.round(payload.capacity)) }
+            : {}),
+          ...(payload.dataOrigin !== undefined ? { dataOrigin: payload.dataOrigin } : {}),
+          ...(payload.verificationStatus !== undefined
+            ? { verificationStatus: payload.verificationStatus }
+            : {}),
+          ...(payload.status !== undefined ? { status: payload.status } : {}),
+          ...(payload.imageKey !== undefined ? { imageKey: payload.imageKey } : {}),
+          ...(imgMeta?.license ? { imageLicense: imgMeta.license.slice(0, 195) } : {}),
+          ...(payload.customPhotoUrl !== undefined
+            ? { customPhotoUrl: payload.customPhotoUrl.trim().slice(0, 580) }
+            : {}),
+          ...(payload.photoVerified !== undefined ? { photoVerified: payload.photoVerified } : {}),
+          ...(payload.photoSource !== undefined
+            ? { photoSource: payload.photoSource.trim().slice(0, 230) }
+            : {}),
+          ...(payload.photoUsageRights !== undefined
+            ? { photoUsageRights: payload.photoUsageRights.trim().slice(0, 230) }
+            : {}),
+          ...(payload.sourceName !== undefined
+            ? { sourceName: payload.sourceName.trim().slice(0, 230) }
+            : {}),
+          ...(payload.sourceUrl !== undefined
+            ? { sourceUrl: payload.sourceUrl.trim().slice(0, 490) }
+            : {}),
+          ...(payload.verifiedAt !== undefined
+            ? { verifiedAt: payload.verifiedAt.trim().slice(0, 32) }
+            : {}),
+          ...(payload.contactPhone !== undefined
+            ? { contactPhone: payload.contactPhone.trim().slice(0, 58) }
+            : {}),
+          ...(payload.isSacredOrCeremonial !== undefined
+            ? { isSacredOrCeremonial: payload.isSacredOrCeremonial }
+            : {}),
+          ...(payload.sacredNotice !== undefined
+            ? { sacredNotice: payload.sacredNotice.trim().slice(0, 500) }
+            : {}),
+          ...(typeof payload.providerResponseHours === 'number' &&
+          payload.providerResponseHours > 0
+            ? { providerResponseHours: Math.round(payload.providerResponseHours) }
+            : {}),
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || `Échec d’enregistrement catalogue (${resp.status}).`);
+        return false;
       }
       await writeAuditLog(
         'UPSERT_CATALOGUE_SERVICE',
         cleanId,
-        `${payload.title} (${payload.dataOrigin} / ${payload.status})`
+        `${payload.title || cleanId} (${payload.status || 'maj'})`
       );
-      showToast(`Fiche catalogue ${cleanId} enregistrée dans Cloud Firestore.`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `services/${cleanId}`);
+      showToast(`Fiche catalogue « ${payload.title || cleanId} » enregistrée.`);
+      return true;
+    } catch {
+      showToast('Erreur réseau lors de l’enregistrement de la fiche catalogue.');
+      return false;
+    }
+  };
+
+  const handleAdminBatchCatalogueAction = async (
+    serviceIds: string[],
+    action: 'hide' | 'show' | 'mark_verified' | 'mark_to_confirm'
+  ) => {
+    if (!authUser?.uid || !isAdmin || serviceIds.length === 0) return false;
+    try {
+      const resp = await authorizedFetch('/api/amaro/admin/services/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceIds, action }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || `Action par lot refusée (${resp.status}).`);
+        return false;
+      }
+      await writeAuditLog(
+        'BATCH_CATALOGUE_ACTION',
+        `${action}_${serviceIds.length}`,
+        `Lot (${action}) sur ${serviceIds.length} fiche(s)`
+      );
+      showToast(`${data.updatedCount || serviceIds.length} fiche(s) mise(s) à jour.`);
+      return true;
+    } catch {
+      showToast('Erreur réseau lors de la modification en lot.');
+      return false;
+    }
+  };
+
+  const handleAdminDeleteCatalogueService = async (serviceId: string) => {
+    if (!authUser?.uid || !isAdmin || !serviceId) return false;
+    try {
+      const resp = await authorizedFetch(
+        `/api/amaro/admin/services/${encodeURIComponent(serviceId)}`,
+        { method: 'DELETE' }
+      );
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || `Suppression refusée (${resp.status}).`);
+        return false;
+      }
+      await writeAuditLog(
+        'DELETE_CATALOGUE_SERVICE',
+        serviceId,
+        data?.archivedStatic ? 'Fiche répertoire archivée par Admin' : 'Fiche supprimée par Admin'
+      );
+      showToast(
+        data?.archivedStatic
+          ? 'Fiche du répertoire masquée et archivée côté serveur.'
+          : 'Fiche supprimée définitivement.'
+      );
+      return true;
+    } catch {
+      showToast('Erreur réseau lors de la suppression de la fiche.');
+      return false;
     }
   };
 
@@ -4046,7 +4327,26 @@ function AmaroPlatform() {
     );
   }
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const mergedNotifications = useMemo(() => {
+    const byId = new Map<string, NotificationDoc>();
+    for (const n of notifications) byId.set(n.id, n);
+    if (isAdmin) {
+      for (const n of adminInboxNotifications) byId.set(n.id, n);
+    }
+    return Array.from(byId.values());
+  }, [notifications, adminInboxNotifications, isAdmin]);
+  const unreadCount = mergedNotifications.filter((n) => !n.read).length;
+  const isAdminPreviewActive = Boolean(
+    isAdmin &&
+      entryMode === 'country' &&
+      !isCountryOpen(selectedCountryCode, effectiveCountryStates, false)
+  );
+  const adminHiddenCount = isAdmin
+    ? adminExpandedCatalogue.filter((c) => c.status !== 'published').length
+    : 0;
+  const adminToVerifyCount = isAdmin
+    ? adminExpandedCatalogue.filter((c) => c.verificationStatus !== 'verified').length
+    : 0;
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -4066,6 +4366,8 @@ function AmaroPlatform() {
         onGoHome={handleGoHome}
         countryOperationalStates={effectiveCountryStates}
         isAdmin={isAdmin}
+        isAdminPreview={isAdminPreviewActive}
+        onAdminPreviewCountry={(code) => void handleAdminPreviewCountry(code)}
         isSignedIn={Boolean(authUser)}
         isSigningIn={isSigningIn}
         unreadNotifications={unreadCount}
@@ -4078,6 +4380,52 @@ function AmaroPlatform() {
         onSignIn={handleSignIn}
         onSignOut={() => void handleSignOut()}
       />
+
+      {isAdmin && (
+        <div
+          role="region"
+          aria-label="Mode administrateur"
+          className="no-print bg-amber-400 text-slate-950 border-b border-amber-500 px-3 sm:px-6 py-1.5"
+        >
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+            <div className="flex flex-wrap items-center gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>
+                Mode administrateur · {authUser?.email}
+              </span>
+              <span className="font-mono opacity-85">
+                ({adminHiddenCount} masquée(s) · {adminToVerifyCount} à vérifier)
+              </span>
+              {isAdminPreviewActive && (
+                <span className="px-2 py-0.5 rounded bg-[#0B192C] text-amber-300 font-bold">
+                  Aperçu pays fermé : {selectedCountryCode} reste « En préparation » pour les clients
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {isAdminPreviewActive && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminPreviewCountryCode(null);
+                    handleSelectCountry('CI');
+                  }}
+                  className="min-h-[44px] px-3 py-1 rounded-lg bg-[#0B192C] text-white font-bold"
+                >
+                  Quitter l’aperçu
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveTab('workspace')}
+                className="min-h-[44px] px-3 py-1 rounded-lg bg-white text-slate-950 border border-amber-600 font-bold"
+              >
+                Tableau d’administration
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toastMsg && (
         <div
@@ -4109,6 +4457,16 @@ function AmaroPlatform() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                {isAdmin && lockedAttemptCode && (
+                  <button
+                    type="button"
+                    onClick={() => void handleAdminPreviewCountry(lockedAttemptCode)}
+                    className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>Aperçu Admin (sans ouvrir aux clients)</span>
+                  </button>
+                )}
                 {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
                   <button
                     type="button"
@@ -4347,7 +4705,7 @@ function AmaroPlatform() {
                       <div
                         key={c.code}
                         aria-disabled="true"
-                        className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 flex flex-col justify-between gap-2 select-none cursor-not-allowed"
+                        className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 flex flex-col justify-between gap-2 select-none"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -4362,9 +4720,21 @@ function AmaroPlatform() {
                             {effState === 'cache' ? 'Fermé' : 'En préparation'}
                           </span>
                         </div>
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          Ouverture prochaine
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            Ouverture prochaine
+                          </span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => void handleAdminPreviewCountry(c.code)}
+                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Aperçu Admin</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -4384,9 +4754,17 @@ function AmaroPlatform() {
               onChangeCountryCode={handleSelectCountry}
               countryOperationalStates={effectiveCountryStates}
               isAdmin={isAdmin}
+              isAdminPreview={isAdminPreviewActive}
+              onAdminPreviewCountry={(code) => void handleAdminPreviewCountry(code)}
+              onExitAdminPreview={() => {
+                setAdminPreviewCountryCode(null);
+                handleSelectCountry('CI');
+              }}
+              onAdminUpsertCatalogueService={handleAdminUpsertCatalogueService}
+              onAdminDeleteCatalogueService={handleAdminDeleteCatalogueService}
               onGoHome={handleGoHome}
               rateInfo={rateInfo}
-              catalogue={combinedCatalogue}
+              catalogue={isAdmin ? adminExpandedCatalogue : combinedCatalogue}
               pilotStocks={publicActiveStocks}
               providerOffers={providerOffers}
               culturalStories={approvedStories}
@@ -4422,6 +4800,7 @@ function AmaroPlatform() {
               onCreateFolder={handleCreateFolder}
               onUpdateFolderBudget={handleUpdateFolderBudget}
               onUpdateFolderStatus={handleUpdateFolderStatus}
+              onDeleteFolder={handleDeleteFolder}
               folderItems={folderItems}
               onUpdateJourneyItem={handleUpdateJourneyItem}
               onDeleteJourneyItem={handleDeleteJourneyItem}
@@ -4435,7 +4814,7 @@ function AmaroPlatform() {
               onRequestAlternativeItem={handleRequestReservation}
               providerOffers={providerOffers}
               onClientUpdateReservationOffers={handleClientUpdateReservationOffers}
-              notifications={notifications}
+              notifications={mergedNotifications}
               onMarkNotificationRead={handleMarkNotificationRead}
               onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
               lastBrainDiagnostic={lastBrainDiagnostic}
@@ -4510,6 +4889,7 @@ function AmaroPlatform() {
               onRegisterProviderViaPromote={handleRegisterProviderViaPromote}
               onSaveProviderProfile={handleSaveProviderProfile}
               onCreateOrUpdateProviderService={handleCreateOrUpdatePromoteService}
+              onDeleteProviderService={handleDeleteProviderService}
               onProviderRespondReservation={async ({
                 reservation,
                 decision,
@@ -4568,12 +4948,17 @@ function AmaroPlatform() {
               countrySetting={countrySetting}
               allCatalogueServices={allCatalogueServices}
               allProviders={allProviders}
+              adminProviderPrivateMap={adminProviderPrivateMap}
               allReservations={allReservations}
               allFolders={allFolders}
               allStories={allStories}
               auditLogs={auditLogs}
               onAdminUpsertCatalogueService={handleAdminUpsertCatalogueService}
+              onAdminDeleteCatalogueService={handleAdminDeleteCatalogueService}
+              onAdminBatchCatalogueAction={handleAdminBatchCatalogueAction}
+              onAdminPreviewCountry={(code) => void handleAdminPreviewCountry(code)}
               onAdminVerifyProvider={handleAdminVerifyProvider}
+              onAdminReviewProvider={handleAdminReviewProvider}
               onAdminLinkProviderToDirectoryListing={handleAdminLinkProviderToDirectoryListing}
               onAdminModerateStory={handleAdminModerateStory}
               onAdminSaveExtendedSettings={handleAdminSaveExtendedSettings}

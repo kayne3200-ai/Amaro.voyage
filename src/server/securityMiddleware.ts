@@ -113,7 +113,7 @@ export function createFirebaseAdminTokenVerifier(expectedProjectId: string): Tok
     }
     return {
       uid: decoded.uid,
-      email: String(decoded.email || '').toLowerCase(),
+      email: String(decoded.email || '').trim().toLowerCase(),
       emailVerified: Boolean(decoded.email_verified),
       aud: String(decoded.aud || ''),
       signInProvider: String(decoded.firebase?.sign_in_provider || ''),
@@ -159,9 +159,10 @@ export function createRequireAuth(verifyToken: TokenVerifierFn) {
 
     try {
       const verified = await verifyToken(rawIdToken);
+      const normalizedEmail = String(verified.email || '').trim().toLowerCase();
       const isPasswordClient =
         verified.signInProvider === 'password' &&
-        verified.email !== BOOTSTRAPPED_ADMIN_EMAIL;
+        normalizedEmail !== BOOTSTRAPPED_ADMIN_EMAIL;
       if (!verified.uid || (!verified.emailVerified && !isPasswordClient)) {
         res.status(403).json({
           error: 'Compte utilisateur non vérifié.',
@@ -170,7 +171,7 @@ export function createRequireAuth(verifyToken: TokenVerifierFn) {
       }
       req.caller = {
         uid: verified.uid,
-        email: verified.email,
+        email: normalizedEmail,
         emailVerified: verified.emailVerified,
         rawIdToken,
       };
@@ -193,8 +194,9 @@ export function createRequireAdmin(
       const caller = req.caller;
       if (!caller) return;
 
+      const normalizedEmail = String(caller.email || '').trim().toLowerCase();
       const isBootstrappedOwner =
-        caller.emailVerified && caller.email === BOOTSTRAPPED_ADMIN_EMAIL;
+        caller.emailVerified && normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL;
       let isDelegatedAdmin = false;
       if (!isBootstrappedOwner) {
         try {
