@@ -302,6 +302,17 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
   // In-memory OTP verification store for anti-false reservation protection
   const otpVerificationStore = new Map<string, { code: string; expiresAt: number; phone: string }>();
 
+  // In-memory waitlist for upcoming countries ("Autres pays : bientôt")
+  const countryWaitlistEntries: Array<{
+    id: string;
+    countryCode: string;
+    countryName: string;
+    contact: string;
+    note: string;
+    locale: 'fr' | 'en';
+    createdAtIso: string;
+  }> = [];
+
   async function getVerifiedCurrencyRates() {
     const now = Date.now();
     if (cachedRates && now - cachedRatesFetchedAt < 30 * 60 * 1000) {
@@ -3813,6 +3824,73 @@ export function createAmaroApp(deps: AmaroAppDependencies): Express {
       total: list.length,
       openCount: list.filter((c) => c.state === 'ouvert').length,
       countries: list,
+    });
+  });
+
+  app.post('/api/amaro/country-waitlist', async (req: Request, res: Response) => {
+    const ip = getClientIp(req);
+    if (!publicApiLimiter.check(`waitlist:${ip}`)) {
+      res.status(429).json({
+        error: 'Trop de demandes envoyées depuis cette connexion. Merci de patienter une minute.',
+      });
+      return;
+    }
+
+    const rawCountry = String(req.body?.desiredCountry || req.body?.countryName || '').trim().slice(0, 100);
+    const rawCode = String(req.body?.countryCode || '').toUpperCase().trim().slice(0, 6);
+    const contact = String(req.body?.contact || '').trim().slice(0, 140);
+    const note = String(req.body?.note || '').trim().slice(0, 300);
+    const locale: 'fr' | 'en' = req.body?.locale === 'en' ? 'en' : 'fr';
+
+    if (rawCountry.length < 2 && rawCode.length < 2) {
+      res.status(400).json({ error: 'Indiquez le pays souhaité (au moins 2 caractères).' });
+      return;
+    }
+
+    const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact);
+    const digitsOnly = contact.replace(/[^0-9]/g, '');
+    const looksLikePhone = digitsOnly.length >= 6 && contact.length >= 6;
+    if (!looksLikeEmail && !looksLikePhone) {
+      res.status(400).json({
+        error: 'Indiquez une adresse e-mail valide ou un numéro WhatsApp / téléphone joignable.',
+      });
+      return;
+    }
+
+    const matchedCountry =
+      (rawCode ? getUNCountryByCode(rawCode) : null) ||
+      UN_193_COUNTRIES.find(
+        (c) => c.name.toLowerCase() === rawCountry.toLowerCase() || c.code.toLowerCase() === rawCountry.toLowerCase()
+      ) ||
+      null;
+
+    const entry = {
+      id: `wl-${crypto.randomBytes(6).toString('hex')}`,
+      countryCode: matchedCountry?.code || rawCode || '',
+      countryName: matchedCountry?.name || rawCountry,
+      contact,
+      note,
+      locale,
+      createdAtIso: new Date().toISOString(),
+    };
+
+    if (countryWaitlistEntries.length >= 2000) {
+      countryWaitlistEntries.shift();
+    }
+    countryWaitlistEntries.push(entry);
+
+    res.status(201).json({
+      ok: true,
+      id: entry.id,
+      countryName: entry.countryName,
+      message: `Votre contact a bien été enregistré pour être prévenu dès l’ouverture de : ${entry.countryName}.`,
+    });
+  });
+
+  app.get('/api/amaro/admin/country-waitlist', requireAdmin, async (_req: AuthedRequest, res: Response) => {
+    res.json({
+      ok: true,
+      entries: [...countryWaitlistEntries].reverse(),
     });
   });
 

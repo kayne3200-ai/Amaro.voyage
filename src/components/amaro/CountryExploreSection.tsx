@@ -97,14 +97,6 @@ export const CountryExploreSection: React.FC<CountryExploreSectionProps> = ({
             <div className="lg:col-span-4 flex flex-col gap-3">
               <button
                 type="button"
-                onClick={onOpenJourneyCta}
-                className="w-full min-h-[46px] px-5 py-2.5 text-sm font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors inline-flex items-center justify-center gap-2"
-              >
-                <Calendar className="w-4 h-4" />
-                <span>{smartJourneyCtaLabel}</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => {
                   onSelectCityFilter('all');
                 }}
@@ -113,8 +105,8 @@ export const CountryExploreSection: React.FC<CountryExploreSectionProps> = ({
                 <Compass className="w-4 h-4 text-teal-400" />
                 <span>
                   {locale === 'fr'
-                    ? `Consulter le catalogue (${countryItems.length} prestataires)`
-                    : `View directory (${countryItems.length} providers)`}
+                    ? `Voir les fiches du pays (${countryItems.length})`
+                    : `View listings (${countryItems.length})`}
                 </span>
               </button>
             </div>

@@ -21,16 +21,23 @@ import {
   RefreshCw,
   Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Trash2,
   Wallet,
   X,
 } from 'lucide-react';
+import {
+  GuidedStayBuilder,
+  type GuestGuidedStayDraft,
+  type GuidedExplorerJumpOptions,
+} from './GuidedStayBuilder';
 import type {
   AssistantDraftItinerary,
   CatalogueItem,
   CurrencyCode,
+  DossierFeeStatus,
   FolderExpenseEntry,
   FolderShareDoc,
   IdentityVerificationDoc,
@@ -235,9 +242,22 @@ interface JourneyHubViewProps {
   ) => Promise<void>;
   sessionDraft?: AssistantDraftItinerary | null;
   onApplyAssistantDraft?: (draft: AssistantDraftItinerary) => Promise<void>;
-  onOpenExplorer?: (cityId?: string, category?: ServiceCategory, serviceId?: string) => void;
+  onOpenExplorer?: (
+    cityId?: string,
+    category?: ServiceCategory,
+    serviceId?: string,
+    options?: GuidedExplorerJumpOptions
+  ) => void;
   onOpenAssistant?: () => void;
   selectedCountryCode?: string;
+  guestDraft: GuestGuidedStayDraft;
+  onUpdateGuestDraft: (
+    updater:
+      | GuestGuidedStayDraft
+      | ((prev: GuestGuidedStayDraft) => GuestGuidedStayDraft)
+  ) => void;
+  onDeleteGuestItem: (itemId: string) => Promise<void>;
+  onSubmitPlannedItems?: (items: JourneyItemDoc[]) => Promise<void>;
 }
 
 type JourneySubTab = 'agenda' | 'journal' | 'reservations';
@@ -343,6 +363,10 @@ export function JourneyHubView({
   onOpenExplorer,
   onOpenAssistant,
   selectedCountryCode = 'CI',
+  guestDraft,
+  onUpdateGuestDraft,
+  onDeleteGuestItem,
+  onSubmitPlannedItems,
 }: JourneyHubViewProps) {
   const t = TRANSLATIONS[locale] || TRANSLATIONS.fr;
 
@@ -355,6 +379,8 @@ export function JourneyHubView({
   }, [selectedCountryCode]);
 
   const [subTab, setSubTab] = useState<JourneySubTab>('agenda');
+  const [showOptionsDrawer, setShowOptionsDrawer] = useState<boolean>(false);
+  const [showAdvancedLifecycle, setShowAdvancedLifecycle] = useState<boolean>(false);
   const [lifecyclePhase, setLifecyclePhase] = useState<JourneyLifecyclePhase>('avant');
   const [showNewFolderForm, setShowNewFolderForm] = useState<boolean>(false);
   const [title, setTitle] = useState<string>(
@@ -625,8 +651,9 @@ export function JourneyHubView({
 
     const dossierFeeAmountXof =
       countrySetting?.dossierFeeXof ?? countrySetting?.dossierFeeAmount ?? 20000;
-    const effectiveFeeStatus =
-      localFeeOverrideStatus || activeFolder?.dossierFeeStatus || 'pending';
+    const effectiveFeeStatus: DossierFeeStatus = (localFeeOverrideStatus ||
+      activeFolder?.dossierFeeStatus ||
+      'pending') as DossierFeeStatus;
     const dossierFeeDeducted =
       effectiveFeeStatus === 'validated'
         ? convertValue(dossierFeeAmountXof, 'XOF', targetCur, rates)
@@ -1224,181 +1251,236 @@ export function JourneyHubView({
 
   if (!isSignedIn) {
     return (
-      <div className="max-w-4xl mx-auto px-4 md:px-8 py-12 pb-24 space-y-6">
+      <div className="max-w-5xl mx-auto px-4 md:px-8 py-6 sm:py-8 pb-24 space-y-6">
         {sessionDraft && (
-          <div className="p-6 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-slate-900 dark:to-slate-800 border-2 border-amber-300 dark:border-amber-700 rounded-2xl space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="px-2.5 py-1 rounded bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-200 text-xs font-bold uppercase tracking-wider">
-                Brouillon d’itinéraire conservé
+          <div className="p-4 sm:p-5 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5 text-xs">
+              <span className="font-bold text-amber-900 dark:text-amber-300">
+                Proposition de l’onglet Aide prête : {sessionDraft.title}
               </span>
-              <span className="font-mono text-xs text-slate-500">
-                {sessionDraft.preferredCities?.join(' · ') || currentCountry.nameFr}
-              </span>
-            </div>
-            <div>
-              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-                {sessionDraft.title}
-              </h2>
-              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-                {sessionDraft.summary}
+              <p className="text-slate-600 dark:text-slate-300">
+                Connectez-vous pour la transformer en dossier permanent ({sessionDraft.daysCount} jours).
               </p>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
-              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
-                <span className="text-xs text-slate-500 block">Durée</span>
-                <strong className="font-mono text-sm">{sessionDraft.daysCount} jours</strong>
-              </div>
-              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800">
-                <span className="text-xs text-slate-500 block">Voyageurs</span>
-                <strong className="font-mono text-sm">{sessionDraft.travelersCount} pers.</strong>
-              </div>
-              <div className="p-2.5 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 sm:col-span-2">
-                <span className="text-xs text-slate-500 block">Budget estimé</span>
-                <strong className="font-mono text-sm text-teal-700 dark:text-teal-400">
-                  {formatMoney(sessionDraft.estimatedTotalXof || 0, 'XOF')}
-                </strong>
-                <span className="text-xs text-slate-400 block truncate">
-                  {sessionDraft.hasPriceToVerify ? 'Prix à vérifier inclus' : 'Frais de dossier déductibles'}
-                </span>
-              </div>
-            </div>
-            <div className="space-y-2 pt-2 border-t border-amber-200 dark:border-slate-700">
-              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Programme proposé ({(sessionDraft.dailySteps || sessionDraft.steps || []).length} étapes réelles) :
-              </span>
-              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                {(sessionDraft.dailySteps || sessionDraft.steps || []).map((st, idx) => (
-                  <div
-                    key={idx}
-                    className="p-2.5 rounded-lg bg-white/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs flex items-center justify-between gap-2"
-                  >
-                    <div className="min-w-0">
-                      <span className="font-bold text-slate-900 dark:text-slate-100">
-                        Jour {st.day} ({st.cityId}) :
-                      </span>{' '}
-                      <span className="text-slate-700 dark:text-slate-300 truncate">
-                        {st.serviceTitle}
-                      </span>
-                    </div>
-                    <span className="shrink-0 px-2 py-0.5 rounded text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      {st.isPartnerVerified ? 'Partenaire AMARO' : 'Recensé, non vérifié'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={onRequireSignIn}
-                className="min-h-[44px] px-5 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
-              >
-                Se connecter pour créer ce voyage dans mon dossier permanent
-              </button>
-              {onOpenAssistant && (
-                <button
-                  type="button"
-                  onClick={onOpenAssistant}
-                  className="min-h-[44px] px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
-                >
-                  Modifier par la conversation
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={onRequireSignIn}
+              className="min-h-[42px] px-4 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl"
+            >
+              Se connecter
+            </button>
           </div>
         )}
 
-        <div className="p-6 sm:p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
-          <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
-            Espace Voyage Personnel Permanent · Carnet Électronique &amp; Budget Guardian (100 % Gratuit)
-          </p>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
-            Connectez-vous pour ouvrir votre Dossier de Voyage et votre Carnet Souvenir
-          </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed max-w-2xl">
-            Retrouvez automatiquement votre itinéraire actif à travers les villes et étapes de {currentCountry.nameFr} sans jamais créer de doublon involontaire : contrôle d’agenda Journey Brain, transporteur unique par séjour, suivi budgétaire en 6 états et Carnet de Voyage Électronique imprimable en PDF.
-          </p>
-          <button
-            type="button"
-            onClick={onRequireSignIn}
-            className="min-h-[46px] px-6 py-2.5 text-sm font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors"
-          >
-            Se connecter ou créer un compte (Google ou E-mail)
-          </button>
-        </div>
+        <GuidedStayBuilder
+          locale={locale}
+          displayCurrency={displayCurrency}
+          rateInfo={rateInfo}
+          countryCode={selectedCountryCode}
+          countrySetting={countrySetting}
+          isSignedIn={false}
+          onRequireSignIn={onRequireSignIn}
+          activeFolder={null}
+          items={guestDraft.items}
+          clientReservations={[]}
+          catalogue={catalogue}
+          effectiveFeeStatus="pending"
+          dossierFeeAmountXof={countrySetting?.dossierFeeXof ?? countrySetting?.dossierFeeAmount ?? 20000}
+          guestDraft={guestDraft}
+          onUpdateGuestDraft={onUpdateGuestDraft}
+          onOpenExplorer={(cityId, category, serviceId, options) =>
+            onOpenExplorer?.(cityId, category, serviceId, options)
+          }
+          onDeleteItem={onDeleteGuestItem}
+        />
       </div>
     );
   }
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 pb-24 md:pb-12 space-y-6">
-      {/* Header & Folder Selector (Hidden on PDF Print) */}
-      <div className="no-print flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-teal-700 dark:text-teal-400">
-            Espace Voyage Personnel Permanent · Dossier Intelligent &amp; Carnet Souvenir
+      {/* Clean Header Bar + "Options du dossier" Drawer */}
+      <div className="no-print flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
+        <div className="space-y-0.5 min-w-0">
+          <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+            Mon séjour · {currentCountry.nameFr}
           </p>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">
-            {activeFolder ? activeFolder.title : 'Mon Espace Voyage AMARO'}
+          <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 truncate">
+            {activeFolder ? activeFolder.title : `Préparer mon séjour — ${currentCountry.nameFr}`}
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {folders.length > 0 && (
-            <select
-              value={activeFolder?.id || ''}
-              onChange={(e) => onSelectFolder(e.target.value)}
-              aria-label="Choisir le dossier de voyage actif ou passé"
-              className="min-h-[44px] px-3.5 py-2 text-xs sm:text-sm font-medium bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+        <div className="flex flex-wrap items-center gap-2">
+          {subTab !== 'agenda' && (
+            <button
+              type="button"
+              onClick={() => setSubTab('agenda')}
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#0B192C] rounded-xl"
             >
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  [{FOLDER_STATUS_LABELS[f.status]}] {f.title} ({f.startDate} → {f.endDate})
-                </option>
-              ))}
-            </select>
+              <span>← Retour au parcours guidé</span>
+            </button>
           )}
 
-          {activeFolder && activeFolder.status !== 'archived' && (
-            <select
-              value={activeFolder.status}
-              onChange={(e) =>
-                void onUpdateFolderStatus(
-                  activeFolder.id,
-                  e.target.value as JourneyFolderDoc['status']
-                )
-              }
-              aria-label="État d'avancement du voyage"
-              className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-teal-50 dark:bg-teal-950/50 text-teal-900 dark:text-teal-300 border border-teal-200 dark:border-teal-800 rounded-xl"
+          {folderReservations.length > 0 && subTab !== 'reservations' && (
+            <button
+              type="button"
+              onClick={() => setSubTab('reservations')}
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-teal-50 dark:bg-teal-950/50 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800 rounded-xl"
             >
-              <option value="planning">Statut : En préparation</option>
-              <option value="active">Statut : Voyage en cours</option>
-              <option value="completed">Statut : Terminé (Carnet souvenir)</option>
-            </select>
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Suivi réservations ({folderReservations.length})</span>
+            </button>
           )}
 
           <button
             type="button"
-            onClick={() => setShowNewFolderForm((v) => !v)}
-            className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0B192C] dark:bg-amber-400 dark:text-slate-950 rounded-xl"
+            onClick={() => setShowOptionsDrawer((v) => !v)}
+            aria-expanded={showOptionsDrawer}
+            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl hover:border-slate-400"
           >
-            <FolderPlus className="w-4 h-4" />
-            <span>Nouveau voyage</span>
+            <SlidersHorizontal className="w-4 h-4" />
+            <span>Options du dossier</span>
           </button>
-
-          {activeFolder && onDeleteFolder && (
-            <button
-              type="button"
-              onClick={() => setDeleteFolderConfirmOpen(true)}
-              data-testid="delete-journey-folder-btn"
-              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800 rounded-xl transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Supprimer ce dossier</span>
-            </button>
-          )}
         </div>
       </div>
+
+      {/* Collapsible Secondary Drawer: Carnet souvenir, Historique, Partage famille, Budget détaillé, PDF, Suppression */}
+      {showOptionsDrawer && (
+        <section className="no-print p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+              Options du dossier (carnet, historique, partage, paramètres)
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowOptionsDrawer(false)}
+              aria-label="Fermer les options du dossier"
+              className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {folders.length > 0 && (
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Historique / Changer de dossier
+                </label>
+                <select
+                  value={activeFolder?.id || ''}
+                  onChange={(e) => onSelectFolder(e.target.value)}
+                  className="w-full min-h-[42px] px-3 py-1.5 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                >
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      [{FOLDER_STATUS_LABELS[f.status]}] {f.title} ({f.startDate})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {activeFolder && activeFolder.status !== 'archived' && (
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Avancement du séjour
+                </label>
+                <select
+                  value={activeFolder.status}
+                  onChange={(e) =>
+                    void onUpdateFolderStatus(
+                      activeFolder.id,
+                      e.target.value as JourneyFolderDoc['status']
+                    )
+                  }
+                  className="w-full min-h-[42px] px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                >
+                  <option value="planning">En préparation</option>
+                  <option value="active">Voyage en cours</option>
+                  <option value="completed">Terminé (Carnet souvenir)</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {activeFolder && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubTab('journal');
+                    setShowOptionsDrawer(false);
+                  }}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>Carnet souvenir ({logbookSummary.progressPct} %)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubTab('reservations');
+                    setShowOptionsDrawer(false);
+                  }}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Réservations &amp; Notifications ({folderReservations.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedLifecycle((v) => !v)}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                >
+                  <Wallet className="w-3.5 h-3.5" />
+                  <span>
+                    {showAdvancedLifecycle
+                      ? 'Masquer budget & partage avancé'
+                      : 'Budget détaillé, dépenses & partage famille'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-teal-700 text-white"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Exporter PDF</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowNewFolderForm((v) => !v);
+                setShowOptionsDrawer(false);
+              }}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#0B192C] text-white dark:bg-amber-400 dark:text-slate-950"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>Nouveau dossier</span>
+            </button>
+
+            {activeFolder && onDeleteFolder && (
+              <button
+                type="button"
+                onClick={() => setDeleteFolderConfirmOpen(true)}
+                data-testid="delete-journey-folder-btn"
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800 rounded-xl"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Supprimer ce dossier</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       {deletedFolderFeedback && (
         <section
@@ -1416,200 +1498,23 @@ export function JourneyHubView({
                 Le dossier « {deletedFolderFeedback.title} » a été supprimé définitivement
               </h2>
               <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
-                <strong>{deletedFolderFeedback.reservationsCount}</strong> réservation(s) associée(s), vos étapes d’itinéraire et vos pièces liées ont été supprimées (<strong>0 donnée de réservation conservée</strong> pour ce dossier). Les créneaux prestataires ont été libérés pour protéger la disponibilité du site.
+                <strong>{deletedFolderFeedback.reservationsCount}</strong> réservation(s) associée(s), vos étapes d’itinéraire et vos pièces liées ont été supprimées.
               </p>
             </div>
             <button
               type="button"
               onClick={() => setDeletedFolderFeedback(null)}
               aria-label="Fermer cette confirmation"
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-emerald-100"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2.5 pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setShowNewFolderForm(true);
-                setTimeout(() => {
-                  document
-                    .getElementById('create-new-folder-form')
-                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }, 50);
-              }}
-              className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-[#0B192C] hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 rounded-xl transition-colors"
-            >
-              <FolderPlus className="w-4 h-4" />
-              <span>Créer un nouveau dossier de voyage</span>
-            </button>
-          </div>
         </section>
       )}
 
-      {/* Partie 3: Unified Dossier de Voyage Synthesis Strip */}
-      {activeFolder && (
-        <section className="no-print p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs tabular-nums">
-          <div>
-            <span className="text-slate-500 block">Dates &amp; Fuseau</span>
-            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
-              {activeFolder.startDate} → {activeFolder.endDate}
-            </strong>
-            <span className="text-xs text-teal-700 dark:text-teal-400">
-              {currentCountry.timezone || 'Fuseau local'}
-            </span>
-          </div>
-          <div>
-            <span className="text-slate-500 block">Voyageurs</span>
-            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
-              {activeFolder.travelersCount} personne(s)
-            </strong>
-            <span className="text-xs text-slate-400 capitalize">
-              Base : {activeFolder.primaryCityId}
-            </span>
-          </div>
-          <div>
-            <span className="text-slate-500 block">Hébergements prévus</span>
-            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
-              {
-                folderItems.filter((i) => i.category === 'accommodation').length
-              }{' '}
-              étape(s)
-            </strong>
-            <span className="text-xs text-slate-400">Multi-étapes suivi</span>
-          </div>
-          <div>
-            <span className="text-slate-500 block">Transport principal</span>
-            <strong className="text-slate-900 dark:text-slate-100 block truncate">
-              {activeTransportProvider ? activeTransportProvider.title : 'Libre / Non défini'}
-            </strong>
-            <span className="text-xs text-slate-400">Courses VTC permises</span>
-          </div>
-          <div>
-            <span className="text-slate-500 block">Réservations actives</span>
-            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
-              {
-                folderReservations.filter(
-                  (r) => !['cancelled', 'rejected'].includes(r.status)
-                ).length
-              }{' '}
-              active(s)
-            </strong>
-            <span className="text-xs text-emerald-700 dark:text-emerald-400">
-              {
-                folderReservations.filter((r) => r.paymentStatus === 'succeeded').length
-              }{' '}
-              reçu(s) émis
-            </span>
-          </div>
-          <div>
-            <span className="text-slate-500 block">Reste à payer confirmé</span>
-            <strong className="font-mono text-slate-900 dark:text-slate-100 block">
-              {formatMoney(budgetBreakdown.remainingToPay, budgetBreakdown.targetCur)}
-            </strong>
-            <span className="text-xs text-slate-400">Hors annulées / estimées</span>
-          </div>
-        </section>
-      )}
-
-      {/* Sub-navigation between Itinerary/Budget, Electronic Logbook, and Reservations */}
-      {activeFolder && (
-        <div className="no-print flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <button
-              type="button"
-              onClick={() => setSubTab('agenda')}
-              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap shadow-sm transition-all ${
-                subTab === 'agenda'
-                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 font-bold'
-                  : 'bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-amber-400'
-              }`}
-            >
-              <Calendar className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <span>1. Agenda Électronique Automatique &amp; Budget ({folderItems.length} étapes)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('journal')}
-              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
-                subTab === 'journal'
-                  ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>
-                2. Carnet de Voyage Électronique ({logbookSummary.progressPct} %)
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('reservations')}
-              className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl whitespace-nowrap transition-colors ${
-                subTab === 'reservations'
-                  ? 'bg-[#0B192C] text-white dark:bg-teal-500 dark:text-slate-950'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
-              }`}
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>
-                3. Suivre mes réservations &amp; Notifications ({folderReservations.length})
-              </span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-xl"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Exporter en PDF (Itinéraire / Carnet)</span>
-            </button>
-
-            {(() => {
-              const rawWa =
-                countrySetting?.amaroWhatsappNumber &&
-                countrySetting.amaroWhatsappNumber !== OWNER_PLACEHOLDER
-                  ? countrySetting.amaroWhatsappNumber
-                  : countrySetting?.supportWhatsappNumber &&
-                    countrySetting.supportWhatsappNumber !== OWNER_PLACEHOLDER
-                  ? countrySetting.supportWhatsappNumber
-                  : '';
-              const digits = rawWa.replace(/[^0-9]/g, '');
-              if (digits.length < 8) {
-                return (
-                  <span className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <MessageCircle className="w-4 h-4 text-teal-600" />
-                    <span>Assistance dossier en ligne</span>
-                  </span>
-                );
-              }
-              return (
-                <a
-                  href={`https://wa.me/${digits}?text=${encodeURIComponent(
-                    `Bonjour AMARO.VOYAGE, besoin d'assistance pour mon dossier "${activeFolder.title}" (${activeFolder.id}).`
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl"
-                >
-                  <MessageCircle className="w-4 h-4" />
-                  <span>Support WhatsApp</span>
-                </a>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* 3 Visible Lifecycle Phases (9.1): Avant / Pendant / Après le voyage */}
-      {activeFolder && (
+      {/* Lifecycle & Dossier Details (accessible on demand via Options du dossier) */}
+      {activeFolder && showAdvancedLifecycle && (
         <section className="no-print p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -2217,83 +2122,8 @@ export function JourneyHubView({
         </section>
       )}
 
-      {/* Prominent Automatic Electronic Agenda Showcase (when 0 folders) */}
-      {folders.length === 0 && (
-        <section className="no-print p-6 sm:p-8 bg-gradient-to-br from-[#0B192C] to-slate-900 text-white rounded-3xl border border-slate-800 shadow-xl space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-xs font-bold">
-              <Calendar className="w-4 h-4 text-amber-400" />
-              <span>Agenda Électronique Automatique Journey Brain</span>
-            </div>
-            <span className="text-xs text-slate-400">
-              Destination active : <strong className="text-white">{currentCountry.nameFr}</strong> ({currentCountry.code})
-            </span>
-          </div>
-
-          <div className="space-y-3 max-w-3xl">
-            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white leading-snug">
-              Votre Agenda Électronique Automatique &amp; Contrôle de Cohérence en Temps Réel
-            </h2>
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Sur AMARO, votre agenda se structure automatiquement sans saisie fastidieuse. Dès l’ajout d’un hébergement, d’un transport ou d’une visite, le moteur Journey Brain vérifie la chronologie, alerte contre les conflits horaires et applique la règle du transporteur unique pour garantir un voyage fluide en {currentCountry.nameFr}.
-            </p>
-          </div>
-
-          {/* 4 Pillars Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
-            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-amber-400/20 text-amber-300 flex items-center justify-center font-bold text-xs">
-                1
-              </div>
-              <h3 className="font-display text-xs font-bold text-white">
-                Chronologie Automatique
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Vos étapes s’ordonnent instantanément par jour et heure. Zéro risque de chevauchement.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-teal-400/20 text-teal-300 flex items-center justify-center font-bold text-xs">
-                2
-              </div>
-              <h3 className="font-display text-xs font-bold text-white">
-                Détecteur de Conflits
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Diagnostic en direct sur les temps de trajet entre villes et les doublons de réservation.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-400/20 text-emerald-300 flex items-center justify-center font-bold text-xs">
-                3
-              </div>
-              <h3 className="font-display text-xs font-bold text-white">
-                Transporteur Unique
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Un seul loueur principal attitré par séjour, avec courses urbaines libres (VTC/taxis).
-              </p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-indigo-400/20 text-indigo-300 flex items-center justify-center font-bold text-xs">
-                4
-              </div>
-              <h3 className="font-display text-xs font-bold text-white">
-                Budget Réel &amp; PDF
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Suivi transparent des 6 états de dépenses et carnet souvenir imprimable en un clic.
-              </p>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Create New Journey Folder Form */}
-      {(showNewFolderForm || folders.length === 0) && (
+      {/* Create New Journey Folder Form (only opened when explicitly requested via Options du dossier) */}
+      {showNewFolderForm && (
         <form
           id="create-new-folder-form"
           onSubmit={handleCreateSubmit}
@@ -2528,9 +2358,208 @@ export function JourneyHubView({
         )}
 
       {/* =====================================================================
-          SUB-TAB 1: ITINÉRAIRE & AMARO BUDGET GUARDIAN
+          SUB-TAB 1: PARCOURS GUIDÉ CHRONOLOGIQUE EN 5 ÉTAPES
          ===================================================================== */}
-      {activeFolder && subTab === 'agenda' && (
+      {subTab === 'agenda' && (
+        <GuidedStayBuilder
+          locale={locale}
+          displayCurrency={displayCurrency}
+          rateInfo={rateInfo}
+          countryCode={selectedCountryCode}
+          countrySetting={countrySetting}
+          isSignedIn={isSignedIn}
+          onRequireSignIn={onRequireSignIn}
+          activeFolder={activeFolder}
+          items={folderItems}
+          clientReservations={clientReservations}
+          catalogue={catalogue}
+          effectiveFeeStatus={budgetBreakdown.effectiveFeeStatus}
+          dossierFeeAmountXof={budgetBreakdown.dossierFeeAmountXof}
+          guestDraft={guestDraft}
+          onUpdateGuestDraft={onUpdateGuestDraft}
+          onOpenExplorer={(cityId, category, serviceId, options) =>
+            onOpenExplorer?.(cityId, category, serviceId, options)
+          }
+          onDeleteItem={onDeleteJourneyItem}
+          onUpdateItem={onUpdateJourneyItem}
+          onSubmitPlannedItems={onSubmitPlannedItems}
+          onOpenReservationsTab={() => setSubTab('reservations')}
+          dossierFeeSection={
+            activeFolder ? (
+              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-800/70 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Déclaration des frais de dossier ({formatMoney(budgetBreakdown.dossierFeeAmountXof, 'XOF')})
+                  </h4>
+                  <span className="px-2.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300 text-xs font-bold">
+                    {budgetBreakdown.effectiveFeeStatus === 'validated'
+                      ? 'Validé (déductible)'
+                      : budgetBreakdown.effectiveFeeStatus === 'in_verification' ||
+                        budgetBreakdown.effectiveFeeStatus === 'declared'
+                      ? 'Déclaré · En vérification'
+                      : 'À déclarer'}
+                  </span>
+                </div>
+
+                {(() => {
+                  const waveNum = cleanClientSettingValue(countrySetting?.waveNumber);
+                  const omNum = cleanClientSettingValue(countrySetting?.orangeMoneyNumber);
+                  const mtnNum = cleanClientSettingValue(countrySetting?.mtnMoneyNumber);
+                  const fallbackNum = cleanClientSettingValue(countrySetting?.amaroMobileMoneyNumber);
+                  const holder = cleanClientSettingValue(countrySetting?.amaroMobileMoneyHolder);
+                  const hasAnyNum = Boolean(waveNum || omNum || mtnNum || fallbackNum);
+                  return hasAnyNum ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-mono text-slate-700 dark:text-slate-300">
+                      {waveNum && (
+                        <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                          <span className="font-sans text-slate-500 block">Wave {holder ? `(${holder})` : ''}</span>
+                          <strong>{waveNum}</strong>
+                        </div>
+                      )}
+                      {omNum && (
+                        <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                          <span className="font-sans text-slate-500 block">Orange Money</span>
+                          <strong>{omNum}</strong>
+                        </div>
+                      )}
+                      {mtnNum && (
+                        <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                          <span className="font-sans text-slate-500 block">MTN Money</span>
+                          <strong>{mtnNum}</strong>
+                        </div>
+                      )}
+                      {!waveNum && !omNum && !mtnNum && fallbackNum && (
+                        <div className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 sm:col-span-3">
+                          <span className="font-sans text-slate-500 block">Mobile Money AMARO</span>
+                          <strong>{fallbackNum}</strong>
+                        </div>
+                      )}
+                    </div>
+                  ) : null;
+                })()}
+
+                {(budgetBreakdown.effectiveFeeStatus === 'declared' ||
+                  budgetBreakdown.effectiveFeeStatus === 'in_verification') && (
+                  <p className="text-xs text-amber-800 dark:text-amber-200 font-medium">
+                    Votre règlement est enregistré et en cours de vérification par l’équipe AMARO avant l’envoi de vos réservations.
+                  </p>
+                )}
+
+                {['pending', 'not_required', 'rejected', 'unpaid'].includes(
+                  budgetBreakdown.effectiveFeeStatus
+                ) && (
+                  <form onSubmit={(e) => void handleDeclareDossierFee(e)} className="space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                      <select
+                        value={feePaymentMethod}
+                        onChange={(e) => setFeePaymentMethod(e.target.value)}
+                        className="min-h-[42px] px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      >
+                        {Array.from(
+                          new Set([
+                            ...(currentCountry.paymentMethods || []),
+                            'Virement bancaire',
+                            'Carte bancaire',
+                          ])
+                        ).map((pm) => (
+                          <option key={pm} value={pm}>
+                            {pm}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        value={feePayerName}
+                        onChange={(e) => setFeePayerName(e.target.value)}
+                        placeholder="Nom du titulaire payeur *"
+                        className="min-h-[42px] px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      />
+                      <div className="space-y-1">
+                        <input
+                          type="tel"
+                          required
+                          value={feePayerPhone}
+                          onChange={(e) => {
+                            setFeePayerPhone(e.target.value);
+                            setIsPhoneVerified(false);
+                          }}
+                          placeholder={`Téléphone (${currentCountry.protocols?.dialingCode || '+225'})`}
+                          className="w-full min-h-[42px] px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                        <div className="text-xs">
+                          {isPhoneVerified ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Vérifié (OTP)</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setShowOtpModal(true)}
+                              className="text-teal-700 dark:text-teal-400 font-semibold hover:underline"
+                            >
+                              Vérifier par OTP
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        minLength={4}
+                        value={feeTxRef}
+                        onChange={(e) => setFeeTxRef(e.target.value)}
+                        placeholder="Référence transaction *"
+                        className="min-h-[42px] px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                    </div>
+                    <label className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={acceptedCgvForFee}
+                        onChange={(e) => setAcceptedCgvForFee(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        J’accepte les{' '}
+                        <button
+                          type="button"
+                          onClick={() => onOpenLegalDoc?.('cgv_client')}
+                          className="underline font-bold"
+                        >
+                          CGV Client
+                        </button>{' '}
+                        et la{' '}
+                        <button
+                          type="button"
+                          onClick={() => onOpenLegalDoc?.('politique_annulation')}
+                          className="underline font-bold"
+                        >
+                          Politique d’annulation
+                        </button>
+                        .
+                      </span>
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={!acceptedCgvForFee || declaringFee}
+                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0B192C] text-white text-xs font-bold disabled:opacity-50"
+                    >
+                      {declaringFee
+                        ? 'Transmission...'
+                        : 'Déclarer mon règlement des frais de dossier'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            ) : undefined
+          }
+        />
+      )}
+
+      {activeFolder && subTab === 'agenda' && showAdvancedLifecycle && (
         <>
           <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3">

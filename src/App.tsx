@@ -66,16 +66,14 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
-  Compass,
   Eye,
   Globe2,
   Lock,
-  Search,
   ShieldCheck,
+  X,
 } from 'lucide-react';
 import {
   UN_193_COUNTRIES,
-  getEffectiveCountryState,
   getUNCountryByCode,
   isCountryOpen,
   type CountryOperationalState,
@@ -87,6 +85,11 @@ import {
 import { AmaroHeader, type AmaroTab } from './components/amaro/AmaroHeader';
 import type { ExplorerBookingExtras } from './components/amaro/ExplorerView';
 import type { LegalDocKey } from './components/amaro/LegalAndCharterModal';
+import {
+  GUEST_GUIDED_DRAFT_KEY,
+  createDefaultGuestGuidedDraft,
+  type GuestGuidedStayDraft,
+} from './components/amaro/GuidedStayBuilder';
 
 type AmaroRegistryModule = typeof import('./data/amaroRegistry');
 let cachedRegistryPromise: Promise<AmaroRegistryModule> | null = null;
@@ -287,6 +290,9 @@ function AmaroPlatform() {
     cityId?: string;
     category?: ServiceCategory;
     itemId?: string;
+    date?: string;
+    targetStep?: number;
+    targetDayLabel?: string;
     nonce: number;
   } | null>(null);
   const [locale, setLocale] = useState<LocaleCode>('fr');
@@ -311,8 +317,12 @@ function AmaroPlatform() {
     if (req && isCountryOpen(req)) return req;
     return 'CI';
   });
-  const [homeSearchQuery, setHomeSearchQuery] = useState<string>('');
-  const [homeContinentFilter, setHomeContinentFilter] = useState<string>('Tous');
+  const [showWaitlistModal, setShowWaitlistModal] = useState<boolean>(false);
+  const [waitlistCountry, setWaitlistCountry] = useState<string>('Bénin');
+  const [waitlistContact, setWaitlistContact] = useState<string>('');
+  const [waitlistNote, setWaitlistNote] = useState<string>('');
+  const [waitlistSubmitting, setWaitlistSubmitting] = useState<boolean>(false);
+  const [waitlistDoneMsg, setWaitlistDoneMsg] = useState<string>('');
   const [isDark, setIsDark] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocKey | null>(null);
@@ -413,6 +423,56 @@ function AmaroPlatform() {
   const handleUpdateSessionDraft = useCallback((draft: AssistantDraftItinerary | null) => {
     setSessionDraft(draft);
   }, []);
+
+  const [guestGuidedDraft, setGuestGuidedDraft] = useState<GuestGuidedStayDraft>(() => {
+    try {
+      const raw = localStorage.getItem(GUEST_GUIDED_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<GuestGuidedStayDraft>;
+        if (parsed && typeof parsed === 'object') {
+          return {
+            ...createDefaultGuestGuidedDraft(parsed.countryCode || 'CI'),
+            ...parsed,
+            items: Array.isArray(parsed.items) ? parsed.items : [],
+          };
+        }
+      }
+    } catch {
+      // ignore storage read error
+    }
+    return createDefaultGuestGuidedDraft('CI');
+  });
+
+  const handleUpdateGuestDraft = useCallback(
+    (
+      updater:
+        | GuestGuidedStayDraft
+        | ((prev: GuestGuidedStayDraft) => GuestGuidedStayDraft)
+    ) => {
+      setGuestGuidedDraft((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        try {
+          localStorage.setItem(GUEST_GUIDED_DRAFT_KEY, JSON.stringify(next));
+        } catch {
+          // ignore storage quota errors
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleDeleteGuestItem = useCallback(
+    async (itemId: string) => {
+      handleUpdateGuestDraft((prev) => ({
+        ...prev,
+        items: prev.items.filter((it) => it.id !== itemId),
+      }));
+      showToast('Prestation retirée de votre séjour.');
+    },
+    [handleUpdateGuestDraft, showToast]
+  );
+
   const [lastBrainDiagnostic, setLastBrainDiagnostic] = useState<{
     valid: boolean;
     involvesCityChange: boolean;
@@ -2045,6 +2105,81 @@ function AmaroPlatform() {
     }
   }, [authUser?.uid, handleApplyAssistantDraft, hasFirestoreSession]);
 
+  // Automatically sync local guest guided draft into Firestore upon sign-in (ref-guarded against duplicates)
+  const guestGuidedRestoredRef = useRef<string>('');
+  useEffect(() => {
+    if (!authUser?.uid || !hasFirestoreSession) return;
+    if (guestGuidedRestoredRef.current === authUser.uid) return;
+    if (guestGuidedDraft.items.length === 0) return;
+
+    guestGuidedRestoredRef.current = authUser.uid;
+    const draftSnapshot = guestGuidedDraft;
+
+    (async () => {
+      try {
+        const folderId = makeSafeId('folder');
+        await setDoc(doc(db, 'journey_folders', folderId), {
+          ownerId: authUser.uid,
+          title: (draftSnapshot.title || `Mon Séjour — ${draftSnapshot.countryCode}`).slice(0, 135),
+          countryCode: draftSnapshot.countryCode || 'CI',
+          primaryCityId: draftSnapshot.lodgingCityId || 'abidjan',
+          startDate: draftSnapshot.arrivalDate,
+          endDate: draftSnapshot.departureDate,
+          travelersCount: Math.max(1, Math.min(50, Math.round(draftSnapshot.travelersCount || 2))),
+          totalBudget: 350_000,
+          dailyBudget: 50_000,
+          currency: 'XOF',
+          preferencesNotes: `Préparé en mode invité (${draftSnapshot.arrivalAirport})`,
+          status: 'planning',
+          dossierFeeStatus: 'pending',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        for (const it of draftSnapshot.items) {
+          const itemId = makeSafeId('step');
+          await setDoc(doc(db, 'journey_folders', folderId, 'items', itemId), {
+            folderId,
+            ownerId: authUser.uid,
+            serviceId: it.serviceId,
+            providerId: it.providerId || 'dir-guest',
+            serviceTitle: it.serviceTitle.slice(0, 155),
+            category: it.category,
+            cityId: it.cityId,
+            date: it.date,
+            startTime: it.startTime,
+            endTime: it.endTime,
+            durationMinutes: it.durationMinutes,
+            estimatedCost: it.estimatedCost,
+            currency: it.currency,
+            stage: 'envisaged',
+            notes: (it.notes || '').slice(0, 580),
+            ...(it.selectedOffersJson ? { selectedOffersJson: it.selectedOffersJson } : {}),
+            ...(typeof it.hasPriceToVerify === 'boolean' ? { hasPriceToVerify: it.hasPriceToVerify } : {}),
+            ...(it.checkOutDate ? { checkOutDate: it.checkOutDate } : {}),
+            ...(it.pickupLocation ? { pickupLocation: it.pickupLocation } : {}),
+            ...(it.dropoffLocation ? { dropoffLocation: it.dropoffLocation } : {}),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        setSelectedFolderId(folderId);
+        try {
+          localStorage.removeItem(GUEST_GUIDED_DRAFT_KEY);
+        } catch {
+          // ignore
+        }
+        setGuestGuidedDraft(createDefaultGuestGuidedDraft(draftSnapshot.countryCode || 'CI'));
+        showToast(
+          `Votre séjour préparé (${draftSnapshot.items.length} étape(s)) a été enregistré dans votre dossier.`
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, 'journey_folders');
+      }
+    })();
+  }, [authUser?.uid, guestGuidedDraft, hasFirestoreSession, setSelectedFolderId, showToast]);
+
   // Ensure user reuses an existing non-archived folder before creating one
   const ensureActiveFolderId = async (): Promise<string> => {
     if (activeFolder?.id && activeFolder.status !== 'archived') return activeFolder.id;
@@ -2510,7 +2645,7 @@ function AmaroPlatform() {
     }
   };
 
-  // Add Service to Journey Folder with Server-Side Amaro Journey Brain Validation
+  // Add Service to Journey Folder (or Guest Guided Draft) with Server-Side Amaro Journey Brain Validation
   const handleAddServiceToJourney = async (
     item: CatalogueItem,
     date: string,
@@ -2518,14 +2653,13 @@ function AmaroPlatform() {
     notes: string,
     extras?: ExplorerBookingExtras
   ) => {
-    if (!authUser?.uid) return;
-    const folderId = await ensureActiveFolderId();
+    const existingForValidation = authUser?.uid ? folderItems : guestGuidedDraft.items;
 
     const brainRes = await fetch('/api/amaro/brain/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        existingItems: folderItems,
+        existingItems: existingForValidation,
         candidate: {
           serviceId: item.id,
           providerId: item.providerId,
@@ -2556,6 +2690,53 @@ function AmaroPlatform() {
         : Math.max(0, Number(item.priceAmount));
 
     const itemId = makeSafeId('step');
+
+    if (!authUser?.uid) {
+      const guestItem: JourneyItemDoc = {
+        id: itemId,
+        folderId: 'guest-draft',
+        ownerId: 'guest',
+        serviceId: item.id,
+        providerId: item.providerId,
+        serviceTitle: item.title.slice(0, 155),
+        category: item.category,
+        cityId: item.cityId,
+        date,
+        startTime,
+        endTime: String(brainData.computedEndTime || '12:00'),
+        durationMinutes: Math.max(0, Math.round(item.durationMinutes)),
+        estimatedCost: computedEstimatedCost,
+        currency: (item.currency || 'XOF') as CurrencyCode,
+        stage: 'envisaged',
+        notes: notes.slice(0, 580),
+        ...(extras?.selectedOffers && extras.selectedOffers.length > 0
+          ? { selectedOffersJson: JSON.stringify(extras.selectedOffers).slice(0, 3900) }
+          : {}),
+        ...(typeof extras?.hasPriceToVerify === 'boolean'
+          ? { hasPriceToVerify: extras.hasPriceToVerify }
+          : {}),
+        ...(extras?.checkOutDate ? { checkOutDate: extras.checkOutDate.slice(0, 20) } : {}),
+        ...(extras?.pickupLocation
+          ? { pickupLocation: extras.pickupLocation.slice(0, 195) }
+          : {}),
+        ...(extras?.dropoffLocation
+          ? { dropoffLocation: extras.dropoffLocation.slice(0, 195) }
+          : {}),
+      };
+      handleUpdateGuestDraft((prev) => ({
+        ...prev,
+        items: [...prev.items, guestItem],
+      }));
+      showToast(
+        brainData.warnings?.length
+          ? `Étape ajoutée avec vigilance trajet : ${brainData.warnings[0]}`
+          : 'Étape ajoutée à votre séjour.'
+      );
+      setActiveTab('journey');
+      return;
+    }
+
+    const folderId = await ensureActiveFolderId();
     try {
       await setDoc(doc(db, 'journey_folders', folderId, 'items', itemId), {
         folderId,
@@ -2826,6 +3007,70 @@ function AmaroPlatform() {
       setActiveTab('journey');
     } catch {
       showToast('Impossible de contacter le serveur de réservation sécurisé.');
+    }
+  };
+
+  // Batch submit envisaged items from GuidedStayBuilder Step 5 once dossier fee is validated
+  const handleSubmitPlannedItems = async (itemsToSend: JourneyItemDoc[]) => {
+    if (!authUser?.uid || itemsToSend.length === 0) return;
+    const folderId = await ensureActiveFolderId();
+    const participants = Math.max(1, Math.min(100, Number(activeFolder?.travelersCount || 2)));
+    const codeToSend =
+      activeReferralCode && myPartner?.referralCode !== activeReferralCode
+        ? activeReferralCode
+        : undefined;
+
+    let sentCount = 0;
+    let firstError = '';
+    for (const step of itemsToSend) {
+      try {
+        let selectedOffersPayload: Array<{ offerId: string; quantity: number }> | undefined;
+        if (step.selectedOffersJson) {
+          try {
+            const parsed = JSON.parse(step.selectedOffersJson) as Array<{ offerId?: string; quantity?: number }>;
+            const mapped = parsed
+              .filter((x) => x?.offerId && Number(x.quantity) > 0)
+              .map((x) => ({ offerId: String(x.offerId), quantity: Number(x.quantity) }));
+            if (mapped.length > 0) selectedOffersPayload = mapped;
+          } catch {
+            // ignore
+          }
+        }
+        const res = await authorizedFetch('/api/amaro/reservations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folderId,
+            serviceId: step.serviceId,
+            scheduledDate: step.date,
+            scheduledTime: step.startTime || '10:00',
+            participants,
+            ...(codeToSend ? { referralCode: codeToSend } : {}),
+            ...(selectedOffersPayload ? { selectedOffers: selectedOffersPayload } : {}),
+            ...(step.checkOutDate ? { checkOutDate: step.checkOutDate } : {}),
+            ...(step.pickupLocation ? { pickupLocation: step.pickupLocation } : {}),
+            ...(step.dropoffLocation ? { dropoffLocation: step.dropoffLocation } : {}),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          sentCount += 1;
+          await updateDoc(doc(db, 'journey_folders', folderId, 'items', step.id), {
+            stage: 'requested',
+            updatedAt: serverTimestamp(),
+          });
+        } else if (!firstError) {
+          firstError = data?.error || 'Impossible de soumettre une ou plusieurs demandes.';
+        }
+      } catch {
+        if (!firstError) firstError = 'Erreur réseau lors de l’envoi des demandes.';
+      }
+    }
+
+    if (sentCount > 0) {
+      showToast(`${sentCount} demande(s) de réservation transmise(s) à AMARO et aux établissements.`);
+    } else if (firstError) {
+      showToast(firstError);
     }
   };
 
@@ -4358,7 +4603,7 @@ function AmaroPlatform() {
       <AmaroHeader
         activeTab={activeTab}
         onSelectTab={(tab) => {
-          if (tab === 'explorer' && entryMode === 'locked_country') {
+          if (tab === 'explorer') {
             handleGoHome();
             return;
           }
@@ -4505,246 +4750,180 @@ function AmaroPlatform() {
         )}
 
         {entryMode === 'home' && activeTab === 'explorer' && (
-          <div className="pb-20">
-            {/* Hero Général AMARO */}
+          <div className="pb-24">
+            {/* Airy Single-Path Accueil Hero: 1 primary CTA "Commencer mon séjour" + discreet "Autres pays : bientôt" */}
             <section className="bg-[#0B192C] text-white border-b border-slate-800">
-              <div className="max-w-7xl mx-auto px-4 md:px-8 py-12 md:py-16 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-                <div className="lg:col-span-7 space-y-5">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold">
-                    <Globe2 className="w-3.5 h-3.5" />
-                    <span>AMARO.VOYAGE · Déploiement International Pays par Pays</span>
-                  </div>
-                  <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-[1.12]">
-                    Organisez vos séjours avec des repères vérifiés, pays par pays.
-                  </h1>
-                  <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl">
-                    AMARO.VOYAGE rassemble des hébergements, restaurants, transports, sites culturels et protocoles de voyage strictement isolés par destination. Chaque pays est vérifié avant ouverture pour éviter toute erreur ou information obsolète.
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
-                    {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
-                      <button
-                        type="button"
-                        onClick={() => handleSelectCountry('CI')}
-                        className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-sm font-bold transition-colors"
-                      >
-                        <span>🇨🇮 Découvrir la Côte d’Ivoire (Ouvert)</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    )}
-                    {isCountryOpen('BJ', effectiveCountryStates, isAdmin) && (
-                      <button
-                        type="button"
-                        onClick={() => handleSelectCountry('BJ')}
-                        className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-sm font-bold transition-colors"
-                      >
-                        <span>🇧🇯 Découvrir le Bénin (Ouvert)</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    )}
-                    <a
-                      href="#amaro-pays-monde"
-                      className="min-h-[46px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-slate-600 hover:border-slate-400 text-white text-sm font-semibold transition-colors"
-                    >
-                      <Compass className="w-4 h-4 text-teal-400" />
-                      <span>Voir les 193 pays recensés</span>
-                    </a>
-                  </div>
+              <div className="max-w-4xl mx-auto px-5 md:px-8 py-14 md:py-24 text-center space-y-6">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold">
+                  <Globe2 className="w-3.5 h-3.5" />
+                  <span>AMARO.VOYAGE · Côte d’Ivoire</span>
                 </div>
 
-                {/* Cartes destinations ouvertes */}
-                <div className="lg:col-span-5 space-y-3">
-                  {isCountryOpen('CI', effectiveCountryStates, isAdmin) && (
-                    <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/40 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Destination Ouverte</span>
-                        </span>
-                        <span className="text-xs font-mono text-amber-300">Devise : XOF</span>
-                      </div>
-                      <div>
-                        <h2 className="font-display text-xl font-bold text-white">
-                          🇨🇮 Côte d’Ivoire
-                        </h2>
-                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                          Abidjan · Yamoussoukro · Grand-Bassam · Assinie · San-Pédro · Bouaké · Korhogo · Man
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectCountry('CI')}
-                        className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs sm:text-sm font-bold transition-colors"
-                      >
-                        <span>Ouvrir la Côte d’Ivoire</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
+                <h1 className="font-display text-3xl sm:text-5xl font-bold tracking-tight leading-[1.12]">
+                  Organisez votre séjour en Côte d’Ivoire étape par étape.
+                </h1>
 
-                  {isCountryOpen('BJ', effectiveCountryStates, isAdmin) && (
-                    <div className="p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/40 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Destination Ouverte</span>
-                        </span>
-                        <span className="text-xs font-mono text-amber-300">Devise : XOF</span>
-                      </div>
-                      <div>
-                        <h2 className="font-display text-xl font-bold text-white">
-                          🇧🇯 Bénin
-                        </h2>
-                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                          Cotonou · Ouidah · Porto-Novo · Abomey · Grand-Popo · Parakou · Natitingou · Pendjari
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectCountry('BJ')}
-                        className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs sm:text-sm font-bold transition-colors"
-                      >
-                        <span>Ouvrir le Bénin</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+                <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl mx-auto">
+                  Arrivée, transfert, hébergement, programme jour par jour et départ : préparez tout votre séjour gratuitement avant d’envoyer vos demandes.
+                </p>
 
-            {/* Répertoire global des 193 pays de l'ONU : ouverts cliquables, autres verrouillés "En préparation" */}
-            <section id="amaro-pays-monde" className="max-w-7xl mx-auto px-4 md:px-8 py-10 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
-                    Couverture Mondiale AMARO · 193 États Membres de l’ONU
-                  </p>
-                  <h2 className="font-display text-2xl font-bold text-slate-900 dark:text-white">
-                    Calendrier d’ouverture des destinations
-                  </h2>
-                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                    Seuls les pays marqués « Ouvert » donnent accès au catalogue, à la réservation et aux estimateurs de prix.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-                  <div className="relative w-full sm:w-auto sm:min-w-[220px] flex-1">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={homeSearchQuery}
-                      onChange={(e) => setHomeSearchQuery(e.target.value)}
-                      placeholder="Rechercher un pays (ex: Côte d'Ivoire, France, Maroc...)"
-                      className="w-full min-h-[44px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
-                    />
-                  </div>
-                  <select
-                    value={homeContinentFilter}
-                    onChange={(e) => setHomeContinentFilter(e.target.value)}
-                    aria-label="Filtrer par continent"
-                    className="w-full sm:w-auto min-h-[44px] px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                <div className="pt-2 flex flex-col items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCountryCode('CI');
+                      setActiveTab('journey');
+                    }}
+                    className="min-h-[52px] inline-flex items-center justify-center gap-2.5 px-8 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-base font-bold shadow-lg transition-colors"
                   >
-                    <option value="Tous">Tous les continents (193)</option>
-                    <option value="Afrique">Afrique</option>
-                    <option value="Europe">Europe</option>
-                    <option value="Asie">Asie</option>
-                    <option value="Amériques">Amériques</option>
-                    <option value="Océanie">Océanie</option>
-                  </select>
+                    <span>Commencer mon séjour</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWaitlistDoneMsg('');
+                      setShowWaitlistModal(true);
+                    }}
+                    className="text-xs text-slate-300 hover:text-white underline underline-offset-4 transition-colors"
+                  >
+                    Autres pays : bientôt (être prévenu à l’ouverture)
+                  </button>
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {[...UN_193_COUNTRIES]
-                  .sort((a, b) => {
-                    const aOpen = isCountryOpen(a.code, effectiveCountryStates, isAdmin) ? 0 : 1;
-                    const bOpen = isCountryOpen(b.code, effectiveCountryStates, isAdmin) ? 0 : 1;
-                    if (aOpen !== bOpen) return aOpen - bOpen;
-                    return a.name.localeCompare(b.name, 'fr');
-                  })
-                  .filter((c) => {
-                    if (homeContinentFilter !== 'Tous' && c.continent !== homeContinentFilter) {
-                      return false;
-                    }
-                    if (homeSearchQuery.trim()) {
-                      const q = homeSearchQuery.toLowerCase();
-                      return (
-                        c.name.toLowerCase().includes(q) ||
-                        c.code.toLowerCase().includes(q)
-                      );
-                    }
-                    return true;
-                  })
-                  .map((c) => {
-                    const effState = getEffectiveCountryState(c.code, effectiveCountryStates);
-                    const open = isCountryOpen(c.code, effectiveCountryStates, isAdmin);
-                    if (open) {
-                      return (
-                        <button
-                          key={c.code}
-                          type="button"
-                          onClick={() => handleSelectCountry(c.code)}
-                          className="min-h-[44px] text-left p-4 rounded-2xl bg-white dark:bg-slate-900 border-2 border-emerald-500/70 hover:border-emerald-600 shadow-sm transition-all flex flex-col justify-between gap-3"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <span className="text-xs font-mono font-bold text-teal-700 dark:text-teal-400">
-                                {c.code} · {c.continent}
-                              </span>
-                              <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
-                                {c.name}
-                              </h3>
-                            </div>
-                            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-                              Ouvert
-                            </span>
-                          </div>
-                          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                            <span>Explorer la destination</span>
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </span>
-                        </button>
-                      );
-                    }
-                    return (
-                      <div
-                        key={c.code}
-                        aria-disabled="true"
-                        className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 flex flex-col justify-between gap-2 select-none"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                              {c.code} · {c.continent}
-                            </span>
-                            <h3 className="font-display text-sm font-semibold text-slate-700 dark:text-slate-300">
-                              {c.name}
-                            </h3>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                            {effState === 'cache' ? 'Fermé' : 'En préparation'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs text-slate-500 dark:text-slate-400">
-                            Ouverture prochaine
-                          </span>
-                          {isAdmin && (
-                            <button
-                              type="button"
-                              onClick={() => void handleAdminPreviewCountry(c.code)}
-                              className="min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>Aperçu Admin</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
             </section>
+
+            {/* Discreet Waitlist Modal for upcoming countries */}
+            {showWaitlistModal && (
+              <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-display text-lg font-bold text-slate-900 dark:text-white">
+                        Autres pays : bientôt disponibles
+                      </h2>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                        Laissez votre e-mail ou numéro WhatsApp pour être prévenu dès qu’une destination ouvre après vérification terrain.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowWaitlistModal(false)}
+                      aria-label="Fermer"
+                      className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {waitlistDoneMsg ? (
+                    <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200 space-y-2">
+                      <p className="font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>{waitlistDoneMsg}</span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowWaitlistModal(false)}
+                        className="px-3 py-1.5 rounded-lg bg-[#0B192C] text-white font-semibold"
+                      >
+                        Fermer
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        setWaitlistSubmitting(true);
+                        try {
+                          const resp = await fetch('/api/amaro/country-waitlist', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              desiredCountry: waitlistCountry,
+                              contact: waitlistContact,
+                              note: waitlistNote,
+                              locale,
+                            }),
+                          });
+                          const data = await resp.json().catch(() => ({}));
+                          if (!resp.ok) {
+                            showToast(data?.error || 'Impossible d’enregistrer votre contact.');
+                            return;
+                          }
+                          setWaitlistDoneMsg(
+                            data?.message ||
+                              `Votre contact est enregistré pour ${waitlistCountry}.`
+                          );
+                          setWaitlistContact('');
+                          setWaitlistNote('');
+                        } catch {
+                          showToast('Erreur réseau lors de l’envoi.');
+                        } finally {
+                          setWaitlistSubmitting(false);
+                        }
+                      }}
+                      className="space-y-3"
+                    >
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Pays souhaité
+                        </label>
+                        <select
+                          value={waitlistCountry}
+                          onChange={(e) => setWaitlistCountry(e.target.value)}
+                          className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        >
+                          {UN_193_COUNTRIES.filter(
+                            (c) => !isCountryOpen(c.code, effectiveCountryStates, false)
+                          ).map((c) => (
+                            <option key={c.code} value={c.name}>
+                              {c.name} ({c.continent})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          E-mail ou numéro WhatsApp *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={waitlistContact}
+                          onChange={(e) => setWaitlistContact(e.target.value)}
+                          placeholder="ex. nom@exemple.com ou +225 07..."
+                          className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Précision (facultatif)
+                        </label>
+                        <input
+                          type="text"
+                          value={waitlistNote}
+                          onChange={(e) => setWaitlistNote(e.target.value)}
+                          placeholder="Période souhaitée, ville..."
+                          className="w-full min-h-[44px] px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={waitlistSubmitting}
+                        className="w-full min-h-[44px] px-4 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl disabled:opacity-60"
+                      >
+                        {waitlistSubmitting ? 'Enregistrement...' : 'Me prévenir à l’ouverture'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -4841,8 +5020,21 @@ function AmaroPlatform() {
               onSendProviderThankYou={handleSendProviderThankYou}
               sessionDraft={sessionDraft}
               onApplyAssistantDraft={handleApplyAssistantDraft}
-              onOpenExplorer={(cityId, category, itemId) => {
-                setExplorerJump({ cityId, category, itemId, nonce: Date.now() });
+              guestDraft={guestGuidedDraft}
+              onUpdateGuestDraft={handleUpdateGuestDraft}
+              onDeleteGuestItem={handleDeleteGuestItem}
+              onSubmitPlannedItems={handleSubmitPlannedItems}
+              onOpenExplorer={(cityId, category, itemId, options) => {
+                setEntryMode('country');
+                setExplorerJump({
+                  cityId,
+                  category,
+                  itemId,
+                  date: options?.date,
+                  targetStep: options?.targetStep,
+                  targetDayLabel: options?.targetDayLabel,
+                  nonce: Date.now(),
+                });
                 setActiveTab('explorer');
               }}
               onOpenAssistant={() => setActiveTab('assistant')}

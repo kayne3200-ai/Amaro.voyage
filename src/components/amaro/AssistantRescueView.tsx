@@ -827,13 +827,13 @@ export function AssistantRescueView({
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-700 dark:text-teal-400">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Assistant AMARO gratuit · Préparation rapide de dossier &amp; agenda réels</span>
+            <span>Aide AMARO gratuite · Conseils &amp; préparation guidée de dossier</span>
           </div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Construire mon séjour avec AMARO
+            Aide &amp; préparation de mon séjour
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Gratuit et sans compte obligatoire pour explorer · Création automatique de votre dossier sur accord
+            Gratuit pour explorer et poser vos questions · Préparation directe de votre dossier « Mon séjour »
           </p>
         </div>
 
