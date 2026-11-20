@@ -244,6 +244,8 @@ interface WorkspacesAdminViewProps {
     status: 'approved' | 'rejected'
   ) => Promise<void>;
   onAdminSaveExtendedSettings: (patch: Partial<SystemSettingDoc>) => Promise<void>;
+  effectiveCountryStates?: Record<string, UNCountryState>;
+  onCountryStatesUpdated?: (states: Record<string, UNCountryState>) => void;
   platformContents?: Record<string, PlatformContentDoc>;
   onAdminSavePlatformContent?: (
     doc: Omit<PlatformContentDoc, 'updatedBy' | 'updatedAtIso'>
@@ -385,6 +387,8 @@ export function WorkspacesAdminView({
   onAdminLinkProviderToDirectoryListing,
   onAdminModerateStory,
   onAdminSaveExtendedSettings,
+  effectiveCountryStates,
+  onCountryStatesUpdated,
   platformContents = {},
   onAdminSavePlatformContent,
   allReviews = [],
@@ -584,8 +588,12 @@ export function WorkspacesAdminView({
   const [savingCountriesPhotos, setSavingCountriesPhotos] = useState<boolean>(false);
 
   useEffect(() => {
-    if (countrySetting?.countryOperationalStates) {
-      setCountryStates(countrySetting.countryOperationalStates);
+    const mergedStates = {
+      ...(effectiveCountryStates || {}),
+      ...(countrySetting?.countryOperationalStates || {}),
+    };
+    if (Object.keys(mergedStates).length > 0) {
+      setCountryStates(mergedStates);
     }
     if (countrySetting?.photoRegistryOverrides) {
       setPhotoOverrides(countrySetting.photoRegistryOverrides);
@@ -596,7 +604,7 @@ export function WorkspacesAdminView({
     if (countrySetting?.amaroFeeRounding !== undefined) setAmaroFeeRounding(countrySetting.amaroFeeRounding);
     if (countrySetting?.tvaActive !== undefined) setTvaActive(countrySetting.tvaActive);
     if (countrySetting?.tvaRate !== undefined) setTvaRate(countrySetting.tvaRate);
-  }, [countrySetting]);
+  }, [countrySetting, effectiveCountryStates]);
 
   // Admin Catalogue Editor State
   const [admCountryCode, setAdmCountryCode] = useState<string>('CI');
@@ -5393,6 +5401,7 @@ export function WorkspacesAdminView({
                     }
                     if (bodyJson?.countryOperationalStates) {
                       setCountryStates(bodyJson.countryOperationalStates);
+                      onCountryStatesUpdated?.(bodyJson.countryOperationalStates);
                     }
                     onNotify(
                       `${country.nameFr} (${country.code}) basculé sur « ${

@@ -54,6 +54,7 @@ import {
 import {
   ALL_PUBLIC_DIRECTORIES,
   BENIN_PUBLIC_DIRECTORY,
+  CI_CATALOGUE_FUSION_JOURNAL,
   COUNTRIES_REGISTRY,
   EDITORIAL_IMAGES,
   resolveItemEditorialImage,
@@ -5578,12 +5579,17 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     // 46b. Verification of total catalogued listings and strict country isolation
     assert.ok(ALL_PUBLIC_DIRECTORIES.length > 250, 'Le catalogue public global doit compter plus de 250 fiches réelles');
 
+    const maskedDuplicateIds = new Set(CI_CATALOGUE_FUSION_JOURNAL.map((e) => e.hiddenId));
     for (const item of ALL_PUBLIC_DIRECTORIES) {
       assert.ok(item.countryCode, `L’item ${item.id} doit avoir un countryCode défini`);
       if (item.category === 'accommodation') {
         assert.ok(item.standing, `L’hébergement ${item.id} doit avoir un standing défini`);
       }
-      assert.equal(item.status, 'published', `L’item ${item.id} doit être au statut published`);
+      if (maskedDuplicateIds.has(item.id)) {
+        assert.equal(item.status, 'draft', `Le doublon masqué ${item.id} doit rester au statut draft (réversible)`);
+      } else {
+        assert.equal(item.status, 'published', `L’item ${item.id} doit être au statut published`);
+      }
     }
 
     // 46c. Server-authoritative quote calculation for an Asian destination (Japan fixture unlocked for legacy test 46)
@@ -7419,6 +7425,120 @@ describe('AMARO.VOYAGE — Contrôles Automatisés de Sécurité & Réservation'
     assert.equal(store.services.has(trustedNoPhotoSvcId), false);
     assert.equal(store.providerProfiles.has(testProviderId), false);
     assert.equal(store.providerProfiles.has(otherProviderId), false);
+  });
+
+  it('57. LOT A — Fusions réversibles CI (7 doublons masqués en draft, fiches vérifiées intactes), Bénin en préparation (403), et frais 20 000 FCFA / Circuit A intacts', async () => {
+    store.reset();
+
+    // 1. Journal Avant / Après des 7 fusions CI complet et réversible
+    assert.equal(CI_CATALOGUE_FUSION_JOURNAL.length, 7);
+    const hiddenIds = CI_CATALOGUE_FUSION_JOURNAL.map((e) => e.hiddenId);
+    const keptIds = CI_CATALOGUE_FUSION_JOURNAL.map((e) => e.keptId);
+    assert.equal(new Set(hiddenIds).size, 7);
+    assert.equal(new Set(keptIds).size, 7);
+
+    // 2. La route publique /api/amaro/countries/CI/data exclut les 7 doublons masqués (60 fiches publiées)
+    const pubCiRes = await fetch(`${baseUrl}/api/amaro/countries/CI/data`);
+    assert.equal(pubCiRes.status, 200);
+    const pubCiJson: any = await pubCiRes.json();
+    const pubIds = new Set(pubCiJson.services.map((s: any) => s.id));
+    assert.equal(pubCiJson.services.length, 60);
+
+    for (const hid of hiddenIds) {
+      assert.equal(pubIds.has(hid), false, `Doublon masqué ${hid} ne doit plus apparaître au public`);
+    }
+    for (const kid of keptIds) {
+      assert.equal(pubIds.has(kid), true, `Fiche vérifiée conservée ${kid} doit rester publiée`);
+    }
+
+    // 3. Vérification stricte des fiches conservées (aucune donnée vérifiée écrasée, aucune adresse inventée)
+    const fhb = pubCiJson.services.find((s: any) => s.id === 'ci-srv-transfert-aeroport-fhb');
+    assert.equal(fhb.priceAmount, 25000);
+    assert.equal(fhb.photoVerified, true);
+    assert.ok(String(fhb.customPhotoUrl || '').includes('F%C3%A9lix_HOUPHOUET-BOIGNY'));
+
+    const ran = pubCiJson.services.find((s: any) => s.id === 'ci-acc-ranhotel-bouake');
+    assert.equal(ran.priceAmount, 42000);
+    assert.equal(ran.title, 'Ranhotel Bouaké');
+
+    const val = pubCiJson.services.find((s: any) => s.id === 'ci-srv-resto-val-isere-zone4');
+    assert.equal(val.priceAmount, 15000);
+
+    const banco = pubCiJson.services.find((s: any) => s.id === 'ci-site-parc-banco-abidjan');
+    assert.equal(banco.priceAmount, 3000);
+    assert.equal(banco.photoVerified, true);
+
+    const fakaha = pubCiJson.services.find((s: any) => s.id === 'ci-site-tisserands-fakaha');
+    assert.equal(fakaha.priceAmount, 3000);
+    assert.equal(fakaha.photoVerified, true);
+
+    // Le doublon Maquis du Val conserve l'indication honnête « À vérifier » en draft (réversible)
+    const maskedMaquis = ALL_PUBLIC_DIRECTORIES.find((s) => s.id === 'ci-lot1-rest-maquis-du-val');
+    assert.ok(maskedMaquis);
+    assert.equal(maskedMaquis!.status, 'draft');
+    assert.match(maskedMaquis!.address || '', /À vérifier/i);
+
+    // 4. Un client ne peut pas demander de devis sur un doublon masqué (status !== 'published')
+    const quoteMaskedRes = await fetch(`${baseUrl}/api/amaro/finance/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceId: 'ci-lot1-trans-aeroport-fhb-abidjan',
+        participants: 1,
+      }),
+    });
+    assert.notEqual(quoteMaskedRes.status, 200);
+
+    // 5. L'Admin garde accès aux 7 fiches masquées (67 fiches total) pour retour arrière éventuel
+    const admCiRes = await fetch(`${baseUrl}/api/amaro/countries/CI/data?adminPreview=1`, {
+      headers: { Authorization: 'Bearer valid-admin-owner-jwt' },
+    });
+    assert.equal(admCiRes.status, 200);
+    const admCiJson: any = await admCiRes.json();
+    assert.equal(admCiJson.services.length, 67);
+    const admHidden = admCiJson.services.find((s: any) => s.id === 'ci-lot1-acc-bouake-ran');
+    assert.equal(admHidden?.status, 'draft');
+
+    // 6. Droits Admin sur état pays (Bénin BJ) : 403 client, 200 admin pour fermer/réouvrir, CI seule ouverte
+    const clientToggleBj = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-traveler-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'BJ', state: 'bientot' }),
+    });
+    assert.equal(clientToggleBj.status, 403);
+
+    const adminOpenBj = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'BJ', state: 'ouvert' }),
+    });
+    assert.equal(adminOpenBj.status, 200);
+
+    const adminCloseBj = await fetch(`${baseUrl}/api/amaro/admin/country-state`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-admin-owner-jwt',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ countryCode: 'BJ', state: 'bientot' }),
+    });
+    assert.equal(adminCloseBj.status, 200);
+    const closeBjJson: any = await adminCloseBj.json();
+    assert.equal(closeBjJson.countryOperationalStates.BJ, 'bientot');
+
+    const bjDataLockedRes = await fetch(`${baseUrl}/api/amaro/countries/BJ/data`);
+    assert.equal(bjDataLockedRes.status, 403);
+
+    // 7. Frais de dossier 20 000 FCFA & Formule Circuit A (6% + 500, plafond 4 000) strictement inchangés
+    assert.equal(pubCiJson.country.dossierFeeAmount, 20000);
+    assert.equal(calculateCircuitAFee(25000), 2000);
+    assert.equal(calculateCircuitAFee(100000), 4000);
   });
 });
 

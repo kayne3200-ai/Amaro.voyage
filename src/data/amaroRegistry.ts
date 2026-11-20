@@ -762,6 +762,7 @@ export const BENIN_PUBLIC_DIRECTORY: CatalogueItem[] = [
 ];
 
 export { COTE_DIVOIRE_PUBLIC_DIRECTORY } from './coteDivoireRegistry';
+export { CI_CATALOGUE_FUSION_JOURNAL } from './coteDivoireFusionJournal';
 export { EXTENDED_PUBLIC_DIRECTORY } from './extendedCountriesRegistry';
 export { TOP_AFRICA_PUBLIC_DIRECTORY } from './africaTopCountries';
 export { TOP_EUROPE_PUBLIC_DIRECTORY } from './europeTopCountries';

@@ -418,6 +418,8 @@ export function ExplorerView({
       return [];
     }
     const list = catalogue.filter((item) => {
+      // Masquer les fiches brouillons / doublons archivés pour le public (visibles Admin uniquement)
+      if (!isAdmin && item.status !== 'published') return false;
       // 5.8: Completely hide demo_test listings in production unless explicitly enabled by Admin
       if (item.dataOrigin === 'demo_test' && !allowDemoData && !isAdmin) return false;
       if (item.countryCode !== selectedCountryCode) return false;

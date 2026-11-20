@@ -1716,10 +1716,10 @@ function AmaroPlatform() {
       };
     });
     const remainingDirectory = staticDirectories.filter(
-      (b) => !overriddenIds.has(b.id)
+      (b) => b.status === 'published' && !overriddenIds.has(b.id)
     );
     const remainingDemo = countrySetting?.includeDemoData
-      ? demoDirectory.filter((d) => !overriddenIds.has(d.id))
+      ? demoDirectory.filter((d) => d.status === 'published' && !overriddenIds.has(d.id))
       : [];
 
     const seenIds = new Set<string>();
@@ -1737,13 +1737,18 @@ function AmaroPlatform() {
     return uniqueItems;
   }, [allCatalogueServices, countrySetting?.includeDemoData, publishedServices, registryModule]);
 
-  // Admin-only full catalogue view (includes draft/archived overrides so Admin can manage or re-publish hidden items)
+  // Admin-only full catalogue view (includes draft/archived overrides & static drafts so Admin can manage or re-publish hidden items)
   const adminExpandedCatalogue = useMemo(() => {
     if (!isAdmin) return combinedCatalogue;
     const staticDirectories = registryModule?.ALL_PUBLIC_DIRECTORIES || [];
     const byId = new Map<string, CatalogueItem>();
     for (const item of combinedCatalogue) {
       byId.set(item.id, item);
+    }
+    for (const b of staticDirectories) {
+      if (!byId.has(b.id) && b.status !== 'published') {
+        byId.set(b.id, b);
+      }
     }
     for (const srv of allCatalogueServices) {
       const staticMatch = staticDirectories.find((b) => b.id === srv.id);
@@ -4946,6 +4951,13 @@ function AmaroPlatform() {
               onAdminUpdatePartnerStatus={handleAdminUpdatePartnerStatus}
               onAdminUpdateReferral={handleAdminUpdateReferral}
               countrySetting={countrySetting}
+              effectiveCountryStates={effectiveCountryStates}
+              onCountryStatesUpdated={(nextStates) => {
+                setPublicCountryStates((prev) => ({ ...prev, ...nextStates }));
+                setCountrySetting((prev) =>
+                  prev ? { ...prev, countryOperationalStates: nextStates } : prev
+                );
+              }}
               allCatalogueServices={allCatalogueServices}
               allProviders={allProviders}
               adminProviderPrivateMap={adminProviderPrivateMap}
